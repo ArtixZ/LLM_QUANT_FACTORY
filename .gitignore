@@ -1,0 +1,39 @@
+# Data and generated research artifacts
+data/
+datasets/
+raw/
+processed/
+interim/
+outputs/
+reports/
+results/
+artifacts/
+cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# Notebooks and local runtime
+.jupyter/
+.vscode/
+.idea/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
