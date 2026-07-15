@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Large/local generated assets
+stock_data/
+cache/*.feather
+cache/*.pkl
+
+# AutoAlpha experiment outputs
+journal/
