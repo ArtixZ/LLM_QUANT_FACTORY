@@ -181,7 +181,7 @@ function protocolFromForm() {
   return { exploration_start: value("explorationStart"), exploration_end: value("explorationEnd"), validation_start: value("validationStart"), validation_end: value("validationEnd"), holdout_start: value("holdoutStart"), holdout_end: value("holdoutEnd"), minimum_folds: Number(value("minimumFolds")) };
 }
 
-function autoSplitProtocol() {
+async function autoSplitProtocol() {
   const startText = value("taskDataStart"), endText = value("taskDataEnd");
   if (!startText || !endText) { toast("请先填写任务数据起止日", true); return; }
   const start = parseIsoDate(startText), end = parseIsoDate(endText);
@@ -194,6 +194,16 @@ function autoSplitProtocol() {
   const validationStart = addDays(validationEnd, -(validationDays - 1));
   const explorationEnd = addDays(validationStart, -1);
   setProtocolFields({ exploration_start: startText, exploration_end: isoDate(explorationEnd), validation_start: isoDate(validationStart), validation_end: isoDate(validationEnd), holdout_start: isoDate(holdoutStart), holdout_end: endText, minimum_folds: availableFolds(validationStart, validationEnd) });
+  try {
+    const preview = await api("/api/research-protocol/preview", {
+      method: "POST",
+      body: JSON.stringify({ data_path: value("taskDataPath"), protocol: protocolFromForm() }),
+    });
+    const maximum = Number(preview.walk_forward_capacity?.maximum_folds || 1);
+    document.getElementById("minimumFolds").value = Math.max(1, Math.min(6, maximum));
+  } catch (error) {
+    toast(`真实交易日预检失败：${error.message}`, true);
+  }
 }
 
 function availableFolds(start, end) {

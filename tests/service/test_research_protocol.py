@@ -10,6 +10,7 @@ from autoalpha.service.research_protocol import (
     default_task_protocol,
     protocol_blockers,
     task_research_config,
+    validation_fold_capacity,
 )
 
 
@@ -64,3 +65,24 @@ def test_protocol_validation_rejects_overlap_and_tiny_windows() -> None:
 
     assert any("互不重叠" in blocker for blocker in blockers)
     assert sum("至少需要" in blocker for blocker in blockers) == 3
+
+
+def test_fold_capacity_uses_actual_trading_dates_in_partial_years() -> None:
+    protocol = {
+        "exploration_start": "2010-01-04",
+        "exploration_end": "2018-04-10",
+        "validation_start": "2018-04-11",
+        "validation_end": "2023-03-26",
+        "holdout_start": "2023-03-27",
+        "holdout_end": "2026-07-16",
+        "minimum_folds": 6,
+    }
+    dates = pd.bdate_range("2018-04-11", "2023-03-26").date.tolist()
+    first_2023_dates = [item for item in dates if item.year == 2023][:5]
+    dates = [item for item in dates if item not in first_2023_dates]
+
+    capacity = validation_fold_capacity(protocol, dates)
+
+    assert capacity["maximum_folds"] == 5
+    assert capacity["evaluable_years"] == [2018, 2019, 2020, 2021, 2022]
+    assert capacity["observations_by_year"][2023] == 55

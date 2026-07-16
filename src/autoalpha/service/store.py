@@ -1221,7 +1221,7 @@ class ServiceStore:
                     "SELECT 1 FROM factor_pool WHERE factor_id=?", (target,)
                 ).fetchone() is None:
                     continue
-                confidence = min(max(float(relation.get("confidence", 0.0)), 0.0), 1.0)
+                confidence = _bounded_confidence(relation.get("confidence", 0.0))
                 connection.execute(
                     """INSERT INTO factor_knowledge_edges
                     (source_factor_id, target_factor_id, relation, confidence,
@@ -2591,6 +2591,17 @@ class ServiceStore:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _bounded_confidence(value: Any) -> float:
+    if isinstance(value, str):
+        label = value.strip().upper()
+        if label in {"LOW", "MEDIUM", "HIGH"}:
+            return {"LOW": 0.30, "MEDIUM": 0.60, "HIGH": 0.90}[label]
+    try:
+        return min(max(float(value), 0.0), 1.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _canonical(value: Any) -> str:

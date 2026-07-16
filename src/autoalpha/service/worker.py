@@ -1086,26 +1086,42 @@ class ContinuousResearchWorker:
             reviewer = pre_role_outcomes.get(REVIEWER)
             librarian = pre_role_outcomes.get(FACTOR_LIBRARIAN)
             if librarian is not None and librarian.status == "COMPLETED":
-                self.store.upsert_factor_knowledge(
-                    factor_id=factor.factor_id,
-                    canonical_mechanism=str(
-                        librarian.artifact.get(
-                            "canonical_mechanism", "OTHER_INTERPRETABLE"
-                        )
-                    ),
-                    mechanism_summary=str(
-                        librarian.artifact.get("mechanism_summary", "")
-                    ),
-                    tags=list(librarian.artifact.get("tags", [])),
-                    review=reviewer.artifact if reviewer else {},
-                    falsification={
-                        "plan": falsification_plan,
-                        "results": falsification_results,
-                    },
-                    related_factors=list(
-                        librarian.artifact.get("related_factors", [])
-                    ),
-                )
+                try:
+                    self.store.upsert_factor_knowledge(
+                        factor_id=factor.factor_id,
+                        canonical_mechanism=str(
+                            librarian.artifact.get(
+                                "canonical_mechanism", "OTHER_INTERPRETABLE"
+                            )
+                        ),
+                        mechanism_summary=str(
+                            librarian.artifact.get("mechanism_summary", "")
+                        ),
+                        tags=list(librarian.artifact.get("tags", [])),
+                        review=reviewer.artifact if reviewer else {},
+                        falsification={
+                            "plan": falsification_plan,
+                            "results": falsification_results,
+                        },
+                        related_factors=list(
+                            librarian.artifact.get("related_factors", [])
+                        ),
+                    )
+                except (KeyError, TypeError, ValueError) as error:
+                    self.store.append_event(
+                        "audit",
+                        "LLM_KNOWLEDGE_ARCHIVE_FAILED",
+                        "LLM 知识档案降级",
+                        "知识图谱制品格式异常，确定性研究结果照常交付。",
+                        run_id=run_id,
+                        iteration=iteration,
+                        level="WARN",
+                        payload={
+                            "candidate_id": factor.factor_id,
+                            "error_type": type(error).__name__,
+                            "decision_authority": "ADVISORY_ONLY",
+                        },
+                    )
         combined_metrics["full_llm"] = {
             "enabled": llm_team is not None,
             "roles": full_llm_summary,

@@ -32,7 +32,11 @@ class StubAnalysisClient:
                     "mechanism_summary": "Volume and price interact.",
                     "tags": ["Price Volume", "price volume"],
                     "related_factors": [
-                        {"factor_id": "F_ALLOWED", "relation": "RELATED"},
+                        {
+                            "factor_id": "F_ALLOWED",
+                            "relation": "RELATED",
+                            "confidence": "low",
+                        },
                         {"factor_id": "F_HIDDEN", "relation": "RELATED"},
                     ],
                     "distinguishing_features": [],
@@ -97,6 +101,7 @@ def test_librarian_normalizes_mechanism_and_filters_unknown_relations() -> None:
     assert artifact["canonical_mechanism"] == "OTHER_INTERPRETABLE"
     assert artifact["tags"] == ["price-volume"]
     assert [item["factor_id"] for item in artifact["related_factors"]] == ["F_ALLOWED"]
+    assert artifact["related_factors"][0]["confidence"] == 0.30
 
 
 def test_falsification_results_use_only_deterministic_gate_categories() -> None:

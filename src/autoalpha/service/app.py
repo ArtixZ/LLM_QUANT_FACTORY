@@ -40,7 +40,9 @@ from autoalpha.service.research_manager import ResearchTaskManager
 from autoalpha.service.research_protocol import (
     default_task_protocol,
     normalize_task_protocol,
+    panel_validation_fold_capacity,
     protocol_blockers,
+    protocol_data_blockers,
     protocol_fingerprint,
     task_research_config,
 )
@@ -131,6 +133,11 @@ class ResearchProtocolRequest(BaseModel):
     holdout_start: date
     holdout_end: date
     minimum_folds: int = Field(default=1, ge=1, le=20)
+
+
+class ResearchProtocolPreviewRequest(BaseModel):
+    data_path: str
+    protocol: ResearchProtocolRequest
 
 
 class ResearchTaskRequest(BaseModel):
@@ -362,6 +369,7 @@ def _task_data_snapshot(payload: ResearchTaskRequest) -> dict[str, Any]:
             "data_start": payload.data_start.isoformat() if payload.data_start else None,
             "data_end": payload.data_end.isoformat() if payload.data_end else None,
             "snapshot_hash": None,
+            "panel_path": None,
             "status": "DATA_REQUIRED",
             "data_error": f"{type(error).__name__}: {error}",
         }
@@ -382,6 +390,7 @@ def _task_data_snapshot(payload: ResearchTaskRequest) -> dict[str, Any]:
         "data_start": requested_start.isoformat(),
         "data_end": requested_end.isoformat(),
         "snapshot_hash": fingerprint,
+        "panel_path": workspace.panel_path,
         "status": "READY",
         "data_error": None,
     }
@@ -411,6 +420,10 @@ def _resolved_task_protocol(
         data_start=str(snapshot["data_start"]),
         data_end=str(snapshot["data_end"]),
     )
+    if snapshot.get("panel_path"):
+        blockers.extend(
+            protocol_data_blockers(protocol, Path(str(snapshot["panel_path"])))
+        )
     if blockers:
         raise ValueError("；".join(blockers))
     return protocol
@@ -884,6 +897,34 @@ async def research_task_index() -> dict[str, Any]:
             "factor_count": sum(task["factor_count"] for task in tasks),
             "maximum_concurrent_iterations": (research_manager.maximum_concurrent_iterations),
         },
+    }
+
+
+@app.post("/api/research-protocol/preview", dependencies=[Depends(_authorized)])
+async def preview_research_protocol(
+    payload: ResearchProtocolPreviewRequest,
+) -> dict[str, Any]:
+    try:
+        workspace = inspect_data_workspace(Path(payload.data_path).expanduser().resolve())
+        protocol = normalize_task_protocol(payload.protocol.model_dump(mode="json"))
+        blockers = protocol_blockers(
+            protocol,
+            data_start=str(workspace.first_trade_date),
+            data_end=str(workspace.last_trade_date),
+        )
+        capacity = panel_validation_fold_capacity(
+            protocol, Path(workspace.panel_path)
+        )
+        blockers.extend(
+            protocol_data_blockers(protocol, Path(workspace.panel_path))
+        )
+    except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {
+        "valid": not blockers,
+        "blockers": blockers,
+        "walk_forward_capacity": capacity,
+        "data_fingerprint": workspace.fingerprint,
     }
 
 

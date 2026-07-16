@@ -8,7 +8,12 @@ from typing import Any
 
 from autoalpha.config import ResearchConfig
 from autoalpha.data.workspace import inspect_data_workspace
-from autoalpha.service.research_protocol import protocol_blockers, task_research_config
+from autoalpha.service.research_protocol import (
+    panel_validation_fold_capacity,
+    protocol_blockers,
+    protocol_data_blockers,
+    task_research_config,
+)
 from autoalpha.service.store import ServiceStore
 from autoalpha.service.worker import ContinuousResearchWorker, SecretVault
 
@@ -79,6 +84,14 @@ class ResearchTaskManager:
             ).hexdigest()
             if current_hash != task.get("snapshot_hash"):
                 snapshot_changed = True
+        fold_capacity = None
+        if workspace is not None and protocol:
+            blockers.extend(
+                protocol_data_blockers(protocol, Path(workspace.panel_path))
+            )
+            fold_capacity = panel_validation_fold_capacity(
+                protocol, Path(workspace.panel_path)
+            )
         task_config = None
         if not blockers:
             task_config = task_research_config(
@@ -92,6 +105,7 @@ class ResearchTaskManager:
             "protocol": protocol,
             "protocol_hash": task.get("protocol_hash"),
             "protocol_revision": task.get("protocol_revision", 1),
+            "walk_forward_capacity": fold_capacity,
             "public_range": (
                 {
                     "start": task_config.splits.train.start.isoformat(),

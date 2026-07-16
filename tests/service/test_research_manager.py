@@ -148,9 +148,16 @@ def test_manager_reports_protocol_and_market_readiness(tmp_path: Path, monkeypat
     _task(store, "task-ready")
     _task(store, "task-short", start="2026-01-01")
     _task(store, "task-hk", market="HK")
-    workspace = SimpleNamespace(fingerprint="panel-fingerprint")
+    workspace = SimpleNamespace(fingerprint="panel-fingerprint", panel_path=str(tmp_path))
     monkeypatch.setattr(
         "autoalpha.service.research_manager.inspect_data_workspace", lambda _: workspace
+    )
+    monkeypatch.setattr(
+        "autoalpha.service.research_manager.protocol_data_blockers", lambda *_: []
+    )
+    monkeypatch.setattr(
+        "autoalpha.service.research_manager.panel_validation_fold_capacity",
+        lambda *_: {"maximum_folds": 6},
     )
     manager = ResearchTaskManager(
         store,

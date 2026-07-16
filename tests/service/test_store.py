@@ -481,7 +481,7 @@ def test_llm_artifacts_are_append_only_and_factor_knowledge_is_queryable(
             {
                 "factor_id": "F_2",
                 "relation": "SAME_MECHANISM",
-                "confidence": 0.8,
+                "confidence": "high",
                 "rationale": "Shared reversal mechanism",
             }
         ],
@@ -493,6 +493,7 @@ def test_llm_artifacts_are_append_only_and_factor_knowledge_is_queryable(
     ]["total_tokens"] == 42
     assert store.llm_role_artifacts(candidate_id="F_1")[0]["usage"]["total_tokens"] == 42
     assert knowledge["edges"][0]["target_factor_id"] == "F_2"
+    assert knowledge["edges"][0]["confidence"] == 0.9
     assert store.factor_knowledge_catalog(task_id="task-one")[0][
         "canonical_mechanism"
     ] == "PRICE_REVERSAL"

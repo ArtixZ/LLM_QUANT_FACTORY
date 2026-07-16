@@ -494,12 +494,15 @@ def _normalize_artifact(
         allowed_ids = {
             str(item.get("factor_id")) for item in context.get("library_context", [])
         }
-        clean["related_factors"] = [
-            relation
-            for relation in clean.get("related_factors", [])[:12]
-            if isinstance(relation, dict)
-            and str(relation.get("factor_id")) in allowed_ids
-        ]
+        related_factors = []
+        for relation in clean.get("related_factors", [])[:12]:
+            if not isinstance(relation, dict):
+                continue
+            if str(relation.get("factor_id")) not in allowed_ids:
+                continue
+            relation["confidence"] = _confidence(relation.get("confidence"))
+            related_factors.append(relation)
+        clean["related_factors"] = related_factors
     elif role == FALSIFICATION_DESIGNER:
         clean["tests"] = [
             test
@@ -531,3 +534,14 @@ def _bounded_value(value: Any, *, depth: int = 0) -> Any:
 
 def _band(failures: set[str], related: set[str]) -> str:
     return "NEEDS_IMPROVEMENT" if failures & related else "NO_PUBLIC_FAILURE_RECORDED"
+
+
+def _confidence(value: Any) -> float:
+    if isinstance(value, str):
+        label = value.strip().upper()
+        if label in {"LOW", "MEDIUM", "HIGH"}:
+            return {"LOW": 0.30, "MEDIUM": 0.60, "HIGH": 0.90}[label]
+    try:
+        return min(max(float(value), 0.0), 1.0)
+    except (TypeError, ValueError):
+        return 0.0

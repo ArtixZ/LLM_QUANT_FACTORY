@@ -5,7 +5,10 @@ import json
 import math
 from dataclasses import replace
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
+
+import pyarrow.dataset as ds
 
 from autoalpha.config import DateRange, ResearchConfig, SplitConfig, WalkForwardConfig
 
@@ -17,6 +20,7 @@ PROTOCOL_DATE_FIELDS = (
     "holdout_start",
     "holdout_end",
 )
+MINIMUM_FOLD_TRADING_DAYS = 60
 
 
 def default_task_protocol(
@@ -103,6 +107,64 @@ def protocol_blockers(
     if not 1 <= normalized["minimum_folds"] <= maximum_folds:
         blockers.append(f"最少验证折数应在 1 至 {maximum_folds} 之间")
     return blockers
+
+
+def validation_fold_capacity(
+    protocol: dict[str, Any], trading_dates: list[date]
+) -> dict[str, Any]:
+    normalized = normalize_task_protocol(protocol)
+    start = date.fromisoformat(normalized["validation_start"])
+    end = date.fromisoformat(normalized["validation_end"])
+    counts = {
+        year: sum(start <= item <= end and item.year == year for item in trading_dates)
+        for year in range(start.year, end.year + 1)
+    }
+    evaluable_years = [
+        year for year, count in counts.items() if count >= MINIMUM_FOLD_TRADING_DAYS
+    ]
+    return {
+        "minimum_observations_per_fold": MINIMUM_FOLD_TRADING_DAYS,
+        "maximum_folds": len(evaluable_years),
+        "evaluable_years": evaluable_years,
+        "observations_by_year": counts,
+    }
+
+
+def panel_validation_fold_capacity(
+    protocol: dict[str, Any], panel_path: Path
+) -> dict[str, Any]:
+    files = sorted(panel_path.rglob("*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"No parquet files found under {panel_path}")
+    dataset = ds.dataset(files, format="parquet")
+    if "trade_date" not in dataset.schema.names:
+        raise ValueError("Panel does not contain trade_date")
+    values = dataset.to_table(columns=["trade_date"]).column("trade_date").unique().to_pylist()
+    trading_dates = sorted(
+        {
+            item.date() if hasattr(item, "date") and not isinstance(item, date) else item
+            for item in values
+            if item is not None
+        }
+    )
+    return validation_fold_capacity(protocol, trading_dates)
+
+
+def protocol_data_blockers(protocol: dict[str, Any], panel_path: Path) -> list[str]:
+    capacity = panel_validation_fold_capacity(protocol, panel_path)
+    requested = normalize_task_protocol(protocol)["minimum_folds"]
+    maximum = int(capacity["maximum_folds"])
+    if requested <= maximum:
+        return []
+    counts = ", ".join(
+        f"{year}={count}日"
+        for year, count in capacity["observations_by_year"].items()
+    )
+    return [
+        f"当前公开验证区只能形成 {maximum} 个有效 walk-forward 折，"
+        f"但最少折数设置为 {requested}（每折至少 {MINIMUM_FOLD_TRADING_DAYS} 个交易日；"
+        f"各年：{counts}）"
+    ]
 
 
 def task_research_config(
