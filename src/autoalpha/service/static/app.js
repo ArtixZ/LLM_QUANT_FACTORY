@@ -170,6 +170,7 @@ async function saveSettings(event) {
         data_path: state.snapshot.settings.data_path,
         iteration_interval_seconds: Number(document.getElementById("interval").value),
         maximum_active_factors: Number(document.getElementById("maximumActiveFactors").value),
+        full_llm_enabled: document.getElementById("fullLlmEnabled").checked,
         market_data_root: document.getElementById("marketDataRoot").value,
         data_auto_update_enabled: document.getElementById("dataAutoUpdate").checked,
         data_update_hour: Number(document.getElementById("dataUpdateHour").value),
@@ -269,6 +270,7 @@ function hydrateSettings(settings, task) {
   document.getElementById("temperature").value = settings.temperature || "0.7";
   document.getElementById("interval").value = settings.iteration_interval_seconds || "5";
   document.getElementById("maximumActiveFactors").value = settings.maximum_active_factors || "5";
+  document.getElementById("fullLlmEnabled").checked = settings.full_llm_enabled !== "false";
   document.getElementById("dataPath").value = task.data_path || settings.data_path || "";
   document.getElementById("marketDataRoot").value = settings.market_data_root || "~/MarketData/Ashare";
   document.getElementById("dataAutoUpdate").checked = settings.data_auto_update_enabled === "true";

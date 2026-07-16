@@ -18,6 +18,7 @@
       <nav class="app-nav" aria-label="研究工作台">
         <a class="active" id="autoResearchNav" href="/"><i data-lucide="activity"></i>自动研究</a>
         <a href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a>
+        <a href="/llm-team"><i data-lucide="brain-circuit"></i>LLM 团队</a>
         <a href="/factors"><i data-lucide="library"></i>因子库</a>
         <a href="/screener"><i data-lucide="list-filter"></i>选股器</a>
         <a href="/paper-trading"><i data-lucide="wallet-cards"></i>模拟交易</a>
@@ -44,6 +45,7 @@
             <label>迭代间隔（秒）<input id="interval" type="number" min="0.5" max="3600" step="0.5" required></label>
           </div>
           <label>最大活跃因子数<input id="maximumActiveFactors" type="number" min="1" max="12" step="1" required></label>
+          <label class="check-row"><input id="fullLlmEnabled" type="checkbox">启用六角色 LLM 研究团队</label>
           <label>当前任务数据目录<input id="dataPath" readonly required></label>
           <label>Tushare Token<input id="tushareToken" type="password" autocomplete="off" placeholder="仅在替换时填写"></label>
           <label>数据下载器目录<input id="marketDataRoot" required></label>

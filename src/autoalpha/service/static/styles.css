@@ -582,3 +582,90 @@ details pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow
   .screener-kpis div:nth-child(4) { border-top: 1px solid var(--line); }
   .paper-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }.paper-kpis div:nth-child(3),.paper-kpis div:nth-child(5) { border-left:0;border-top:1px solid var(--line); }.paper-kpis div:nth-child(4),.paper-kpis div:nth-child(6) { border-top:1px solid var(--line); }
 }
+/* Additions for the bounded FULL LLM research team. */
+.llm-team-page { width: min(1540px, calc(100% - 32px)); margin: 20px auto 48px; display: grid; gap: 16px; }
+.llm-governance-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); background: var(--surface); }
+.llm-governance-band > div { min-width: 0; padding: 17px 20px; border-right: 1px solid var(--line); display: grid; gap: 3px; }
+.llm-governance-band > div:last-child { border-right: 0; }
+.llm-governance-band span, .llm-governance-band small { color: var(--muted); }
+.llm-governance-band strong { font-size: 22px; overflow-wrap: anywhere; }
+.llm-flow { display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(0, .8fr) auto minmax(0, 1fr) auto minmax(130px, .55fr); align-items: stretch; gap: 10px; }
+.llm-flow > svg { align-self: center; width: 18px; color: var(--muted); }
+.llm-flow-stage, .llm-flow-authority { border: 1px solid var(--line); background: var(--surface); padding: 12px; min-width: 0; }
+.llm-flow-stage > span, .llm-flow-authority > span { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.llm-flow-stage > div { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.llm-flow-stage > div span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; }
+.llm-flow-stage svg { width: 15px; height: 15px; color: var(--blue); }
+.llm-flow-authority { border-color: var(--green); display: grid; align-content: center; gap: 4px; }
+.llm-flow-authority strong { color: var(--green); }
+.llm-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.llm-role-card { border: 1px solid var(--line); background: var(--surface); padding: 16px; cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
+.llm-role-card:hover { border-color: var(--blue); transform: translateY(-1px); }
+.llm-role-card header { display: flex; gap: 11px; align-items: center; }
+.llm-role-card header > svg { width: 21px; height: 21px; color: var(--blue); }
+.llm-role-card h2 { margin: 2px 0 0; font-size: 15px; }
+.llm-role-card header span, .llm-role-card footer { color: var(--muted); font-size: 11px; }
+.llm-role-metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 14px 0 11px; padding: 10px 0; }
+.llm-role-metrics > div { display: grid; gap: 2px; border-right: 1px solid var(--line); }
+.llm-role-metrics > div:not(:first-child) { padding-left: 12px; }
+.llm-role-metrics > div:last-child { border-right: 0; }
+.llm-role-metrics span { color: var(--muted); font-size: 11px; }
+.llm-role-card footer { display: flex; justify-content: space-between; gap: 10px; }
+.llm-role-card footer code { color: var(--green); }
+.llm-artifact-panel { padding: 0; overflow: hidden; }
+.llm-toolbar { display: grid; grid-template-columns: 210px 230px 150px minmax(220px, 1fr) auto; gap: 10px; padding: 14px; border-bottom: 1px solid var(--line); align-items: end; }
+.llm-toolbar label { min-width: 0; }
+.llm-content-tabs { display: flex; gap: 18px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+.llm-content-tabs button { border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); padding: 12px 2px 10px; cursor: pointer; font: inherit; }
+.llm-content-tabs button.active { color: var(--ink); border-color: var(--blue); }
+.llm-artifact-list, .llm-knowledge-list { min-height: 240px; }
+.llm-artifact-row { width: 100%; display: grid; grid-template-columns: 36px minmax(240px, 1.3fr) minmax(190px, .7fr) 92px 20px; align-items: center; gap: 12px; padding: 13px 16px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.llm-artifact-row:hover { background: var(--surface-hover, rgba(127,127,127,.06)); }
+.llm-role-icon { width: 34px; height: 34px; border: 1px solid var(--line); display: grid; place-items: center; }
+.llm-role-icon svg { width: 17px; color: var(--blue); }
+.llm-artifact-main, .llm-artifact-factor { min-width: 0; display: grid; gap: 3px; }
+.llm-artifact-main small, .llm-artifact-factor small { color: var(--muted); }
+.llm-artifact-main em { color: var(--muted); font-style: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.llm-artifact-factor code { overflow: hidden; text-overflow: ellipsis; }
+.llm-status { font-size: 11px; font-weight: 700; color: var(--green); }
+.llm-status.failed { color: var(--red); }
+.llm-knowledge-row { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(260px, 1.4fr) minmax(180px, .7fr) 38px; align-items: center; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.llm-knowledge-row h3 { margin: 3px 0; font-size: 14px; }
+.llm-knowledge-row > div:first-child > span { color: var(--blue); font-size: 11px; }
+.llm-knowledge-row p { margin: 0; color: var(--muted); }
+.llm-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.llm-tags span { border: 1px solid var(--line); padding: 3px 6px; font-size: 10px; }
+.llm-artifact-dialog { width: min(900px, calc(100% - 32px)); border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 0; }
+.llm-artifact-dialog article > header { display: flex; justify-content: space-between; gap: 12px; align-items: start; padding: 17px; border-bottom: 1px solid var(--line); }
+.llm-artifact-dialog h2 { margin: 3px 0; }
+.llm-artifact-dialog header span { color: var(--blue); font-size: 11px; }
+.llm-dialog-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 11px 17px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.llm-artifact-dialog pre { margin: 0; padding: 18px; max-height: 62vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.factor-intelligence { display: grid; gap: 10px; }
+.factor-intelligence-summary { display: grid; gap: 7px; padding: 12px; background: var(--soft); border-left: 3px solid var(--blue); }
+.factor-intelligence-summary > span { color: var(--blue); font-size: 10px; font-weight: 700; }
+.factor-intelligence-summary > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.factor-intelligence-summary em { border: 1px solid var(--line); background: var(--surface); padding: 3px 6px; font-size: 9px; font-style: normal; }
+.factor-intelligence-artifacts details { padding: 8px 0; }
+.factor-intelligence-artifacts summary { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; }
+.factor-intelligence-artifacts summary span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.factor-intelligence-artifacts pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 1000px) {
+  .llm-governance-band { grid-template-columns: repeat(2, 1fr); }
+  .llm-governance-band > div:nth-child(2) { border-right: 0; }
+  .llm-flow { grid-template-columns: 1fr; }
+  .llm-flow > svg { transform: rotate(90deg); justify-self: center; }
+  .llm-role-grid { grid-template-columns: repeat(2, 1fr); }
+  .llm-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .llm-artifact-row { grid-template-columns: 34px 1fr 90px 18px; }
+  .llm-artifact-factor { display: none; }
+}
+@media (max-width: 650px) {
+  .llm-team-page { width: min(100% - 20px, 1540px); }
+  .llm-governance-band, .llm-role-grid, .llm-toolbar { grid-template-columns: 1fr; }
+  .llm-governance-band > div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .llm-artifact-row { grid-template-columns: 34px minmax(0, 1fr) 18px; }
+  .llm-status { display: none; }
+  .llm-knowledge-row { grid-template-columns: 1fr 38px; }
+  .llm-knowledge-row p, .llm-knowledge-row .llm-tags { grid-column: 1 / -1; }
+}

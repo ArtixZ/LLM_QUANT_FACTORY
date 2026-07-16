@@ -265,6 +265,8 @@ async function openFactorDetail(factor) {
   document.getElementById("openFactorScreener").href = `/screener?factors=${factorQuery}`;
   document.getElementById("openFactorBacktest").href = `/backtest?factors=${factorQuery}`;
   renderLifecycleLoading();
+  document.getElementById("factorIntelligence").innerHTML = `<p class="table-empty">正在读取结构化研究档案</p>`;
+  text("factorIntelligenceCount", "--");
   const dialog = document.getElementById("factorDetailDialog");
   if (!dialog.open) dialog.showModal();
   if (window.lucide) window.lucide.createIcons();
@@ -275,6 +277,26 @@ async function openFactorDetail(factor) {
   } catch (error) {
     if (libraryState.detailFactor?.factor_id === factor.factor_id) renderLifecycleError(error.message);
   }
+  try {
+    const intelligence = await api(`/api/factors/${encodeURIComponent(factor.factor_id)}/intelligence`);
+    if (libraryState.detailFactor?.factor_id === factor.factor_id) renderFactorIntelligence(intelligence);
+  } catch (error) {
+    if (libraryState.detailFactor?.factor_id === factor.factor_id) document.getElementById("factorIntelligence").innerHTML = `<p class="table-empty">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderFactorIntelligence(intelligence) {
+  const target = document.getElementById("factorIntelligence");
+  const knowledge = intelligence.knowledge;
+  const artifacts = intelligence.role_artifacts || [];
+  text("factorIntelligenceCount", `${artifacts.length} 个角色制品`);
+  if (!knowledge && !artifacts.length) {
+    target.innerHTML = `<p class="table-empty">该因子产生于标准研究链路，尚无 FULL LLM 档案</p>`;
+    return;
+  }
+  const knowledgeHtml = knowledge ? `<div class="factor-intelligence-summary"><span>${escapeHtml(knowledge.canonical_mechanism)}</span><strong>${escapeHtml(knowledge.mechanism_summary || "暂无机制摘要")}</strong><div>${(knowledge.tags || []).map(tag => `<em>${escapeHtml(tag)}</em>`).join("")}</div></div>` : "";
+  const artifactHtml = artifacts.map(item => `<details><summary><span>${escapeHtml(item.role.replaceAll("_", " "))}</span><strong>${escapeHtml(item.status)}</strong></summary><pre>${escapeHtml(JSON.stringify(item.artifact, null, 2))}</pre></details>`).join("");
+  target.innerHTML = `${knowledgeHtml}<div class="factor-intelligence-artifacts">${artifactHtml}</div>`;
 }
 
 function closeFactorDetail() { const dialog = document.getElementById("factorDetailDialog"); if (dialog.open) dialog.close(); }
@@ -389,6 +411,7 @@ function option(value, label) { const node = document.createElement("option"); n
 function marketLabel(value) { return ({ CN_A: "A 股", HK: "港股", US: "美股" })[value] || value || "未知市场"; }
 function element(tagName, className = "", content = "") { const node = document.createElement(tagName); if (className) node.className = className; if (content !== "") node.textContent = content; return node; }
 function text(id, value) { document.getElementById(id).textContent = value; }
+function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]); }
 function number(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed.toFixed(2) : "--"; }
 function number4(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed.toFixed(4) : "--"; }
 function percent(value) { const parsed = Number(value); return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(2)}%` : "--"; }

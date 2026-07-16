@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoAlpha FULL LLM 研究团队</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260717-full-llm-v1">
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity"><h1>FULL LLM 研究团队</h1><p id="teamSummary">正在读取角色审计记录</p></div>
+    <div class="header-actions">
+      <nav class="app-nav" aria-label="研究工作台">
+        <a href="/"><i data-lucide="activity"></i>自动研究</a>
+        <a href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a>
+        <a class="active" href="/llm-team"><i data-lucide="brain-circuit"></i>LLM 团队</a>
+        <a href="/factors"><i data-lucide="library"></i>因子库</a>
+        <a href="/screener"><i data-lucide="list-filter"></i>选股器</a>
+        <a href="/paper-trading"><i data-lucide="wallet-cards"></i>模拟交易</a>
+        <a href="/backtest"><i data-lucide="chart-no-axes-combined"></i>手动回测</a>
+        <a href="/data"><i data-lucide="database-zap"></i>数据中心</a>
+      </nav>
+      <span class="state-pill" id="teamState">LOADING</span>
+    </div>
+  </header>
+
+  <main class="llm-team-page">
+    <section class="llm-governance-band">
+      <div><span>运行模式</span><strong id="variantName">FULL LLM</strong><small>六角色研究编排</small></div>
+      <div><span>决策权限</span><strong>ADVISORY</strong><small>确定性门禁唯一裁决</small></div>
+      <div><span>角色制品</span><strong id="artifactCount">0</strong><small>不可变审计记录</small></div>
+      <div><span>机制知识</span><strong id="knowledgeCount">0</strong><small>结构化因子档案</small></div>
+    </section>
+
+    <section class="llm-flow" aria-label="六角色研究流程">
+      <div class="llm-flow-stage"><span>01 · 提案前</span><div id="preRoleFlow"></div></div>
+      <i data-lucide="arrow-right"></i>
+      <div class="llm-flow-stage"><span>02 · 公开评估</span><div id="portfolioRoleFlow"></div></div>
+      <i data-lucide="arrow-right"></i>
+      <div class="llm-flow-stage"><span>03 · 事后诊断</span><div id="postRoleFlow"></div></div>
+      <i data-lucide="shield-check"></i>
+      <div class="llm-flow-authority"><span>最终裁决</span><strong>确定性引擎</strong></div>
+    </section>
+
+    <section class="llm-role-grid" id="roleGrid"></section>
+
+    <section class="panel llm-artifact-panel">
+      <div class="llm-toolbar">
+        <label>研究任务<select id="taskFilter"><option value="">全部任务</option></select></label>
+        <label>角色<select id="roleFilter"><option value="">全部角色</option></select></label>
+        <label>状态<select id="statusFilter"><option value="">全部状态</option><option value="COMPLETED">已完成</option><option value="FAILED">失败开放</option></select></label>
+        <label class="search-field">检索<input id="artifactSearch" type="search" placeholder="因子、轮次、机制或结论"></label>
+        <button class="icon-button" id="refreshTeam" title="刷新 LLM 团队"><i data-lucide="refresh-cw"></i></button>
+      </div>
+      <div class="llm-content-tabs" role="tablist">
+        <button class="active" data-view="artifacts" role="tab">角色制品</button>
+        <button data-view="knowledge" role="tab">机制知识图谱</button>
+      </div>
+      <div class="llm-artifact-list" id="artifactList"></div>
+      <div class="llm-knowledge-list" id="knowledgeList" hidden></div>
+    </section>
+  </main>
+
+  <dialog class="llm-artifact-dialog" id="artifactDialog">
+    <article>
+      <header><div><span id="dialogStage">--</span><h2 id="dialogTitle">角色制品</h2><code id="dialogIdentity">--</code></div><button class="icon-button" id="closeArtifact" title="关闭"><i data-lucide="x"></i></button></header>
+      <div class="llm-dialog-meta" id="dialogMeta"></div>
+      <pre id="dialogPayload"></pre>
+    </article>
+  </dialog>
+  <div id="toast" role="status"></div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/static/llm_team.js?v=20260717-full-llm-v1"></script>
+</body>
+</html>

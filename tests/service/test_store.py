@@ -432,3 +432,72 @@ def test_service_lifecycle_persists_qualified_shadow_paper_transitions(tmp_path:
     assert shadow["previous_state"] == "QUALIFIED"
     assert paper["state"] == "PAPER"
     assert len(store.factor_lifecycle_history("F_1")) == 3
+
+
+def test_llm_artifacts_are_append_only_and_factor_knowledge_is_queryable(
+    tmp_path: Path,
+) -> None:
+    store = ServiceStore(tmp_path / "service.sqlite3")
+    proposal = {"name": "factor", "family": "reversal", "hypothesis": "test"}
+    store.upsert_factor_pool(
+        factor_id="F_1",
+        source_iteration=1,
+        proposal=proposal,
+        metrics={},
+        status="ELIGIBLE",
+        status_reason="passed",
+        source_task_id="task-one",
+    )
+    store.upsert_factor_pool(
+        factor_id="F_2",
+        source_iteration=2,
+        proposal={"name": "peer", "family": "reversal"},
+        metrics={},
+        status="OBSERVE",
+        status_reason="library",
+        source_task_id="task-one",
+    )
+    artifact = store.record_llm_role_artifact(
+        task_id="task-one",
+        run_id="run-one",
+        iteration=1,
+        candidate_id="F_1",
+        role="INDEPENDENT_REVIEWER",
+        stage="PRE_EVALUATION",
+        status="COMPLETED",
+        artifact={"verdict": "CLEAR"},
+        usage={"total_tokens": 42},
+        prompt_hash="prompt",
+        response_hash="response",
+    )
+    knowledge = store.upsert_factor_knowledge(
+        factor_id="F_1",
+        canonical_mechanism="PRICE_REVERSAL",
+        mechanism_summary="Short-horizon reversal.",
+        tags=["reversal"],
+        review={"verdict": "CLEAR"},
+        falsification={"results": []},
+        related_factors=[
+            {
+                "factor_id": "F_2",
+                "relation": "SAME_MECHANISM",
+                "confidence": 0.8,
+                "rationale": "Shared reversal mechanism",
+            }
+        ],
+    )
+
+    assert artifact["artifact"] == {"verdict": "CLEAR"}
+    assert store.llm_role_summary(task_id="task-one")["roles"][
+        "INDEPENDENT_REVIEWER"
+    ]["total_tokens"] == 42
+    assert store.llm_role_artifacts(candidate_id="F_1")[0]["usage"]["total_tokens"] == 42
+    assert knowledge["edges"][0]["target_factor_id"] == "F_2"
+    assert store.factor_knowledge_catalog(task_id="task-one")[0][
+        "canonical_mechanism"
+    ] == "PRICE_REVERSAL"
+    with (
+        pytest.raises(sqlite3.IntegrityError, match="append-only"),
+        store.connection() as connection,
+    ):
+        connection.execute("DELETE FROM llm_role_artifacts")

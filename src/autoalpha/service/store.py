@@ -253,6 +253,41 @@ class ServiceStore:
                     reason TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS llm_role_artifacts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    iteration INTEGER NOT NULL,
+                    candidate_id TEXT,
+                    role TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    artifact_json TEXT NOT NULL,
+                    usage_json TEXT NOT NULL,
+                    prompt_hash TEXT,
+                    response_hash TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(run_id, iteration, role)
+                );
+                CREATE TABLE IF NOT EXISTS factor_knowledge (
+                    factor_id TEXT PRIMARY KEY REFERENCES factor_pool(factor_id),
+                    canonical_mechanism TEXT NOT NULL,
+                    mechanism_summary TEXT NOT NULL,
+                    tags_json TEXT NOT NULL,
+                    review_json TEXT NOT NULL,
+                    falsification_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS factor_knowledge_edges (
+                    source_factor_id TEXT NOT NULL REFERENCES factor_pool(factor_id),
+                    target_factor_id TEXT NOT NULL REFERENCES factor_pool(factor_id),
+                    relation TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    rationale TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(source_factor_id, target_factor_id, relation)
+                );
                 CREATE TABLE IF NOT EXISTS paper_portfolios (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
@@ -318,6 +353,12 @@ class ServiceStore:
                 ON manual_research_exposures(generation_id, contaminated, factor_id);
                 CREATE INDEX IF NOT EXISTS idx_factor_lifecycle_factor
                 ON factor_lifecycle_events(factor_id, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_llm_role_artifacts_task
+                ON llm_role_artifacts(task_id, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_llm_role_artifacts_candidate
+                ON llm_role_artifacts(candidate_id, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_factor_knowledge_mechanism
+                ON factor_knowledge(canonical_mechanism, factor_id);
                 CREATE INDEX IF NOT EXISTS idx_paper_portfolios_status
                 ON paper_portfolios(status, id DESC);
                 CREATE INDEX IF NOT EXISTS idx_paper_trades_portfolio
@@ -343,6 +384,16 @@ class ServiceStore:
                 BEFORE DELETE ON factor_lifecycle_events
                 BEGIN
                     SELECT RAISE(ABORT, 'factor lifecycle ledger is append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS prevent_llm_role_artifact_update
+                BEFORE UPDATE ON llm_role_artifacts
+                BEGIN
+                    SELECT RAISE(ABORT, 'LLM role artifacts are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS prevent_llm_role_artifact_delete
+                BEFORE DELETE ON llm_role_artifacts
+                BEGIN
+                    SELECT RAISE(ABORT, 'LLM role artifacts are append-only');
                 END;
                 """
             )
@@ -1000,6 +1051,243 @@ class ServiceStore:
                 parameters,
             ).fetchall()
         return [dict(row) for row in reversed(rows)]
+
+    def record_llm_role_artifact(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        iteration: int,
+        candidate_id: str | None,
+        role: str,
+        stage: str,
+        status: str,
+        artifact: dict[str, Any],
+        usage: dict[str, int],
+        prompt_hash: str | None,
+        response_hash: str | None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        now = _now()
+        with self.connection() as connection:
+            cursor = connection.execute(
+                """INSERT INTO llm_role_artifacts
+                (task_id, run_id, iteration, candidate_id, role, stage, status,
+                 artifact_json, usage_json, prompt_hash, response_hash, error, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    task_id,
+                    run_id,
+                    iteration,
+                    candidate_id,
+                    role,
+                    stage,
+                    status,
+                    _canonical(artifact),
+                    _canonical(usage),
+                    prompt_hash,
+                    response_hash,
+                    error,
+                    now,
+                ),
+            )
+            artifact_id = int(cursor.lastrowid)
+        return {
+            "id": artifact_id,
+            "task_id": task_id,
+            "run_id": run_id,
+            "iteration": iteration,
+            "candidate_id": candidate_id,
+            "role": role,
+            "stage": stage,
+            "status": status,
+            "artifact": artifact,
+            "usage": usage,
+            "prompt_hash": prompt_hash,
+            "response_hash": response_hash,
+            "error": error,
+            "created_at": now,
+        }
+
+    def llm_role_artifacts(
+        self,
+        *,
+        task_id: str | None = None,
+        run_id: str | None = None,
+        candidate_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        clauses = []
+        parameters: list[Any] = []
+        for name, value in (
+            ("task_id", task_id),
+            ("run_id", run_id),
+            ("candidate_id", candidate_id),
+        ):
+            if value:
+                clauses.append(f"{name}=?")
+                parameters.append(value)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        parameters.append(min(max(limit, 1), 2000))
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM llm_role_artifacts {where} ORDER BY id DESC LIMIT ?",  # noqa: S608
+                parameters,
+            ).fetchall()
+        return [self._llm_role_artifact_record(row) for row in rows]
+
+    def llm_role_summary(self, *, task_id: str | None = None) -> dict[str, Any]:
+        where = "WHERE task_id=?" if task_id else ""
+        parameters: tuple[Any, ...] = (task_id,) if task_id else ()
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT role, status, COUNT(*) AS count,
+                COALESCE(SUM(json_extract(usage_json, '$.total_tokens')), 0) AS total_tokens,
+                MAX(created_at) AS latest_at
+                FROM llm_role_artifacts {where}
+                GROUP BY role, status ORDER BY role, status""",  # noqa: S608
+                parameters,
+            ).fetchall()
+        roles: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            role = roles.setdefault(
+                str(row["role"]),
+                {"completed": 0, "failed": 0, "total_tokens": 0, "latest_at": None},
+            )
+            status = str(row["status"])
+            if status == "COMPLETED":
+                role["completed"] += int(row["count"])
+            else:
+                role["failed"] += int(row["count"])
+            role["total_tokens"] += int(row["total_tokens"] or 0)
+            role["latest_at"] = max(
+                filter(None, (role["latest_at"], row["latest_at"])),
+                default=None,
+            )
+        artifact_count = sum(v["completed"] + v["failed"] for v in roles.values())
+        return {"roles": roles, "artifact_count": artifact_count}
+
+    @staticmethod
+    def _llm_role_artifact_record(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["artifact"] = json.loads(item.pop("artifact_json"))
+        item["usage"] = json.loads(item.pop("usage_json"))
+        return item
+
+    def upsert_factor_knowledge(
+        self,
+        *,
+        factor_id: str,
+        canonical_mechanism: str,
+        mechanism_summary: str,
+        tags: list[str],
+        review: dict[str, Any],
+        falsification: dict[str, Any],
+        related_factors: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        now = _now()
+        with self.connection() as connection:
+            if connection.execute(
+                "SELECT 1 FROM factor_pool WHERE factor_id=?", (factor_id,)
+            ).fetchone() is None:
+                raise KeyError(f"Factor not found: {factor_id}")
+            connection.execute(
+                """INSERT INTO factor_knowledge
+                (factor_id, canonical_mechanism, mechanism_summary, tags_json,
+                 review_json, falsification_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(factor_id) DO UPDATE SET
+                canonical_mechanism=excluded.canonical_mechanism,
+                mechanism_summary=excluded.mechanism_summary,
+                tags_json=excluded.tags_json,
+                review_json=excluded.review_json,
+                falsification_json=excluded.falsification_json,
+                updated_at=excluded.updated_at""",
+                (
+                    factor_id,
+                    canonical_mechanism,
+                    mechanism_summary,
+                    _canonical(tags),
+                    _canonical(review),
+                    _canonical(falsification),
+                    now,
+                ),
+            )
+            for relation in related_factors[:20]:
+                target = str(relation.get("factor_id", ""))
+                if not target or target == factor_id:
+                    continue
+                if connection.execute(
+                    "SELECT 1 FROM factor_pool WHERE factor_id=?", (target,)
+                ).fetchone() is None:
+                    continue
+                confidence = min(max(float(relation.get("confidence", 0.0)), 0.0), 1.0)
+                connection.execute(
+                    """INSERT INTO factor_knowledge_edges
+                    (source_factor_id, target_factor_id, relation, confidence,
+                     rationale, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_factor_id, target_factor_id, relation) DO UPDATE SET
+                    confidence=excluded.confidence,
+                    rationale=excluded.rationale""",
+                    (
+                        factor_id,
+                        target,
+                        str(relation.get("relation", "RELATED"))[:80],
+                        confidence,
+                        str(relation.get("rationale", ""))[:2000],
+                        now,
+                    ),
+                )
+        knowledge = self.factor_knowledge(factor_id)
+        assert knowledge is not None
+        return knowledge
+
+    def factor_knowledge(self, factor_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM factor_knowledge WHERE factor_id=?", (factor_id,)
+            ).fetchone()
+            edges = connection.execute(
+                """SELECT edge.*, pool.name AS target_name
+                FROM factor_knowledge_edges AS edge
+                JOIN factor_pool AS pool ON pool.factor_id=edge.target_factor_id
+                WHERE edge.source_factor_id=?
+                ORDER BY edge.confidence DESC, edge.target_factor_id""",
+                (factor_id,),
+            ).fetchall()
+        if row is None:
+            return None
+        item = dict(row)
+        item["tags"] = json.loads(item.pop("tags_json"))
+        item["review"] = json.loads(item.pop("review_json"))
+        item["falsification"] = json.loads(item.pop("falsification_json"))
+        item["edges"] = [dict(edge) for edge in edges]
+        return item
+
+    def factor_knowledge_catalog(
+        self, *, task_id: str | None = None, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        where = "WHERE pool.source_task_id=?" if task_id else ""
+        parameters: list[Any] = [task_id] if task_id else []
+        parameters.append(min(max(limit, 1), 5000))
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT knowledge.*, pool.name, pool.family, pool.source_task_id,
+                pool.source_iteration
+                FROM factor_knowledge AS knowledge
+                JOIN factor_pool AS pool ON pool.factor_id=knowledge.factor_id
+                {where} ORDER BY knowledge.updated_at DESC LIMIT ?""",  # noqa: S608
+                parameters,
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["tags"] = json.loads(item.pop("tags_json"))
+            item["review"] = json.loads(item.pop("review_json"))
+            item["falsification"] = json.loads(item.pop("falsification_json"))
+            result.append(item)
+        return result
 
     def upsert_factor_pool(
         self,

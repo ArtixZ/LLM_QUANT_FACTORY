@@ -17,5 +17,6 @@ cache/*.pkl
 # AutoAlpha experiment outputs
 journal/
 runtime/
+runtime-full-llm/
 output/
 tmp/

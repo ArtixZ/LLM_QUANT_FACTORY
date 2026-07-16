@@ -24,6 +24,24 @@ class GeneratedProposal:
     response_hash: str
 
 
+@dataclass(frozen=True)
+class GeneratedAnalysis:
+    role: str
+    artifact: dict[str, Any]
+    usage: dict[str, int]
+    prompt_hash: str
+    response_hash: str
+
+
+@dataclass(frozen=True)
+class _ChatEnvelope:
+    content: str
+    usage: dict[str, int]
+    prompt_hash: str
+    response_hash: str
+    status_code: int
+
+
 class ModelInvocationError(RuntimeError):
     def __init__(
         self,
@@ -130,12 +148,125 @@ class CompatibleChatClient:
         ]
         return await self._generate(messages)
 
+    async def analyze(
+        self,
+        *,
+        role: str,
+        system_prompt: str,
+        context: dict[str, Any],
+        required_keys: frozenset[str] | set[str],
+    ) -> GeneratedAnalysis:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+        ]
+        return await self._generate_analysis(
+            role,
+            messages,
+            frozenset(required_keys),
+        )
+
+    async def _generate_analysis(
+        self,
+        role: str,
+        messages: list[dict[str, str]],
+        required_keys: frozenset[str],
+        *,
+        allow_contract_repair: bool = True,
+    ) -> GeneratedAnalysis:
+        envelope = await self._request(messages)
+        try:
+            artifact = _parse_json_object(envelope.content)
+            missing = required_keys - artifact.keys()
+            if missing:
+                raise ValueError(f"Role artifact is missing fields: {sorted(missing)}")
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            if allow_contract_repair:
+                repaired = [
+                    *messages,
+                    {"role": "assistant", "content": envelope.content},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"The {role} artifact violated its JSON contract: "
+                            f"{type(error).__name__}: {error}. Return one corrected JSON object "
+                            f"containing these required keys: {sorted(required_keys)}."
+                        ),
+                    },
+                ]
+                return await self._generate_analysis(
+                    role,
+                    repaired,
+                    required_keys,
+                    allow_contract_repair=False,
+                )
+            raise ModelInvocationError(
+                f"Role artifact rejected: {type(error).__name__}: {error}",
+                stage="role_contract",
+                prompt_hash=envelope.prompt_hash,
+                response_hash=envelope.response_hash,
+                usage=envelope.usage,
+                status_code=envelope.status_code,
+            ) from error
+        return GeneratedAnalysis(
+            role=role,
+            artifact=artifact,
+            usage=envelope.usage,
+            prompt_hash=envelope.prompt_hash,
+            response_hash=envelope.response_hash,
+        )
+
     async def _generate(
         self,
         messages: list[dict[str, str]],
         *,
         allow_contract_repair: bool = True,
     ) -> GeneratedProposal:
+        envelope = await self._request(messages)
+        try:
+            raw = _parse_json(envelope.content)
+            expression = Expression.from_dict(raw["expression"])
+            factor = FactorDefinition(
+                name=str(raw["name"]),
+                family=str(raw["family"]),
+                hypothesis=str(raw["hypothesis"]),
+                expression=expression,
+                expected_direction=_direction(raw.get("expected_direction", 1)),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            if allow_contract_repair:
+                corrected_messages = [
+                    *messages,
+                    {"role": "assistant", "content": envelope.content},
+                    {
+                        "role": "user",
+                        "content": (
+                            "The previous response violated the proposal contract: "
+                            f"{type(error).__name__}: {error}. Return one corrected JSON object "
+                            "only, using the exact DSL contracts in the system message."
+                        ),
+                    },
+                ]
+                return await self._generate(corrected_messages, allow_contract_repair=False)
+            raise ModelInvocationError(
+                f"Proposal contract rejected: {type(error).__name__}: {error}",
+                stage="proposal_contract",
+                prompt_hash=envelope.prompt_hash,
+                response_hash=envelope.response_hash,
+                usage=envelope.usage,
+                status_code=envelope.status_code,
+            ) from error
+        return GeneratedProposal(
+            factor=factor,
+            change=str(raw["change"]),
+            expected=str(raw["expected"]),
+            raw=raw,
+            usage=envelope.usage,
+            prompt_hash=envelope.prompt_hash,
+            response_hash=envelope.response_hash,
+        )
+
+    async def _request(self, messages: list[dict[str, str]]) -> _ChatEnvelope:
         prompt_hash = hashlib.sha256(
             json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()
         ).hexdigest()
@@ -211,59 +342,29 @@ class CompatibleChatClient:
             "completion_tokens": int(usage_raw.get("completion_tokens", 0)),
             "total_tokens": int(usage_raw.get("total_tokens", 0)),
         }
-        try:
-            raw = _parse_json(str(content))
-            expression = Expression.from_dict(raw["expression"])
-            factor = FactorDefinition(
-                name=str(raw["name"]),
-                family=str(raw["family"]),
-                hypothesis=str(raw["hypothesis"]),
-                expression=expression,
-                expected_direction=_direction(raw.get("expected_direction", 1)),
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            if allow_contract_repair:
-                corrected_messages = [
-                    *messages,
-                    {"role": "assistant", "content": str(content)},
-                    {
-                        "role": "user",
-                        "content": (
-                            "The previous response violated the proposal contract: "
-                            f"{type(error).__name__}: {error}. Return one corrected JSON object "
-                            "only, using the exact DSL contracts in the system message."
-                        ),
-                    },
-                ]
-                return await self._generate(corrected_messages, allow_contract_repair=False)
-            raise ModelInvocationError(
-                f"Proposal contract rejected: {type(error).__name__}: {error}",
-                stage="proposal_contract",
-                prompt_hash=prompt_hash,
-                response_hash=response_hash,
-                usage=usage,
-                status_code=response.status_code,
-            ) from error
-        return GeneratedProposal(
-            factor=factor,
-            change=str(raw["change"]),
-            expected=str(raw["expected"]),
-            raw=raw,
+        return _ChatEnvelope(
+            content=str(content),
             usage=usage,
             prompt_hash=prompt_hash,
             response_hash=response_hash,
+            status_code=response.status_code,
         )
 
 
 def _parse_json(content: str) -> dict[str, Any]:
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
-    value = json.loads(cleaned)
-    if not isinstance(value, Mapping):
-        raise TypeError("Model response must be a JSON object")
+    value = _parse_json_object(content)
     required = {"name", "family", "hypothesis", "change", "expected", "expression"}
     missing = required - value.keys()
     if missing:
         raise ValueError(f"Model proposal is missing fields: {sorted(missing)}")
+    return value
+
+
+def _parse_json_object(content: str) -> dict[str, Any]:
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
+    value = json.loads(cleaned)
+    if not isinstance(value, Mapping):
+        raise TypeError("Model response must be a JSON object")
     return dict(value)
 
 

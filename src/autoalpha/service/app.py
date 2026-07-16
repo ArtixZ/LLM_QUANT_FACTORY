@@ -32,6 +32,7 @@ from autoalpha.service.credentials import SystemCredentialStore
 from autoalpha.service.data_center import build_data_center_snapshot
 from autoalpha.service.data_sync import DataSyncWorker
 from autoalpha.service.factor_library import build_factor_library
+from autoalpha.service.full_llm import role_catalog
 from autoalpha.service.manual_backtest import ManualBacktestSpec, ManualFactorBacktester
 from autoalpha.service.multifactor import factor_from_pool_record
 from autoalpha.service.paper_trading import PaperStrategySpec, PaperTradingEngine
@@ -82,6 +83,7 @@ class SettingsRequest(BaseModel):
     iteration_interval_seconds: float = Field(default=5.0, ge=0.5, le=3600)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     maximum_active_factors: int = Field(default=5, ge=1, le=12)
+    full_llm_enabled: bool = True
     api_key: str | None = None
     tushare_token: str | None = None
     market_data_root: str = "~/MarketData/Ashare"
@@ -513,6 +515,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 "iteration_interval_seconds": "5",
                 "temperature": "0.7",
                 "maximum_active_factors": "5",
+                "full_llm_enabled": "true",
                 "market_data_root": str(Path.home() / "MarketData" / "Ashare"),
                 "data_auto_update_enabled": "true",
                 "data_update_hour": "18",
@@ -524,6 +527,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             missing_defaults["temperature"] = "0.7"
         if "maximum_active_factors" not in settings:
             missing_defaults["maximum_active_factors"] = "5"
+        if "full_llm_enabled" not in settings:
+            missing_defaults["full_llm_enabled"] = "true"
         if "market_data_root" not in settings:
             missing_defaults["market_data_root"] = str(Path.home() / "MarketData" / "Ashare")
         if "data_auto_update_enabled" not in settings:
@@ -604,7 +609,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await research_manager.shutdown()
 
 
-app = FastAPI(title="AutoAlpha Control Plane", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="AutoAlpha Control Plane", version="0.7.0-full-llm", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
 
 
@@ -662,6 +667,11 @@ async def research_task_detail_page(task_id: str) -> FileResponse:
     return FileResponse(PACKAGE_ROOT / "static/research_tasks.html")
 
 
+@app.get("/llm-team", include_in_schema=False)
+async def llm_team_page() -> FileResponse:
+    return FileResponse(PACKAGE_ROOT / "static/llm_team.html")
+
+
 @app.post("/api/session")
 async def create_session(payload: SessionRequest, response: Response) -> dict[str, bool]:
     required = os.getenv("AUTOALPHA_SERVICE_TOKEN")
@@ -715,6 +725,7 @@ def _research_workspace_snapshot(task_id: str) -> dict[str, Any]:
         "research_task": task_view,
         "settings": {
             **settings,
+            "service_variant": os.getenv("AUTOALPHA_VARIANT", "STANDARD"),
             "api_key_configured": vault.configured(),
             "tushare_token_configured": data_sync_worker.token_configured(),
             "service_token_required": bool(os.getenv("AUTOALPHA_SERVICE_TOKEN")),
@@ -803,6 +814,45 @@ def _research_workspace_snapshot(task_id: str) -> dict[str, Any]:
 )
 async def research_task_workspace(task_id: str) -> dict[str, Any]:
     return _research_workspace_snapshot(task_id)
+
+
+@app.get("/api/llm-team", dependencies=[Depends(_authorized)])
+async def llm_team_snapshot(task_id: str | None = None) -> dict[str, Any]:
+    if task_id and store.research_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="Research task not found")
+    return {
+        "variant": os.getenv("AUTOALPHA_VARIANT", "FULL LLM"),
+        "enabled": store.settings().get("full_llm_enabled", "true") == "true",
+        "task_id": task_id,
+        "roles": role_catalog(),
+        "summary": store.llm_role_summary(task_id=task_id),
+        "artifacts": store.llm_role_artifacts(task_id=task_id, limit=300),
+        "knowledge": store.factor_knowledge_catalog(task_id=task_id, limit=500),
+        "tasks": [
+            {
+                "task_id": task["task_id"],
+                "name": task["name"],
+                "market": task["market"],
+                "state": task.get("state"),
+            }
+            for task in store.research_tasks()
+        ],
+        "decision_authority": "ADVISORY_ONLY",
+        "feedback_policy": "CATEGORICAL_PUBLIC_ONLY_NO_EXACT_METRICS",
+    }
+
+
+@app.get("/api/factors/{factor_id}/intelligence", dependencies=[Depends(_authorized)])
+async def factor_intelligence(factor_id: str) -> dict[str, Any]:
+    factor = store.factor_pool_record(factor_id)
+    if factor is None:
+        raise HTTPException(status_code=404, detail="Factor not found")
+    return {
+        "factor_id": factor_id,
+        "knowledge": store.factor_knowledge(factor_id),
+        "role_artifacts": store.llm_role_artifacts(candidate_id=factor_id, limit=100),
+        "decision_authority": "ADVISORY_ONLY",
+    }
 
 
 @app.get("/api/data-center", dependencies=[Depends(_authorized)])
@@ -1567,6 +1617,7 @@ async def update_settings(payload: SettingsRequest) -> dict[str, Any]:
             "iteration_interval_seconds": str(payload.iteration_interval_seconds),
             "temperature": str(payload.temperature),
             "maximum_active_factors": str(payload.maximum_active_factors),
+            "full_llm_enabled": str(payload.full_llm_enabled).lower(),
             "market_data_root": str(market_data_root),
             "data_auto_update_enabled": str(payload.data_auto_update_enabled).lower(),
             "data_update_hour": str(payload.data_update_hour),
@@ -1584,6 +1635,7 @@ async def update_settings(payload: SettingsRequest) -> dict[str, Any]:
             "iteration_interval_seconds": payload.iteration_interval_seconds,
             "temperature": payload.temperature,
             "maximum_active_factors": payload.maximum_active_factors,
+            "full_llm_enabled": payload.full_llm_enabled,
             "api_key_replaced": bool(payload.api_key),
             "tushare_token_replaced": bool(payload.tushare_token),
             "credential_backend": "system_keyring",

@@ -25,6 +25,16 @@ from autoalpha.service.direction import (
     direction_definition,
 )
 from autoalpha.service.evaluator import PriceVolumeEvaluator
+from autoalpha.service.full_llm import (
+    FACTOR_LIBRARIAN,
+    FALSIFICATION_DESIGNER,
+    PORTFOLIO_RESEARCHER,
+    REVIEWER,
+    FullLLMResearchTeam,
+    RoleOutcome,
+    categorical_research_feedback,
+    evaluate_falsification_plan,
+)
 from autoalpha.service.multifactor import (
     MultiFactorResearchEngine,
     PortfolioDecision,
@@ -570,6 +580,7 @@ class ContinuousResearchWorker:
             model=settings["model"],
             temperature=float(settings.get("temperature", "0.7")),
         )
+        llm_team = FullLLMResearchTeam(client) if self._full_llm_enabled(settings) else None
         try:
             proposal = await client.propose(memories, iteration, data_context=data_context)
         except ModelInvocationError as error:
@@ -661,6 +672,31 @@ class ContinuousResearchWorker:
             "expected_direction": factor.expected_direction,
             "expression": factor.expression.to_dict(),
         }
+        pre_role_outcomes: dict[str, RoleOutcome] = {}
+        if llm_team is not None:
+            self._update_state(phase="LLM_PRE_REVIEW")
+            pre_role_outcomes = await llm_team.pre_evaluation(
+                candidate=canonical_proposal,
+                library_context=[
+                    record
+                    for record in self.store.factor_pool(limit=5000)
+                    if record.get("source_task_id", "legacy-ashare") == self.task_id
+                ][:500],
+                data_context=data_context,
+            )
+            self._persist_role_outcomes(
+                pre_role_outcomes.values(),
+                run_id=run_id,
+                iteration=iteration,
+                candidate_id=factor.factor_id,
+            )
+            canonical_proposal["full_llm"] = {
+                role: {
+                    "status": outcome.status,
+                    "artifact": outcome.artifact,
+                }
+                for role, outcome in pre_role_outcomes.items()
+            }
         self.store.stage_iteration_candidate(
             run_id,
             iteration,
@@ -744,6 +780,38 @@ class ContinuousResearchWorker:
                 "single_factor_metrics": result.metrics,
             },
         )
+        portfolio_role_outcome: RoleOutcome | None = None
+        if llm_team is not None:
+            self._update_state(phase="LLM_PORTFOLIO_REVIEW")
+            portfolio_role_outcome = await llm_team.portfolio_advisory(
+                candidate=canonical_proposal,
+                librarian=pre_role_outcomes.get(
+                    FACTOR_LIBRARIAN,
+                    RoleOutcome(
+                        role=FACTOR_LIBRARIAN,
+                        stage="PRE_EVALUATION",
+                        status="FAILED",
+                        artifact={},
+                        usage={},
+                        prompt_hash=None,
+                        response_hash=None,
+                    ),
+                ).artifact,
+                active_members=research_program["active_portfolio"]["members"],
+                public_feedback=categorical_research_feedback(
+                    result.metrics,
+                    decision="PUBLIC_SINGLE_FACTOR_EVALUATED",
+                    candidate_eligible=candidate_eligible,
+                    portfolio_action="PENDING_DETERMINISTIC_DECISION",
+                    portfolio_accepted=False,
+                ),
+            )
+            self._persist_role_outcomes(
+                [portfolio_role_outcome],
+                run_id=run_id,
+                iteration=iteration,
+                candidate_id=factor.factor_id,
+            )
         portfolio_decision = await asyncio.to_thread(
             engine.decide, factor, candidate_eligible=candidate_eligible
         )
@@ -954,13 +1022,96 @@ class ContinuousResearchWorker:
             "portfolio_option_diagnostics": list(portfolio_decision.option_diagnostics),
             "portfolio_factor_correlations": (portfolio_decision.evaluation.factor_correlations),
         }
-        combined_metrics = {**result.metrics, **portfolio_metrics, **governance_metrics}
         if feasibility_recovery:
             decision = "PUBLIC_FEASIBILITY_RECOVERY_RESEARCH_ONLY_DATA_BLOCKED"
         elif portfolio_decision.accepted:
             decision = "APPROVED_FOR_PAPER_RESEARCH_ONLY_DATA_BLOCKED"
         else:
             decision = "MULTIFACTOR_HOLD_RESEARCH_ONLY_DATA_BLOCKED"
+        combined_metrics = {**result.metrics, **portfolio_metrics, **governance_metrics}
+        full_llm_summary: dict[str, Any] = {
+            role: {"status": outcome.status, "stage": outcome.stage}
+            for role, outcome in pre_role_outcomes.items()
+        }
+        if portfolio_role_outcome is not None:
+            full_llm_summary[PORTFOLIO_RESEARCHER] = {
+                "status": portfolio_role_outcome.status,
+                "stage": portfolio_role_outcome.stage,
+            }
+        if llm_team is not None:
+            self._update_state(phase="LLM_POST_REVIEW")
+            falsification_plan = pre_role_outcomes.get(
+                FALSIFICATION_DESIGNER,
+                RoleOutcome(
+                    role=FALSIFICATION_DESIGNER,
+                    stage="PRE_EVALUATION",
+                    status="FAILED",
+                    artifact={},
+                    usage={},
+                    prompt_hash=None,
+                    response_hash=None,
+                ),
+            ).artifact
+            falsification_results = evaluate_falsification_plan(
+                falsification_plan, combined_metrics
+            )
+            public_feedback = categorical_research_feedback(
+                combined_metrics,
+                decision=decision,
+                candidate_eligible=candidate_eligible,
+                portfolio_action=portfolio_decision.action,
+                portfolio_accepted=portfolio_decision.accepted,
+            )
+            post_role_outcomes = await llm_team.post_evaluation(
+                candidate=canonical_proposal,
+                public_feedback=public_feedback,
+                falsification_plan=falsification_plan,
+                falsification_results=falsification_results,
+                portfolio_advisory=(
+                    portfolio_role_outcome.artifact if portfolio_role_outcome else {}
+                ),
+            )
+            self._persist_role_outcomes(
+                post_role_outcomes.values(),
+                run_id=run_id,
+                iteration=iteration,
+                candidate_id=factor.factor_id,
+            )
+            full_llm_summary.update(
+                {
+                    role: {"status": outcome.status, "stage": outcome.stage}
+                    for role, outcome in post_role_outcomes.items()
+                }
+            )
+            reviewer = pre_role_outcomes.get(REVIEWER)
+            librarian = pre_role_outcomes.get(FACTOR_LIBRARIAN)
+            if librarian is not None and librarian.status == "COMPLETED":
+                self.store.upsert_factor_knowledge(
+                    factor_id=factor.factor_id,
+                    canonical_mechanism=str(
+                        librarian.artifact.get(
+                            "canonical_mechanism", "OTHER_INTERPRETABLE"
+                        )
+                    ),
+                    mechanism_summary=str(
+                        librarian.artifact.get("mechanism_summary", "")
+                    ),
+                    tags=list(librarian.artifact.get("tags", [])),
+                    review=reviewer.artifact if reviewer else {},
+                    falsification={
+                        "plan": falsification_plan,
+                        "results": falsification_results,
+                    },
+                    related_factors=list(
+                        librarian.artifact.get("related_factors", [])
+                    ),
+                )
+        combined_metrics["full_llm"] = {
+            "enabled": llm_team is not None,
+            "roles": full_llm_summary,
+            "decision_authority": "ADVISORY_ONLY",
+            "feedback_policy": "CATEGORICAL_PUBLIC_ONLY_NO_EXACT_METRICS",
+        }
         self.store.close_generation_experiment(
             factor.factor_id,
             status=experiment_status,
@@ -1070,6 +1221,60 @@ class ContinuousResearchWorker:
         if task is None:
             raise RuntimeError(f"Research task no longer exists: {self.task_id}")
         return {**settings, "data_path": str(task["data_path"])}
+
+    @staticmethod
+    def _full_llm_enabled(settings: dict[str, str]) -> bool:
+        configured = settings.get("full_llm_enabled", os.getenv("AUTOALPHA_FULL_LLM", "1"))
+        return str(configured).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _persist_role_outcomes(
+        self,
+        outcomes: Any,
+        *,
+        run_id: str,
+        iteration: int,
+        candidate_id: str,
+    ) -> None:
+        for outcome in outcomes:
+            self.store.record_llm_role_artifact(
+                task_id=self.task_id,
+                run_id=run_id,
+                iteration=iteration,
+                candidate_id=candidate_id,
+                role=outcome.role,
+                stage=outcome.stage,
+                status=outcome.status,
+                artifact=outcome.artifact,
+                usage=outcome.usage,
+                prompt_hash=outcome.prompt_hash,
+                response_hash=outcome.response_hash,
+                error=outcome.error,
+            )
+            self.store.append_event(
+                "audit",
+                "LLM_ROLE_COMPLETED" if outcome.status == "COMPLETED" else "LLM_ROLE_FAILED",
+                f"LLM 角色：{outcome.role}",
+                (
+                    "角色建议已归档，确定性门禁与组合引擎不受其直接控制。"
+                    if outcome.status == "COMPLETED"
+                    else "角色调用失败，本轮按失效开放策略继续确定性研究。"
+                ),
+                run_id=run_id,
+                iteration=iteration,
+                level="INFO" if outcome.status == "COMPLETED" else "WARN",
+                payload={
+                    "task_id": self.task_id,
+                    "candidate_id": candidate_id,
+                    "role": outcome.role,
+                    "stage": outcome.stage,
+                    "status": outcome.status,
+                    "usage": outcome.usage,
+                    "prompt_hash": outcome.prompt_hash,
+                    "response_hash": outcome.response_hash,
+                    "error": outcome.error,
+                    "decision_authority": "ADVISORY_ONLY",
+                },
+            )
 
     def _generation_base(self, generation: str) -> str:
         if self.task_id == "legacy-ashare":

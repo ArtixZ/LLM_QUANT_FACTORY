@@ -170,3 +170,60 @@ def test_client_retries_transient_transport_failure() -> None:
 
     assert proposal.factor.name == "retry"
     assert calls == 2
+
+
+def test_client_generates_structured_role_artifact() -> None:
+    response = {
+        "choices": [{"message": {"content": '{"verdict":"CLEAR","concerns":[]}'}}],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10},
+    }
+    client = CompatibleChatClient(
+        base_url="https://provider.test",
+        api_key="secret",
+        model="research-model",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response)),
+    )
+
+    analysis = asyncio.run(
+        client.analyze(
+            role="REVIEWER",
+            system_prompt="Return JSON",
+            context={"candidate": {"name": "factor"}},
+            required_keys={"verdict", "concerns"},
+        )
+    )
+
+    assert analysis.artifact["verdict"] == "CLEAR"
+    assert analysis.usage["total_tokens"] == 10
+
+
+def test_client_repairs_role_contract_once() -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        content = '{"verdict":"CLEAR"}' if calls == 1 else '{"verdict":"CLEAR","concerns":[]}'
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}], "usage": {}},
+        )
+
+    client = CompatibleChatClient(
+        base_url="https://provider.test",
+        api_key="secret",
+        model="research-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    analysis = asyncio.run(
+        client.analyze(
+            role="REVIEWER",
+            system_prompt="Return JSON",
+            context={},
+            required_keys={"verdict", "concerns"},
+        )
+    )
+
+    assert analysis.artifact["concerns"] == []
+    assert calls == 2
