@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoAlpha Continuous Research Service</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity">
+      <h1 id="researchWorkspaceTitle">AutoAlpha Continuous Research Service</h1>
+      <p id="serviceSummary">正在读取服务状态</p>
+      <a class="workspace-task-link" id="taskWorkspaceIdentity" href="/research-tasks/legacy-ashare">A 股 · legacy-ashare</a>
+    </div>
+    <div class="header-actions">
+      <nav class="app-nav" aria-label="研究工作台">
+        <a class="active" id="autoResearchNav" href="/"><i data-lucide="activity"></i>自动研究</a>
+        <a href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a>
+        <a href="/factors"><i data-lucide="library"></i>因子库</a>
+        <a href="/screener"><i data-lucide="list-filter"></i>选股器</a>
+        <a href="/paper-trading"><i data-lucide="wallet-cards"></i>模拟交易</a>
+        <a href="/backtest"><i data-lucide="chart-no-axes-combined"></i>手动回测</a>
+        <a href="/data"><i data-lucide="database-zap"></i>数据中心</a>
+      </nav>
+      <span class="live-indicator" id="streamState"><i></i>实时</span>
+      <span class="state-pill" id="runStatus">WAITING</span>
+      <button class="button primary" id="startBtn"><i data-lucide="play"></i><span>启动持续迭代</span></button>
+      <button class="button danger" id="stopBtn"><i data-lucide="square"></i><span>停止</span></button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="sidebar panel">
+      <section class="sidebar-section">
+        <div class="section-title"><h2>全局模型配置</h2><span id="credentialState">未检查</span></div>
+        <form id="settingsForm">
+          <label>Base URL<input id="baseUrl" type="url" required></label>
+          <label>API Key<input id="apiKey" type="password" autocomplete="off" placeholder="仅在替换时填写"></label>
+          <label>Model<input id="model" required></label>
+          <div class="field-pair">
+            <label>Temperature<input id="temperature" type="number" min="0" max="2" step="0.1" required></label>
+            <label>迭代间隔（秒）<input id="interval" type="number" min="0.5" max="3600" step="0.5" required></label>
+          </div>
+          <label>最大活跃因子数<input id="maximumActiveFactors" type="number" min="1" max="12" step="1" required></label>
+          <label>当前任务数据目录<input id="dataPath" readonly required></label>
+          <label>Tushare Token<input id="tushareToken" type="password" autocomplete="off" placeholder="仅在替换时填写"></label>
+          <label>数据下载器目录<input id="marketDataRoot" required></label>
+          <div class="field-pair">
+            <label class="check-row"><input id="dataAutoUpdate" type="checkbox">每日自动更新</label>
+            <label>更新时点（北京时间）<input id="dataUpdateHour" type="number" min="0" max="23" step="1" required></label>
+          </div>
+          <label id="tokenLabel" hidden>服务访问令牌<input id="serviceToken" type="password" autocomplete="off"></label>
+          <label class="check-row"><input type="checkbox" checked disabled>启用连续上下文记忆</label>
+          <div class="button-row">
+            <button class="button primary" type="submit"><i data-lucide="save"></i>保存配置</button>
+            <button class="button" type="button" id="refreshBtn"><i data-lucide="refresh-cw"></i>刷新</button>
+            <button class="button" type="button" id="dataSyncBtn"><i data-lucide="database-backup"></i>同步数据</button>
+            <button class="icon-button" type="button" id="verifyBtn" title="验证审计链"><i data-lucide="shield-check"></i></button>
+          </div>
+          <p class="sidebar-note" id="dataSyncState">数据同步尚未开始</p>
+        </form>
+      </section>
+
+      <section class="sidebar-section memory-section">
+        <div class="section-title"><h2>连续记忆</h2><span id="memoryCount">0 条</span></div>
+        <div class="memory-list" id="memoryList"></div>
+      </section>
+
+      <section class="sidebar-section">
+        <div class="section-title"><h2>人工追加日志</h2></div>
+        <form id="manualLogForm">
+          <label>日志类型
+            <select id="manualCategory">
+              <option value="audit">审计日志</option>
+              <option value="action">行动日志</option>
+              <option value="research" selected>研究日志</option>
+              <option value="delivery">交付日志</option>
+            </select>
+          </label>
+          <label>内容<textarea id="manualContent" maxlength="4000" required placeholder="写入一条人工研究备注"></textarea></label>
+          <button class="button" type="submit"><i data-lucide="plus"></i>追加日志</button>
+        </form>
+        <p class="sidebar-note">停止操作会等待当前轮次完整落库，不会中断制品写入。</p>
+      </section>
+    </aside>
+
+    <div class="workspace">
+      <section class="panel protocol-panel">
+        <div class="panel-header">
+          <div><h2>生产研究协议</h2><p id="protocolSummary">正在读取分层评价协议</p></div>
+          <span class="state-pill small" id="generationStatus">GEN --</span>
+        </div>
+        <div class="protocol-kpis">
+          <div><span>公开探索</span><strong id="protocolExploration">--</strong></div>
+          <div><span>滚动样本外</span><strong id="protocolWalkForward">--</strong></div>
+          <div><span>候选预算</span><strong id="candidateBudget">--</strong></div>
+          <div><span>盲测预算</span><strong id="holdoutBudget">--</strong></div>
+          <div><span>持有期</span><strong id="holdingPeriod">--</strong></div>
+          <div><span>目标仓位</span><strong id="targetExposure">--</strong></div>
+        </div>
+        <div class="adaptive-direction">
+          <div class="direction-copy">
+            <span class="direction-label">自适应优化方向</span>
+            <strong id="directionTitle">等待首次公开方向诊断</strong>
+            <p id="directionObjective">方向只由公开研究证据决定</p>
+            <small id="directionRationale">尚无方向战役记录</small>
+          </div>
+          <div class="direction-budget">
+            <div><span>战役尝试</span><strong id="directionProgress">0 / 3</strong></div>
+            <div class="direction-track"><i id="directionProgressBar"></i></div>
+            <span id="directionRemaining">未开始</span>
+          </div>
+        </div>
+        <div class="blind-boundary">
+          <div><h3>隔离盲测与资本门禁</h3><p id="holdoutBoundary">隐藏指标不进入模型上下文</p></div>
+          <div id="blindVerdicts" class="blind-verdicts"></div>
+        </div>
+      </section>
+
+      <section class="panel chart-panel">
+        <div class="panel-header chart-header">
+          <div><h2 id="chartTitle">夏普迭代曲线</h2><p id="chartSubtitle">等待首个有效实验</p></div>
+          <div class="chart-controls">
+            <label>图表指标
+              <select id="chartMetric">
+                <option value="sharpe_ratio">夏普</option>
+                <option value="simple_annual_return">简单年化</option>
+                <option value="pearson_ic_mean">IC</option>
+                <option value="rank_ic_mean">Rank IC</option>
+                <option value="rank_ic_ir">Rank IC IR</option>
+                <option value="pearson_ic_ir">IC IR</option>
+                <option value="compound_annual_return">复合年化</option>
+                <option value="incremental_net_ir">增量净 IR</option>
+                <option value="incremental_max_drawdown">最大回撤变化</option>
+                <option value="return_drawdown_efficiency_change">收益回撤效率</option>
+                <option value="cost_stress_net_ir">成本压力净 IR</option>
+                <option value="annual_turnover">年化换手</option>
+                <option value="coverage">覆盖率</option>
+                <option value="capacity_cny">容量估计</option>
+                <option value="positive_year_ratio">正收益年份占比</option>
+                <option value="annual_return_dispersion">年收益离散</option>
+                <option value="walk_forward_positive_fraction">滚动正折比例</option>
+                <option value="walk_forward_worst_sharpe">最差折夏普</option>
+                <option value="deflated_sharpe_probability">Deflated Sharpe 概率</option>
+                <option value="probability_backtest_overfitting">PBO</option>
+                <option value="parameter_stability_positive_fraction">参数邻域正向比例</option>
+                <option value="portfolio_sharpe_ratio">组合夏普</option>
+                <option value="portfolio_simple_annual_return">组合简单年化</option>
+                <option value="portfolio_max_drawdown">组合最大回撤</option>
+                <option value="portfolio_incremental_net_ir">组合边际净 IR</option>
+                <option value="portfolio_annual_turnover">组合年化换手</option>
+                <option value="portfolio_max_factor_correlation">最大因子相关性</option>
+                <option value="portfolio_walk_forward_positive_fraction">组合滚动正折比例</option>
+                <option value="portfolio_walk_forward_worst_sharpe">组合最差折夏普</option>
+                <option value="portfolio_deflated_sharpe_probability">组合 Deflated Sharpe</option>
+              </select>
+            </label>
+            <div class="summary-cells">
+            <div><span id="latestMetricLabel">latest</span><strong id="latestMetric">--</strong></div>
+            <div><span id="bestMetricLabel">best</span><strong id="bestMetric">--</strong></div>
+            <div><span>iterations</span><strong id="totalIterations">0</strong></div>
+            </div>
+          </div>
+        </div>
+        <div class="chart-frame"><canvas id="metricChart"></canvas><div id="chartEmpty">暂无评价数据</div></div>
+        <div class="chart-legend">
+          <span class="accepted">GATE PASS</span><span class="rejected">REJECTED</span>
+          <span class="failed">CRASH / ERROR</span><span class="best" id="bestLegend">BEST</span>
+        </div>
+      </section>
+
+      <section class="panel flow-panel" id="researchFlow">
+        <div class="panel-header">
+          <div><h2>研究流程图</h2><p id="flowStatusText">等待服务配置</p></div>
+          <span class="state-pill small" id="flowIteration">ITER 0</span>
+        </div>
+        <div class="flow-grid">
+          <article class="flow-step" data-phase="CONFIGURE"><span>01</span><strong>API 配置</strong><p>凭证、模型与研究数据</p></article>
+          <article class="flow-step" data-phase="MEMORY"><span>02</span><strong>读取上下文</strong><p>成功、失败与重复记忆</p></article>
+          <article class="flow-step" data-phase="DIRECTION"><span>03</span><strong>方向自检</strong><p>公开证据诊断与三次预算</p></article>
+          <article class="flow-step" data-phase="PROPOSAL"><span>04</span><strong>生成候选</strong><p>模型输出 canonical DSL</p></article>
+          <article class="flow-step" data-phase="SEMANTICS"><span>05</span><strong>语义校验</strong><p>时序、单位与表达式去重</p></article>
+          <article class="flow-step" data-phase="EVALUATION"><span>06</span><strong>运行回测</strong><p>真实价量、成本与压力</p></article>
+          <article class="flow-step" data-phase="PORTFOLIO"><span>07</span><strong>组合增删</strong><p>保留、加入、删除或替换</p></article>
+          <article class="flow-step" data-phase="HOLDOUT"><span>08</span><strong>隔离盲测</strong><p>一次性访问与分级反馈</p></article>
+          <article class="flow-step" data-phase="CAPITAL_SIMULATION"><span>09</span><strong>资金仿真</strong><p>成交、费用、残仓与敞口</p></article>
+          <article class="flow-step" data-phase="EVIDENCE"><span>10</span><strong>评价门禁</strong><p>边际收益、风险与稳健性</p></article>
+          <article class="flow-step" data-phase="DELIVERY"><span>11</span><strong>交付记录</strong><p>组合版本、哈希制品与审计</p></article>
+          <article class="flow-step" data-phase="WAITING"><span>12</span><strong>下一轮 / 暂停</strong><p>持续迭代或故障熔断</p></article>
+        </div>
+      </section>
+
+      <section class="panel portfolio-panel">
+        <div class="panel-header">
+          <div><h2>冠军多因子组合</h2><p id="portfolioSummary">尚未建立组合</p></div>
+          <span class="state-pill small" id="portfolioVersion">VERSION --</span>
+        </div>
+        <div class="portfolio-kpis">
+          <div><span>组合夏普</span><strong id="portfolioSharpe">--</strong></div>
+          <div><span>简单年化</span><strong id="portfolioAnnual">--</strong></div>
+          <div><span>最大回撤</span><strong id="portfolioDrawdown">--</strong></div>
+          <div><span>年化换手</span><strong id="portfolioTurnover">--</strong></div>
+          <div><span>最大相关性</span><strong id="portfolioCorrelation">--</strong></div>
+          <div><span>活跃因子</span><strong id="portfolioFactorCount">0</strong></div>
+        </div>
+        <div class="portfolio-body">
+          <div><h3>当前构成</h3><div id="portfolioMembers" class="portfolio-members"></div></div>
+          <div><h3>最近组合动作</h3><div id="portfolioActions" class="portfolio-actions"></div></div>
+        </div>
+      </section>
+
+      <section class="panel experiments-panel">
+        <div class="panel-header">
+          <div><h2>Runner 实验记录</h2><p id="experimentSummary">读取历史轮次</p></div>
+          <button class="button" id="experimentRefreshBtn"><i data-lucide="refresh-cw"></i>刷新实验记录</button>
+        </div>
+        <div class="record-list" id="experimentList"></div>
+      </section>
+
+      <section class="panel logs-panel">
+        <div class="log-toolbar">
+          <div class="tabs" id="logFilters">
+            <button class="active" data-category="all">全部日志</button>
+            <button data-category="audit">审计日志</button>
+            <button data-category="action">行动日志</button>
+            <button data-category="research">研究日志</button>
+            <button data-category="delivery">交付日志</button>
+          </div>
+          <span id="logCount">0 条</span>
+        </div>
+        <div class="record-list log-list" id="logList"></div>
+      </section>
+    </div>
+  </main>
+
+  <div id="toast" role="status"></div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/static/app.js?v=20260716-task-scope-v3"></script>
+</body>
+</html>

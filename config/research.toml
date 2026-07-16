@@ -1,0 +1,105 @@
+[research]
+name = "autoalpha_ashare_cross_section"
+generation = "institutional_v6_next_open_20260716"
+horizons = [1, 3, 5, 10, 20]
+minimum_cross_section = 30
+random_seed = 20260715
+
+[splits]
+embargo_days = 20
+
+[splits.train]
+start = "2010-01-04"
+end = "2017-12-29"
+
+[splits.validation]
+start = "2018-01-02"
+end = "2024-11-29"
+
+[splits.test]
+start = "2025-01-02"
+end = "2026-07-14"
+
+[walk_forward]
+train_years = 5
+validation_years = 1
+first_validation_year = 2015
+last_validation_year = 2024
+minimum_folds = 6
+
+[governance]
+protocol_version = "institutional_walkforward_v6_next_open"
+maximum_holdout_evaluations_per_generation = 10
+minimum_public_gates_before_holdout = 1
+holdout_minimum_sharpe = 0.0
+holdout_minimum_annual_return = 0.0
+holdout_maximum_drawdown = 0.20
+
+[portfolio]
+holding_period_days = 5
+initial_cash_cny = 1000000.0
+target_gross_exposure = 0.50
+top_fraction = 0.10
+maximum_positions = 30
+minimum_capital_sharpe = 0.50
+maximum_capital_drawdown = 0.25
+maximum_realized_gross_exposure = 0.65
+maximum_residual_position_multiplier = 1.50
+
+[costs]
+commission_bps_each_side = 1.5
+stamp_duty_bps_sell = 5.0
+transfer_fee_bps_each_side = 0.1
+minimum_commission_cny = 5.0
+max_adv_participation = 0.05
+
+[budget]
+max_candidates_per_family = 100
+max_candidates_per_generation = 500
+maximum_runtime_seconds = 2880
+
+[adaptive_direction]
+enabled = true
+maximum_attempts_per_campaign = 3
+early_stop_consecutive_misses = 2
+recent_candidate_window = 24
+minimum_recent_candidates = 6
+cooldown_campaigns = 2
+minimum_turnover_reduction_fraction = 0.05
+minimum_coverage_improvement = 0.01
+minimum_correlation_reduction = 0.05
+
+[evaluation]
+minimum_coverage = 0.80
+maximum_net_return_p_value = 0.10
+minimum_deflated_sharpe_probability = 0.90
+maximum_probability_backtest_overfitting = 0.40
+minimum_positive_fold_fraction = 0.60
+minimum_worst_fold_net_ir = -0.50
+minimum_worst_regime_net_ir = -0.50
+minimum_positive_year_ratio = 0.50
+minimum_worst_year_incremental_return = -0.03
+maximum_annual_return_dispersion = 0.15
+minimum_incremental_net_ir = 0.10
+minimum_incremental_annual_return = 0.005
+maximum_incremental_drawdown_deterioration = 0.02
+minimum_return_drawdown_efficiency_change = -0.10
+minimum_cost_stress_net_ir = 0.0
+maximum_library_correlation = 0.85
+redundancy_override_net_ir = 0.25
+maximum_style_exposure = 0.10
+maximum_industry_active_weight = 0.05
+maximum_stress_loss = 0.10
+maximum_annual_turnover = 30.0
+minimum_capacity_cny = 10000000.0
+minimum_break_even_cost_multiplier = 1.50
+maximum_untradeable_fraction = 0.05
+minimum_paper_days = 60
+minimum_paper_net_ir = 0.0
+minimum_parameter_positive_fraction = 0.67
+minimum_parameter_worst_sharpe = 0.0
+minimum_diversification_sharpe_improvement = 0.10
+minimum_diversification_drawdown_improvement = 0.01
+minimum_stability_dispersion_reduction = 0.01
+minimum_stability_worst_fold_sharpe_improvement = 0.10
+maximum_transition_annual_return_sacrifice = 0.02

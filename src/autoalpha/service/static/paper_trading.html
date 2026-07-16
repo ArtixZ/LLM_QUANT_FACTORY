@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AutoAlpha 模拟交易</title><link rel="stylesheet" href="/static/styles.css"></head>
+<body>
+  <header class="app-header">
+    <div class="identity"><h1>AutoAlpha 模拟交易台</h1><p id="paperSummary">日频 EOD 模拟组合</p></div>
+    <div class="header-actions"><nav class="app-nav" aria-label="研究工作台">
+      <a href="/"><i data-lucide="activity"></i>自动研究</a><a href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a><a href="/factors"><i data-lucide="library"></i>因子库</a><a href="/screener"><i data-lucide="list-filter"></i>选股器</a><a class="active" href="/paper-trading"><i data-lucide="wallet-cards"></i>模拟交易</a><a href="/backtest"><i data-lucide="chart-no-axes-combined"></i>手动回测</a><a href="/data"><i data-lucide="database-zap"></i>数据中心</a>
+    </nav><span class="state-pill small" id="paperDataState">EOD</span></div>
+  </header>
+  <main class="paper-shell">
+    <aside class="panel paper-create">
+      <div class="panel-header"><div><h2>新建策略组合</h2><p id="paperDataRange">--</p></div></div>
+      <form id="paperCreateForm">
+        <div class="paper-fields">
+          <label>组合名称<input id="strategyName" maxlength="80" placeholder="例如：低波动反转组合" required></label>
+          <div class="field-pair"><label>初始资金（元）<input id="initialCash" type="number" min="10000" step="10000" value="1000000" required></label><label>持仓数<input id="selectionCount" type="number" min="1" max="100" value="20" required></label></div>
+          <div class="field-pair"><label>目标仓位<input id="grossExposure" type="number" min="0.05" max="1" step="0.05" value="0.95" required></label><label>单边滑点（bps）<input id="slippage" type="number" min="0" max="500" step="0.5" value="5" required></label></div>
+          <label>信号日期<input id="asOfDate" type="date" required></label>
+        </div>
+        <div class="factor-picker-header"><h3>策略因子</h3><span id="paperSelectedCount">0 / 12</span></div>
+        <label class="search-field compact"><span><i data-lucide="search"></i><input id="paperFactorSearch" type="search" placeholder="搜索因子"></span></label>
+        <div class="paper-factor-list" id="paperFactorPicker"></div>
+        <div class="paper-weights" id="paperWeights" hidden><div class="factor-picker-header"><h3>因子权重</h3><button class="text-button" id="paperEqualWeights" type="button">等权</button></div><div id="paperWeightEditor"></div></div>
+        <button class="button primary paper-create-button" id="createPaperPortfolio" type="submit"><i data-lucide="plus"></i>创建并建仓</button>
+      </form>
+      <div class="isolation-note"><i data-lucide="info"></i><span>模型以未复权收盘价成交和盯市，不是实盘下单或实时行情。</span></div>
+    </aside>
+    <section class="paper-workspace">
+      <section class="panel paper-overview"><div class="panel-header"><div><h2>策略组合</h2><p id="portfolioOverview">暂无模拟组合</p></div><div class="button-row"><button class="button" id="markPortfolios"><i data-lucide="refresh-cw"></i>收盘盯市</button></div></div><div class="paper-card-grid" id="paperPortfolioCards"></div></section>
+      <section class="panel paper-detail"><div class="panel-header"><div><h2 id="detailTitle">组合详情</h2><p id="detailSubtitle">选择一个组合</p></div><div class="button-row"><button class="button" id="rebalancePortfolio" disabled><i data-lucide="repeat-2"></i>按最新信号再平衡</button><button class="button" id="togglePortfolio" disabled><i data-lucide="pause"></i>暂停</button><button class="icon-button" id="deletePortfolio" disabled title="删除模拟组合"><i data-lucide="trash-2"></i></button></div></div>
+        <div class="paper-kpis"><div><span>净值</span><strong id="detailNav">--</strong></div><div><span>累计收益</span><strong id="detailReturn">--</strong></div><div><span>现金</span><strong id="detailCash">--</strong></div><div><span>持仓市值</span><strong id="detailMarketValue">--</strong></div><div><span>实际仓位</span><strong id="detailExposure">--</strong></div><div><span>最新盯市日</span><strong id="detailDate">--</strong></div></div>
+        <div class="paper-chart-frame"><canvas id="paperNavChart"></canvas><div id="paperChartEmpty">尚无净值记录</div></div>
+        <div class="paper-detail-grid"><section><div class="detail-section-title"><h3>当前持仓</h3><span id="positionCount">0</span></div><div class="paper-table-wrap"><table class="paper-table"><thead><tr><th>代码</th><th>名称</th><th>数量</th><th>成本</th></tr></thead><tbody id="positionsBody"></tbody></table></div></section><section><div class="detail-section-title"><h3>模拟交割记录</h3><span id="tradeCount">0</span></div><div class="paper-table-wrap"><table class="paper-table"><thead><tr><th>日期</th><th>证券</th><th>方向</th><th>数量</th><th>成交价</th><th>费用</th><th>原因</th></tr></thead><tbody id="tradesBody"></tbody></table></div></section></div>
+      </section>
+    </section>
+  </main><div id="toast" role="status"></div><script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script><script src="/static/paper_trading.js"></script>
+</body></html>

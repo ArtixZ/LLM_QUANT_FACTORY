@@ -1,6 +1,13 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
 
 # Large/local generated assets
 stock_data/
@@ -9,3 +16,6 @@ cache/*.pkl
 
 # AutoAlpha experiment outputs
 journal/
+runtime/
+output/
+tmp/

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoAlpha 自动研究任务</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260716-task-protocol-v1">
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity"><h1>自动研究任务</h1><p id="taskPageSummary">正在读取任务注册表</p></div>
+    <div class="header-actions">
+      <nav class="app-nav" aria-label="研究工作台">
+        <a href="/"><i data-lucide="activity"></i>自动研究</a>
+        <a class="active" href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a>
+        <a href="/factors"><i data-lucide="library"></i>因子库</a>
+        <a href="/screener"><i data-lucide="list-filter"></i>选股器</a>
+        <a href="/paper-trading"><i data-lucide="wallet-cards"></i>模拟交易</a>
+        <a href="/backtest"><i data-lucide="chart-no-axes-combined"></i>手动回测</a>
+        <a href="/data"><i data-lucide="database-zap"></i>数据中心</a>
+      </nav>
+      <button class="button primary" id="newTaskBtn"><i data-lucide="plus"></i>新建任务</button>
+    </div>
+  </header>
+
+  <main class="task-page-shell">
+    <section class="task-summary-band">
+      <div><span>任务总数</span><strong id="taskCount">0</strong><small>已持久化研究实例</small></div>
+      <div><span>运行中</span><strong id="runningCount">0</strong><small>独立研究循环</small></div>
+      <div><span>数据就绪</span><strong id="readyCount">0</strong><small>已冻结数据快照</small></div>
+      <div><span>来源因子</span><strong id="sourceFactorCount">0</strong><small>可按任务追溯</small></div>
+    </section>
+
+    <section class="panel task-registry-panel">
+      <div class="task-toolbar">
+        <label class="search-field">搜索任务<input id="taskSearch" type="search" placeholder="名称、任务 ID、数据目录"></label>
+        <label>市场<select id="marketFilter"><option value="all">全部市场</option></select></label>
+        <label>状态<select id="statusFilter"><option value="all">全部状态</option></select></label>
+        <button class="icon-button" id="refreshTasks" title="刷新任务"><i data-lucide="refresh-cw"></i></button>
+      </div>
+      <div class="task-table-wrap">
+        <table class="task-table">
+          <thead><tr><th>任务</th><th>市场</th><th>状态</th><th>当前阶段</th><th>AI 可见数据</th><th>数据工作区</th><th>因子</th><th>迭代</th><th>更新时间</th><th></th></tr></thead>
+          <tbody id="taskRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel task-detail-panel" id="taskDetailPanel" hidden>
+      <div class="panel-header">
+        <div><h2 id="detailTaskName">任务详情</h2><p id="detailTaskIdentity">--</p></div>
+        <div class="button-row task-control-row">
+          <a class="button" id="openCurrentResearch" href="/"><i data-lucide="square-arrow-out-up-right"></i>研究工作台</a>
+          <button class="button primary" id="startTaskBtn"><i data-lucide="play"></i>启动</button>
+          <button class="button danger" id="stopTaskBtn"><i data-lucide="square"></i>停止</button>
+          <button class="button" id="editTaskBtn"><i data-lucide="pencil"></i>编辑</button>
+        </div>
+      </div>
+      <div class="task-detail-grid" id="taskDetailGrid"></div>
+      <div class="task-readiness" id="taskReadiness" hidden></div>
+      <div class="task-snapshot-block"><span>数据快照指纹</span><code id="detailSnapshotHash">--</code></div>
+      <div class="task-notes-block"><span>任务备注</span><p id="detailNotes">--</p></div>
+      <div class="task-activity-block">
+        <div class="task-activity-head"><div><span>实时活动</span><strong id="activitySummary">尚未运行</strong></div><button class="icon-button" id="refreshActivity" title="刷新活动"><i data-lucide="refresh-cw"></i></button></div>
+        <div class="task-activity-list" id="taskActivityList"><p class="table-empty">任务启动后将在这里显示行动、研究与审计记录</p></div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="taskDialog" class="task-dialog">
+    <form id="taskForm" method="dialog">
+      <div class="dialog-title"><div><span id="taskDialogEyebrow">NEW TASK</span><h2 id="taskDialogTitle">新建自动研究任务</h2></div><button class="icon-button" id="closeTaskDialog" type="button" title="关闭"><i data-lucide="x"></i></button></div>
+      <div class="task-form-grid">
+        <label>任务名称<input id="taskName" required maxlength="80" placeholder="例如：A 股量价稳定性研究"></label>
+        <label>市场<select id="taskMarket"><option value="CN_A">A 股</option><option value="HK">港股</option><option value="US">美股</option></select></label>
+        <label class="wide">研究数据目录<input id="taskDataPath" required autocomplete="off"></label>
+        <label>任务数据起始日<input id="taskDataStart" type="date"></label>
+        <label>任务数据结束日<input id="taskDataEnd" type="date"></label>
+        <div class="task-form-section wide"><div><span>研究协议切分</span><small>探索与公开验证对 LLM 可见；隐藏测试只返回分类结论</small></div><button class="button" id="autoSplitBtn" type="button"><i data-lucide="wand-sparkles"></i>自动划分</button></div>
+        <label>探索区起始<input id="explorationStart" type="date" required></label>
+        <label>探索区结束<input id="explorationEnd" type="date" required></label>
+        <label>公开验证起始<input id="validationStart" type="date" required></label>
+        <label>公开验证结束<input id="validationEnd" type="date" required></label>
+        <label>隐藏测试起始<input id="holdoutStart" type="date" required></label>
+        <label>隐藏测试结束<input id="holdoutEnd" type="date" required></label>
+        <label>最少验证折数<input id="minimumFolds" type="number" min="1" max="20" value="1" required></label>
+        <label class="wide">备注<textarea id="taskNotes" maxlength="1000" placeholder="研究目标、约束或数据来源说明"></textarea></label>
+      </div>
+      <div class="task-form-note"><i data-lucide="database"></i><span>任务停止后可以热调整切分；保存会提升协议版本并重新冻结协议指纹。</span></div>
+      <div class="dialog-actions"><button class="button" id="cancelTaskDialog" type="button">取消</button><button class="button primary" id="saveTaskBtn" type="submit"><i data-lucide="save"></i>保存任务</button></div>
+    </form>
+  </dialog>
+  <div id="toast" role="status"></div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/static/research_tasks.js?v=20260716-task-workspace-v3"></script>
+</body>
+</html>
