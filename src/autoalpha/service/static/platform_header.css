@@ -69,6 +69,26 @@
 }
 .platform-header-tools > * { flex: 0 0 auto; }
 
+.favorite-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: #7a869a;
+  cursor: pointer;
+}
+.favorite-button:hover { color: #9a6c00; border-color: #d8b14d; background: #fffaf0; }
+.favorite-button.is-favorite { color: #9a6c00; border-color: #d8b14d; background: #fff8df; }
+.favorite-button.is-favorite svg { fill: #f2bd37; }
+.favorite-button svg { width: 15px; height: 15px; }
+.favorite-toggle { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.favorite-toggle input { width: 15px; height: 15px; accent-color: #1e5ee7; }
+
 @media (max-width: 1580px) {
   .platform-header {
     grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);

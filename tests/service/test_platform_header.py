@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 STATIC = Path(__file__).parents[2] / "src" / "autoalpha" / "service" / "static"
 PLATFORM_PAGES = (
     "index.html",

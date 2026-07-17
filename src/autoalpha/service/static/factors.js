@@ -10,6 +10,7 @@ const libraryState = {
   lifecycle: "all",
   ranking: "long_only_overall",
   rankingAscending: false,
+  favoriteOnly: false,
   detailFactor: null,
 };
 
@@ -60,6 +61,13 @@ function bindLibraryControls() {
   document.getElementById("rankingDirection").onclick = () => {
     libraryState.rankingAscending = !libraryState.rankingAscending;
     renderFactorTable();
+  };
+  document.getElementById("favoriteFactorFilter").addEventListener("change", event => {
+    libraryState.favoriteOnly = event.target.checked;
+    renderFactorTable();
+  });
+  document.getElementById("favoriteFactorBtn").onclick = () => {
+    if (libraryState.detailFactor) toggleFactorFavorite(libraryState.detailFactor.factor_id);
   };
   document.getElementById("libraryRefresh").onclick = () => loadLibrary({ announce: true });
   document.getElementById("clearSelection").onclick = () => {
@@ -203,6 +211,7 @@ function filteredFactors() {
     .filter(factor => libraryState.task === "all" || factor.source_task_id === libraryState.task)
     .filter(factor => libraryState.status === "all" || factor.research_state === libraryState.status)
     .filter(factor => libraryState.lifecycle === "all" || factor.lifecycle_state === libraryState.lifecycle)
+    .filter(factor => !libraryState.favoriteOnly || factor.favorite)
     .filter(factor => {
       if (!libraryState.query) return true;
       const haystack = [factor.factor_id, factor.name, factor.family, factor.category, factor.hypothesis, factor.cluster_id, factor.lifecycle_state, factor.source_task_name, factor.source_market, factor.origin, ...(factor.tags || [])]
@@ -299,12 +308,16 @@ function factorRow(factor, rank) {
   row.append(cell(selector), cell(element("strong", "rank-value", `#${rank}`)));
 
   const identity = element("div", "factor-identity");
+  const favorite = favoriteButton(factor.favorite, `收藏因子 ${factor.name}`);
+  favorite.onclick = event => { event.stopPropagation(); toggleFactorFavorite(factor.factor_id); };
   const detailButton = element("button", "factor-detail-trigger");
   detailButton.type = "button";
   detailButton.title = `查看 ${factor.name} 的公式与研究档案`;
   detailButton.append(element("strong", "", factor.name), element("code", "", `${factor.factor_id} · ITER ${factor.source_iteration}`));
   detailButton.onclick = () => openFactorDetail(factor);
-  identity.append(detailButton, element("p", "factor-hypothesis", factor.hypothesis || "未记录经济假设"));
+  const identityHead = element("div", "factor-identity-head");
+  identityHead.append(favorite, detailButton);
+  identity.append(identityHead, element("p", "factor-hypothesis", factor.hypothesis || "未记录经济假设"));
   row.append(cell(identity));
   const source = element("a", "factor-source-task", factor.source_task_name || factor.source_task_id);
   source.href = `/research/${encodeURIComponent(factor.source_task_id)}`;
@@ -357,6 +370,7 @@ function renderSelection() {
 
 async function openFactorDetail(factor) {
   libraryState.detailFactor = factor;
+  updateFavoriteButton(document.getElementById("favoriteFactorBtn"), factor.favorite, `收藏因子 ${factor.name}`);
   text("factorDetailCategory", factor.category || "未分类");
   text("factorDetailTitle", factor.name);
   text("factorDetailId", `${factor.factor_id} · ITER ${factor.source_iteration} · ${factor.source_task_name || factor.source_task_id}`);
@@ -414,6 +428,25 @@ async function openFactorDetail(factor) {
   }
 }
 
+async function toggleFactorFavorite(factorId) {
+  const factor = libraryState.data?.factors.find(item => item.factor_id === factorId);
+  if (!factor) return;
+  try {
+    await api(`/api/favorites/factor/${encodeURIComponent(factorId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ favorite: !factor.favorite, label: factor.name, context: { source_task_id: factor.source_task_id, family: factor.family } }),
+    });
+    factor.favorite = !factor.favorite;
+    if (libraryState.detailFactor?.factor_id === factorId) {
+      libraryState.detailFactor = factor;
+      updateFavoriteButton(document.getElementById("favoriteFactorBtn"), factor.favorite, `收藏因子 ${factor.name}`);
+    }
+    renderFactorTable();
+    toast(factor.favorite ? "因子已收藏" : "因子已取消收藏");
+  } catch (error) { toast(error.message, true); }
+}
+
 function renderFactorIntelligence(intelligence) {
   const target = document.getElementById("factorIntelligence");
   const knowledge = intelligence.knowledge;
@@ -429,6 +462,8 @@ function renderFactorIntelligence(intelligence) {
 }
 
 function closeFactorDetail() { const dialog = document.getElementById("factorDetailDialog"); if (dialog.open) dialog.close(); }
+function favoriteButton(active, label) { const node = element("button", `favorite-button${active ? " is-favorite" : ""}`); node.type = "button"; node.title = active ? "取消收藏" : label; node.setAttribute("aria-label", node.title); node.innerHTML = '<i data-lucide="star"></i>'; return node; }
+function updateFavoriteButton(node, active, label) { node.classList.toggle("is-favorite", Boolean(active)); node.title = active ? "取消收藏" : label; node.setAttribute("aria-label", node.title); if (window.lucide) window.lucide.createIcons({ nodes: [node] }); }
 async function typesetFormula() {
   const node = document.getElementById("factorLatex");
   if (!node || !libraryState.detailFactor || !window.MathJax?.typesetPromise) return;

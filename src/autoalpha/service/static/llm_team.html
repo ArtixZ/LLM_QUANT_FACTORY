@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoAlpha FULL LLM 研究团队</title>
   <link rel="stylesheet" href="/static/styles.css?v=20260717-full-llm-v1">
-  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v1">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
 </head>
 <body>
   <header class="app-header">
@@ -53,6 +53,7 @@
         <label>角色<select id="roleFilter"><option value="">全部角色</option></select></label>
         <label>状态<select id="statusFilter"><option value="">全部状态</option><option value="COMPLETED">已完成</option><option value="FAILED">失败开放</option></select></label>
         <label class="search-field">检索<input id="artifactSearch" type="search" placeholder="因子、轮次、机制或结论"></label>
+        <label class="favorite-toggle"><input id="favoriteArtifactFilter" type="checkbox">仅收藏制品</label>
         <button class="icon-button" id="refreshTeam" title="刷新 LLM 团队"><i data-lucide="refresh-cw"></i></button>
       </div>
       <div class="llm-content-tabs" role="tablist">
@@ -66,13 +67,13 @@
 
   <dialog class="llm-artifact-dialog" id="artifactDialog">
     <article>
-      <header><div><span id="dialogStage">--</span><h2 id="dialogTitle">角色制品</h2><code id="dialogIdentity">--</code></div><button class="icon-button" id="closeArtifact" title="关闭"><i data-lucide="x"></i></button></header>
+      <header><div><span id="dialogStage">--</span><h2 id="dialogTitle">角色制品</h2><code id="dialogIdentity">--</code></div><div class="button-row"><button class="favorite-button" id="favoriteArtifactBtn" type="button" title="收藏制品" aria-label="收藏制品"><i data-lucide="star"></i></button><button class="icon-button" id="closeArtifact" title="关闭"><i data-lucide="x"></i></button></div></header>
       <div class="llm-dialog-meta" id="dialogMeta"></div>
       <pre id="dialogPayload"></pre>
     </article>
   </dialog>
   <div id="toast" role="status"></div>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="/static/llm_team.js?v=20260717-full-llm-v1"></script>
+  <script src="/static/llm_team.js?v=20260718-favorites-v1"></script>
 </body>
 </html>

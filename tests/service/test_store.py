@@ -63,6 +63,36 @@ def test_store_versions_settings_atomically_without_duplicate_revisions(tmp_path
         store.save_settings_revision({"api_key": "secret"}, change_note="invalid")
 
 
+def test_store_persists_generic_favorites_with_context(tmp_path: Path) -> None:
+    path = tmp_path / "service.sqlite3"
+    store = ServiceStore(path)
+
+    created = store.set_favorite(
+        "factor",
+        "F_1",
+        favorite=True,
+        label="Volume Stability",
+        context={"source_task_id": "task-a"},
+    )
+    store.set_favorite("research_task", "task-a", favorite=True, label="2026 research")
+
+    assert created is not None
+    assert created["context"] == {"source_task_id": "task-a"}
+    assert store.favorite_ids("factor") == {"F_1"}
+    assert [item["entity_id"] for item in store.favorites(entity_type="research_task")] == [
+        "task-a"
+    ]
+
+    reopened = ServiceStore(path)
+    assert reopened.favorite("factor", "F_1")["label"] == "Volume Stability"
+    assert reopened.set_favorite("factor", "F_1", favorite=False) is None
+    assert reopened.favorite("factor", "F_1") is None
+    with pytest.raises(ValueError, match="32 KiB"):
+        reopened.set_favorite(
+            "screener_preset", "too-large", favorite=True, context={"payload": "x" * 40_000}
+        )
+
+
 def test_store_supplements_existing_metrics_without_losing_evidence(tmp_path: Path) -> None:
     store = ServiceStore(tmp_path / "service.sqlite3")
     store.begin_iteration("run-1", 1)

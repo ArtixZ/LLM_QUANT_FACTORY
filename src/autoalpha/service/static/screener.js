@@ -1,4 +1,4 @@
-const screenerState = { library: null, selected: new Map(), query: null, result: null };
+const screenerState = { library: null, selected: new Map(), query: null, result: null, presets: [] };
 
 document.addEventListener("DOMContentLoaded", async () => {
   if (window.lucide) window.lucide.createIcons();
@@ -11,6 +11,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     screenerState.selected.forEach((_, factorId) => screenerState.selected.set(factorId, 1));
     renderWeights();
   };
+  document.getElementById("saveScreenPreset").onclick = savePreset;
+  document.getElementById("deleteScreenPreset").onclick = deletePreset;
+  document.getElementById("savedScreenPreset").onchange = applyPreset;
   await loadLibrary();
 });
 
@@ -30,10 +33,72 @@ async function loadLibrary() {
       queryFactors.split(",").filter(factorId => available.has(factorId)).slice(0, 12)
         .forEach(factorId => screenerState.selected.set(factorId, 1));
     }
+    await loadPresets();
     renderPicker();
   } catch (error) {
     toast(error.message, true);
   }
+}
+
+async function loadPresets(selectedId = "") {
+  const data = await api("/api/favorites?entity_type=screener_preset");
+  screenerState.presets = data.favorites || [];
+  const select = document.getElementById("savedScreenPreset");
+  const current = selectedId || select.value;
+  select.replaceChildren(option("", "选择收藏方案"), ...screenerState.presets.map(item => option(item.entity_id, item.label || "未命名选股方案")));
+  select.value = screenerState.presets.some(item => item.entity_id === current) ? current : "";
+  document.getElementById("deleteScreenPreset").disabled = !select.value;
+}
+
+async function savePreset() {
+  const factors = selectedFactors();
+  if (!factors.length) { toast("请先选择至少一个因子", true); return; }
+  const name = document.getElementById("screenPresetName").value.trim() || factors.slice(0, 2).map(item => item.name).join(" + ");
+  const entityId = document.getElementById("savedScreenPreset").value || (crypto.randomUUID ? crypto.randomUUID() : `screen-${Date.now()}`);
+  const context = {
+    factor_ids: factors.map(item => item.factor_id),
+    weights: factors.map(item => Number(screenerState.selected.get(item.factor_id))),
+    as_of_date: document.getElementById("asOfDate").value,
+    selection_count: Number(document.getElementById("selectionCount").value),
+    selection_side: document.getElementById("selectionSide").value,
+  };
+  try {
+    await api(`/api/favorites/screener_preset/${encodeURIComponent(entityId)}`, { method: "PUT", body: JSON.stringify({ favorite: true, label: name, context }) });
+    document.getElementById("screenPresetName").value = name;
+    await loadPresets(entityId);
+    toast("选股方案已收藏");
+  } catch (error) { toast(error.message, true); }
+}
+
+function applyPreset() {
+  const id = document.getElementById("savedScreenPreset").value;
+  document.getElementById("deleteScreenPreset").disabled = !id;
+  const preset = screenerState.presets.find(item => item.entity_id === id);
+  if (!preset) return;
+  const context = preset.context || {};
+  const available = new Set((screenerState.library?.factors || []).map(item => item.factor_id));
+  screenerState.selected.clear();
+  (context.factor_ids || []).forEach((factorId, index) => {
+    if (available.has(factorId)) screenerState.selected.set(factorId, Number(context.weights?.[index]) || 1);
+  });
+  if (context.as_of_date) document.getElementById("asOfDate").value = context.as_of_date;
+  if (context.selection_count) document.getElementById("selectionCount").value = context.selection_count;
+  if (context.selection_side) document.getElementById("selectionSide").value = context.selection_side;
+  document.getElementById("screenPresetName").value = preset.label || "";
+  renderPicker();
+  toast(`已载入“${preset.label || "收藏方案"}”`);
+}
+
+async function deletePreset() {
+  const id = document.getElementById("savedScreenPreset").value;
+  const preset = screenerState.presets.find(item => item.entity_id === id);
+  if (!preset) return;
+  try {
+    await api(`/api/favorites/screener_preset/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ favorite: false, label: preset.label || "" }) });
+    document.getElementById("screenPresetName").value = "";
+    await loadPresets();
+    toast("选股方案已删除");
+  } catch (error) { toast(error.message, true); }
 }
 
 function filteredFactors() {
@@ -181,6 +246,7 @@ async function api(path, options = {}) {
 }
 
 function element(tagName, className = "", content = "") { const node = document.createElement(tagName); if (className) node.className = className; if (content !== "") node.textContent = content; return node; }
+function option(value, label) { const node = document.createElement("option"); node.value = value; node.textContent = label; return node; }
 function text(id, value) { document.getElementById(id).textContent = value; }
 function number(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed.toFixed(3) : "--"; }
 function percent(value) { const parsed = Number(value); return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(1)}%` : "--"; }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoAlpha 因子库</title>
   <link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v1">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
 </head>
 <body>
   <header class="app-header">
@@ -79,6 +79,7 @@
             <option value="long_only_overall">纯多综合分</option>
           </select>
         </label>
+        <label class="favorite-toggle"><input id="favoriteFactorFilter" type="checkbox">仅收藏</label>
         <button class="icon-button" id="rankingDirection" title="切换排序方向" aria-label="切换排序方向"><i data-lucide="arrow-down-wide-narrow"></i></button>
         <button class="icon-button" id="libraryRefresh" title="刷新因子库"><i data-lucide="refresh-cw"></i></button>
       </div>
@@ -129,7 +130,7 @@
   <dialog class="factor-detail-dialog" id="factorDetailDialog" aria-labelledby="factorDetailTitle">
     <article class="factor-detail-sheet">
       <header class="factor-detail-header"><div><span class="detail-eyebrow" id="factorDetailCategory">因子详情</span><h2 id="factorDetailTitle">--</h2><code id="factorDetailId">--</code></div><button class="icon-button" id="closeFactorDetail" title="关闭因子详情" aria-label="关闭因子详情"><i data-lucide="x"></i></button></header>
-      <div class="factor-detail-actions"><button class="button" id="copyDsl" title="复制原始 DSL"><i data-lucide="copy"></i>复制 DSL</button><button class="button" id="copyLatex" title="复制 LaTex 数学表达式"><i data-lucide="braces"></i>复制 LaTex</button><a class="button" id="openFactorScreener" href="/screener"><i data-lucide="list-filter"></i>带入选股器</a><a class="button primary" id="openFactorBacktest" href="/backtest"><i data-lucide="chart-no-axes-combined"></i>带入回测</a></div>
+      <div class="factor-detail-actions"><button class="favorite-button" id="favoriteFactorBtn" type="button" title="收藏因子" aria-label="收藏因子"><i data-lucide="star"></i></button><button class="button" id="copyDsl" title="复制原始 DSL"><i data-lucide="copy"></i>复制 DSL</button><button class="button" id="copyLatex" title="复制 LaTex 数学表达式"><i data-lucide="braces"></i>复制 LaTex</button><a class="button" id="openFactorScreener" href="/screener"><i data-lucide="list-filter"></i>带入选股器</a><a class="button primary" id="openFactorBacktest" href="/backtest"><i data-lucide="chart-no-axes-combined"></i>带入回测</a></div>
       <section class="factor-detail-intro"><div><span>经济假设</span><p id="factorDetailHypothesis">--</p></div><div class="detail-tags" id="factorDetailTags"></div></section>
       <section class="formula-section"><div class="detail-section-heading"><div><span>数学表达式</span><h3>可读公式</h3></div><small id="formulaSummary">--</small></div><div class="formula-render" id="factorLatex" aria-label="因子 LaTex 数学表达式"></div><details class="formula-source"><summary>查看 LaTex 源码</summary><pre id="factorLatexSource"></pre></details></section>
       <section class="factor-detail-grid"><div class="detail-block"><div class="detail-section-heading"><div><span>表达式审计</span><h3>输入与复杂度</h3></div></div><dl class="definition-list" id="expressionAudit"></dl></div><div class="detail-block"><div class="detail-section-heading"><div><span>当前评估</span><h3>指标快照</h3></div></div><dl class="definition-list metrics-list" id="factorMetrics"></dl></div></section>
@@ -140,7 +141,7 @@
   </dialog>
   <div id="toast" role="status"></div>
   <script>window.MathJax = { tex: { displayMath: [["\\[", "\\]"]] }, startup: { typeset: false } };</script>
-  <script src="/static/factors.js?v=20260718-quick-combine-v2"></script>
+  <script src="/static/factors.js?v=20260718-favorites-v1"></script>
   <script async src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" onload="window.lucide&&window.lucide.createIcons()"></script>
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" onload="window.dispatchEvent(new Event('mathjax-ready'))"></script>
 </body>

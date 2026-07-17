@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://unpkg.com">
   <link rel="stylesheet" href="/static/styles.css">
   <link rel="stylesheet" href="/static/autocombine.css">
-  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v1">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
 </head>
 <body>
   <header class="app-header combine-header">
@@ -53,6 +53,7 @@
             <option value="COMPLETED">已完成</option>
             <option value="PAUSED_FAILURE">异常暂停</option>
           </select>
+          <label class="favorite-toggle"><input id="favoriteCombineTaskFilter" type="checkbox">仅收藏</label>
         </div>
         <div class="task-list" id="taskList"></div>
       </aside>
@@ -75,6 +76,7 @@
               </div>
               <div class="task-actions">
                 <span class="state-pill" id="taskStatus">READY</span>
+                <button class="favorite-button" id="favoriteCombineTaskBtn" type="button" title="收藏组合任务" aria-label="收藏组合任务"><i data-lucide="star"></i></button>
                 <button class="button primary" id="startTask"><i data-lucide="play"></i>启动</button>
                 <button class="button danger" id="stopTask"><i data-lucide="square"></i>停止</button>
               </div>
@@ -169,7 +171,7 @@
         </div>
 
         <section class="panel strategy-workspace" id="strategyWorkspace" hidden>
-          <div class="panel-header"><div><h2>策略库</h2><p>由 AutoCombine 交付的可版本化 StrategySpec</p></div><span id="strategyLibraryCount">0 个版本</span></div>
+          <div class="panel-header"><div><h2>策略库</h2><p>由 AutoCombine 交付的可版本化 StrategySpec</p></div><div class="button-row"><label class="favorite-toggle"><input id="favoriteStrategyFilter" type="checkbox">仅收藏</label><span id="strategyLibraryCount">0 个版本</span></div></div>
           <div class="strategy-list" id="strategyList"></div>
         </section>
       </div>
@@ -246,6 +248,6 @@
 
   <div id="toast" role="status"></div>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="/static/autocombine.js?v=20260718-v1"></script>
+  <script src="/static/autocombine.js?v=20260718-favorites-v1"></script>
 </body>
 </html>

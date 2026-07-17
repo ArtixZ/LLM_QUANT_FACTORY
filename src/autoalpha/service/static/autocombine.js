@@ -64,19 +64,25 @@ function renderSummary() {
 function renderTaskList() {
   const query = $("taskSearch").value.trim().toLowerCase();
   const status = $("taskStatusFilter").value;
+  const favoriteOnly = $("favoriteCombineTaskFilter").checked;
   const tasks = state.bootstrap.tasks.filter((task) => {
     const text = `${task.name} ${task.task_id} ${task.snapshot_hash}`.toLowerCase();
-    return (!query || text.includes(query)) && (!status || task.status === status);
+    return (!query || text.includes(query)) && (!status || task.status === status) && (!favoriteOnly || task.favorite);
   });
   $("taskList").innerHTML = tasks.length ? tasks.map((task) => `
-    <button class="combine-task-item ${task.task_id === state.taskId ? "active" : ""}" data-task-id="${esc(task.task_id)}">
-      <div class="task-item-top"><strong>${esc(task.name)}</strong><span class="state-pill small ${esc(task.status)}">${esc(statusLabel(task.status))}</span></div>
+    <div class="combine-task-item ${task.task_id === state.taskId ? "active" : ""}" data-task-id="${esc(task.task_id)}" role="button" tabindex="0">
+      <div class="task-item-top"><strong>${esc(task.name)}</strong><button class="favorite-button${task.favorite ? " is-favorite" : ""}" type="button" data-favorite-task="${esc(task.task_id)}" title="${task.favorite ? "取消收藏" : "收藏组合任务"}" aria-label="${task.favorite ? "取消收藏" : "收藏组合任务"}"><i data-lucide="star"></i></button><span class="state-pill small ${esc(task.status)}">${esc(statusLabel(task.status))}</span></div>
       <div class="task-item-meta"><span>${esc(task.market === "CN_A" ? "A 股" : task.market)} · ${task.factor_count} 因子</span><span>${task.iteration}/${task.budget.maximum_experiments}</span></div>
       <div class="task-item-foot"><code>${esc(task.task_id)}</code><div class="mini-progress"><i style="width:${Math.round(task.progress * 100)}%"></i></div></div>
-    </button>`).join("") : `<div class="rail-empty">没有符合筛选条件的任务</div>`;
+    </div>`).join("") : `<div class="rail-empty">没有符合筛选条件的任务</div>`;
   document.querySelectorAll("[data-task-id]").forEach((button) => {
     button.onclick = () => selectTask(button.dataset.taskId, true);
+    button.onkeydown = event => { if (event.key === "Enter" || event.key === " ") selectTask(button.dataset.taskId, true); };
   });
+  document.querySelectorAll("[data-favorite-task]").forEach((button) => {
+    button.onclick = event => { event.stopPropagation(); toggleCombineFavorite("combine_task", button.dataset.favoriteTask); };
+  });
+  lucide.createIcons();
 }
 
 async function selectTask(taskId, updateHistory = false) {
@@ -109,6 +115,7 @@ function renderTaskDetail() {
   $("taskError").textContent = task.last_error || "";
   $("startTask").disabled = task.worker_alive || task.status === "COMPLETED";
   $("stopTask").disabled = !task.worker_alive;
+  updateFavoriteButton($("favoriteCombineTaskBtn"), task.favorite, "收藏组合任务");
   const protocol = task.protocol;
   $("explorationRange").textContent = `${protocol.exploration_start} — ${protocol.exploration_end}`;
   $("validationRange").textContent = `${protocol.validation_start} — ${protocol.validation_end}`;
@@ -235,13 +242,35 @@ function drawChart() {
 }
 
 function renderStrategies() {
-  const strategies = state.bootstrap.strategies;
-  $("strategyLibraryCount").textContent = `${strategies.length} 个版本`;
+  const allStrategies = state.bootstrap.strategies;
+  const strategies = allStrategies.filter(item => !$("favoriteStrategyFilter").checked || item.favorite);
+  $("strategyLibraryCount").textContent = `${strategies.length} / ${allStrategies.length} 个版本`;
   $("strategyList").innerHTML = strategies.length ? strategies.map((item) => {
     const spec = item.specification;
-    return `<div class="strategy-item"><div><strong>${esc(item.name)}</strong><code>${esc(item.strategy_id)} · V${item.version}</code></div><div class="strategy-spec-factors">${spec.factor_ids.map((id, index) => `<span>${esc(id)} ${percent(spec.factor_weights[index], 0)}</span>`).join("")}</div><div><strong>${esc(item.lifecycle)}</strong><span>${esc(item.market)}</span></div><div><strong>${dateTime(item.created_at)}</strong><code>${esc(item.evidence_hash.slice(0, 16))}</code></div></div>`;
+    return `<div class="strategy-item"><div><strong>${esc(item.name)}</strong><code>${esc(item.strategy_id)} · V${item.version}</code></div><div class="strategy-spec-factors">${spec.factor_ids.map((id, index) => `<span>${esc(id)} ${percent(spec.factor_weights[index], 0)}</span>`).join("")}</div><div><strong>${esc(item.lifecycle)}</strong><span>${esc(item.market)}</span></div><div><strong>${dateTime(item.created_at)}</strong><code>${esc(item.evidence_hash.slice(0, 16))}</code></div><button class="favorite-button${item.favorite ? " is-favorite" : ""}" type="button" data-favorite-strategy="${esc(item.strategy_id)}" title="${item.favorite ? "取消收藏" : "收藏策略"}" aria-label="${item.favorite ? "取消收藏" : "收藏策略"}"><i data-lucide="star"></i></button></div>`;
   }).join("") : `<div class="empty-line">尚无策略版本。门禁通过的组合可从任务详情登记。</div>`;
+  document.querySelectorAll("[data-favorite-strategy]").forEach(button => {
+    button.onclick = () => toggleCombineFavorite("strategy", button.dataset.favoriteStrategy);
+  });
+  lucide.createIcons();
 }
+
+async function toggleCombineFavorite(entityType, entityId) {
+  const records = entityType === "combine_task" ? state.bootstrap.tasks : state.bootstrap.strategies;
+  const key = entityType === "combine_task" ? "task_id" : "strategy_id";
+  const item = records.find(record => String(record[key]) === String(entityId));
+  if (!item) return;
+  try {
+    await api(`/api/favorites/${entityType}/${encodeURIComponent(entityId)}`, { method: "PUT", body: JSON.stringify({ favorite: !item.favorite, label: item.name || entityId }) });
+    item.favorite = !item.favorite;
+    if (entityType === "combine_task" && state.detail?.task?.task_id === entityId) state.detail.task.favorite = item.favorite;
+    renderTaskList(); renderStrategies();
+    if (entityType === "combine_task" && state.detail?.task?.task_id === entityId) updateFavoriteButton($("favoriteCombineTaskBtn"), item.favorite, "收藏组合任务");
+    toast(item.favorite ? "已加入收藏" : "已取消收藏");
+  } catch (error) { toast(error.message, true); }
+}
+
+function updateFavoriteButton(node, active, label) { node.classList.toggle("is-favorite", Boolean(active)); node.title = active ? "取消收藏" : label; node.setAttribute("aria-label", node.title); lucide.createIcons({ nodes: [node] }); }
 
 function fillTaskDefaults() {
   const defaults = state.bootstrap.defaults;
@@ -414,6 +443,8 @@ function bind() {
   $("taskForm").onsubmit = submitTask;
   $("refreshButton").onclick = () => refreshCurrent().catch((error) => toast(error.message, true));
   $("taskSearch").oninput = renderTaskList; $("taskStatusFilter").onchange = renderTaskList;
+  $("favoriteCombineTaskFilter").onchange = renderTaskList; $("favoriteStrategyFilter").onchange = renderStrategies;
+  $("favoriteCombineTaskBtn").onclick = () => { if (state.taskId) toggleCombineFavorite("combine_task", state.taskId); };
   $("startTask").onclick = () => taskCommand("start"); $("stopTask").onclick = () => taskCommand("stop");
   $("promoteButton").onclick = promoteBest; $("chartMetric").onchange = drawChart;
   $("formScopeMode").onchange = renderFactorPicker;

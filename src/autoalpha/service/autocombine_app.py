@@ -148,6 +148,12 @@ class PromoteRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
 
 
+class FavoriteRequest(BaseModel):
+    favorite: bool = True
+    label: str = Field(default="", max_length=160)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 base_store = ServiceStore(RUNTIME_ROOT / "autoalpha.sqlite3")
 combine_store = AutoCombineStore(base_store)
 vault = SecretVault(credential_store=SystemCredentialStore())
@@ -251,6 +257,9 @@ async def bootstrap() -> dict[str, Any]:
     except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError):
         pass
     records = base_store.factor_pool(limit=5000)
+    favorite_factors = base_store.favorite_ids("factor")
+    favorite_tasks = base_store.favorite_ids("combine_task")
+    favorite_strategies = base_store.favorite_ids("strategy")
     contaminated_ids = base_store.contaminated_factor_ids()
     factors = [
         {
@@ -266,6 +275,7 @@ async def bootstrap() -> dict[str, Any]:
             "annual_return": (record.get("metrics") or {}).get("long_only_simple_annual_return"),
             "max_drawdown": (record.get("metrics") or {}).get("long_only_max_drawdown"),
             "holdout_contaminated": record["factor_id"] in contaminated_ids,
+            "favorite": record["factor_id"] in favorite_factors,
         }
         for record in records
     ]
@@ -356,8 +366,14 @@ async def bootstrap() -> dict[str, Any]:
         ),
     }
     return {
-        "tasks": [_task_view(task) for task in combine_store.tasks()],
-        "strategies": combine_store.strategies(),
+        "tasks": [
+            {**_task_view(task), "favorite": task["task_id"] in favorite_tasks}
+            for task in combine_store.tasks()
+        ],
+        "strategies": [
+            {**strategy, "favorite": strategy["strategy_id"] in favorite_strategies}
+            for strategy in combine_store.strategies()
+        ],
         "factors": factors,
         "research_tasks": research_tasks,
         "factor_registry": {
@@ -424,14 +440,54 @@ async def create_task(payload: CombineTaskRequest) -> dict[str, Any]:
     return _task_view(task)
 
 
+@app.get("/api/favorites")
+async def favorite_index(
+    entity_type: Literal["combine_task", "strategy"] | None = None,
+) -> dict[str, Any]:
+    records = base_store.favorites(entity_type=entity_type, limit=5000)
+    return {"favorites": records, "entity_type": entity_type, "count": len(records)}
+
+
+@app.put("/api/favorites/{entity_type}/{entity_id}")
+async def update_favorite(
+    entity_type: Literal["combine_task", "strategy"],
+    entity_id: str,
+    payload: FavoriteRequest,
+) -> dict[str, Any]:
+    try:
+        record = base_store.set_favorite(
+            entity_type,
+            entity_id,
+            favorite=payload.favorite,
+            label=payload.label,
+            context=payload.context,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    base_store.append_event(
+        "action",
+        "FAVORITE_ADDED" if payload.favorite else "FAVORITE_REMOVED",
+        "AutoCombine 收藏已更新",
+        f"{entity_type}:{entity_id} 已{'加入' if payload.favorite else '移出'}收藏。",
+        payload={
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "favorite": payload.favorite,
+        },
+    )
+    return {"favorite": payload.favorite, "record": record}
+
+
 @app.get("/api/tasks/{task_id}")
 async def task_detail(task_id: str) -> dict[str, Any]:
     task = combine_store.task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="AutoCombine task not found")
     experiments = combine_store.experiments(task_id)
+    task_view = _task_view(task)
+    task_view["favorite"] = base_store.favorite("combine_task", task_id) is not None
     return {
-        "task": _task_view(task),
+        "task": task_view,
         "experiments": experiments,
         "frontier": _pareto_frontier(experiments),
         "memories": combine_store.memories(task_id),
@@ -497,7 +553,13 @@ async def promote_task(task_id: str, payload: PromoteRequest) -> dict[str, Any]:
 
 @app.get("/api/strategies")
 async def strategy_index() -> dict[str, Any]:
-    return {"strategies": combine_store.strategies()}
+    favorites = base_store.favorite_ids("strategy")
+    return {
+        "strategies": [
+            {**strategy, "favorite": strategy["strategy_id"] in favorites}
+            for strategy in combine_store.strategies()
+        ]
+    }
 
 
 def _task_view(task: dict[str, Any]) -> dict[str, Any]:

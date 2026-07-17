@@ -13,6 +13,8 @@ function bindControls() {
   document.getElementById("taskSearch").addEventListener("input", renderRows);
   document.getElementById("marketFilter").addEventListener("change", renderRows);
   document.getElementById("statusFilter").addEventListener("change", renderRows);
+  document.getElementById("favoriteTaskFilter").addEventListener("change", renderRows);
+  document.getElementById("favoriteTaskBtn").onclick = () => toggleTaskFavorite(taskState.selectedId);
   document.getElementById("closeTaskDialog").onclick = closeTaskDialog;
   document.getElementById("cancelTaskDialog").onclick = closeTaskDialog;
   document.getElementById("taskForm").addEventListener("submit", saveTask);
@@ -70,9 +72,10 @@ function renderRows() {
   const query = document.getElementById("taskSearch").value.trim().toLowerCase();
   const market = document.getElementById("marketFilter").value;
   const status = document.getElementById("statusFilter").value;
+  const favoriteOnly = document.getElementById("favoriteTaskFilter").checked;
   const rows = taskState.data.tasks.filter(task => {
     const corpus = `${task.name} ${task.task_id} ${task.data_path}`.toLowerCase();
-    return (!query || corpus.includes(query)) && (market === "all" || task.market === market) && (status === "all" || task.status === status);
+    return (!query || corpus.includes(query)) && (market === "all" || task.market === market) && (status === "all" || task.status === status) && (!favoriteOnly || task.favorite);
   });
   const body = document.getElementById("taskRows");
   if (!rows.length) {
@@ -87,7 +90,10 @@ function taskRow(task) {
   const row = document.createElement("tr");
   if (task.task_id === taskState.selectedId) row.classList.add("selected");
   const link = element("a", "task-name-link", task.name); link.href = `/research/${encodeURIComponent(task.task_id)}`; link.title = "打开该任务的自动研究工作台";
-  const identity = element("div", "task-identity"); identity.append(link, element("code", "", task.task_id));
+  const identity = element("div", "task-identity");
+  const favorite = favoriteButton(task.favorite, `收藏任务 ${task.name}`);
+  favorite.onclick = event => { event.preventDefault(); event.stopPropagation(); toggleTaskFavorite(task.task_id); };
+  identity.append(favorite, link, element("code", "", task.task_id));
   const phase = element("div", "task-phase"); phase.append(element("strong", "", task.phase || "WAITING"), element("span", "", `第 ${formatNumber(task.iteration || 0)} 轮`));
   row.append(cell(identity), cell(marketLabel(task.market)), cell(statusPill(task.status)), cell(phase), cell(taskRange(task)), cell(pathBlock(task.data_path)), cell(formatNumber(task.factor_count)), cell(formatNumber(task.iteration_count)), cell(formatDate(task.updated_at)));
   const action = element("a", "icon-button", ""); action.href = `/research-tasks/${encodeURIComponent(task.task_id)}`; action.title = "查看任务详情"; action.innerHTML = '<i data-lucide="chevron-right"></i>'; row.append(cell(action));
@@ -114,10 +120,26 @@ function renderDetail(taskId) {
   document.getElementById("startTaskBtn").disabled = running || !readiness.runnable;
   document.getElementById("stopTaskBtn").disabled = !running || task.status === "STOPPING";
   document.getElementById("editTaskBtn").disabled = running;
+  updateFavoriteButton(document.getElementById("favoriteTaskBtn"), task.favorite, `收藏任务 ${task.name}`);
   const workspaceLink = document.getElementById("openCurrentResearch");
   workspaceLink.hidden = false;
   workspaceLink.href = `/research/${encodeURIComponent(task.task_id)}`;
   if (window.lucide) window.lucide.createIcons();
+}
+
+async function toggleTaskFavorite(taskId) {
+  const task = taskState.data?.tasks.find(item => item.task_id === taskId);
+  if (!task) return;
+  try {
+    await api(`/api/favorites/research_task/${encodeURIComponent(taskId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ favorite: !task.favorite, label: task.name, context: { market: task.market } }),
+    });
+    task.favorite = !task.favorite;
+    renderRows();
+    if (taskId === taskState.selectedId) renderDetail(taskId);
+    toast(task.favorite ? "研究任务已收藏" : "研究任务已取消收藏");
+  } catch (error) { toast(error.message, true); }
 }
 
 async function commandTask(action) {
@@ -241,6 +263,8 @@ function stat(label, value) { const node = element("div", ""); node.append(eleme
 function cell(content) { const node = document.createElement("td"); node.append(content instanceof Node ? content : document.createTextNode(String(content))); return node; }
 function option(value, label) { const node = document.createElement("option"); node.value = value; node.textContent = label; return node; }
 function element(tag, className = "", content = "") { const node = document.createElement(tag); if (className) node.className = className; if (content !== "") node.textContent = content; return node; }
+function favoriteButton(active, label) { const node = element("button", `favorite-button${active ? " is-favorite" : ""}`); node.type = "button"; node.title = active ? "取消收藏" : label; node.setAttribute("aria-label", node.title); node.innerHTML = '<i data-lucide="star"></i>'; return node; }
+function updateFavoriteButton(node, active, label) { node.classList.toggle("is-favorite", Boolean(active)); node.title = active ? "取消收藏" : label; node.setAttribute("aria-label", node.title); }
 function text(id, value) { document.getElementById(id).textContent = value; }
 function formatNumber(value) { const number = Number(value); return Number.isFinite(number) ? number.toLocaleString() : "--"; }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "--" : date.toLocaleString("zh-CN", { hour12: false }); }

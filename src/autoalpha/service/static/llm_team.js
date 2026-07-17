@@ -16,7 +16,7 @@ const ROLE_ICONS = {
   TCA_PAPER_OBSERVER: "receipt-text",
 };
 
-const state = { snapshot: null, view: "artifacts" };
+const state = { snapshot: null, view: "artifacts", detailArtifact: null };
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("refreshTeam").onclick = refresh;
@@ -24,6 +24,10 @@ document.addEventListener("DOMContentLoaded", () => {
   ["roleFilter", "statusFilter", "artifactSearch"].forEach(id => {
     document.getElementById(id).addEventListener("input", renderCurrentView);
   });
+  document.getElementById("favoriteArtifactFilter").addEventListener("change", renderCurrentView);
+  document.getElementById("favoriteArtifactBtn").onclick = () => {
+    if (state.detailArtifact) toggleArtifactFavorite(state.detailArtifact.id);
+  };
   document.getElementById("taskFilter").addEventListener("change", refresh);
   document.querySelectorAll(".llm-content-tabs button").forEach(button => {
     button.onclick = () => {
@@ -123,24 +127,30 @@ function renderArtifacts() {
   const role = document.getElementById("roleFilter").value;
   const status = document.getElementById("statusFilter").value;
   const query = document.getElementById("artifactSearch").value.trim().toLowerCase();
+  const favoriteOnly = document.getElementById("favoriteArtifactFilter").checked;
   const records = state.snapshot.artifacts.filter(item => {
     const haystack = `${item.candidate_id || ""} ${item.iteration} ${item.role} ${JSON.stringify(item.artifact)}`.toLowerCase();
-    return (!role || item.role === role) && (!status || item.status === status) && (!query || haystack.includes(query));
+    return (!role || item.role === role) && (!status || item.status === status) && (!query || haystack.includes(query)) && (!favoriteOnly || item.favorite);
   });
   const container = document.getElementById("artifactList");
   if (!records.length) {
     container.innerHTML = `<p class="table-empty">当前筛选下没有角色制品</p>`;
     return;
   }
-  container.innerHTML = records.map((item, index) => `<button class="llm-artifact-row" data-index="${index}">
+  container.innerHTML = records.map((item, index) => `<div class="llm-artifact-row" data-index="${index}" role="button" tabindex="0">
     <span class="llm-role-icon"><i data-lucide="${ROLE_ICONS[item.role] || "bot"}"></i></span>
     <span class="llm-artifact-main"><small>${stageLabel(item.stage)} · ITER ${item.iteration}</small><strong>${ROLE_LABELS[item.role] || item.role}</strong><em>${artifactHeadline(item)}</em></span>
     <span class="llm-artifact-factor"><code>${escapeHtml(item.candidate_id || "NO CANDIDATE")}</code><small>${formatDate(item.created_at)}</small></span>
     <span class="llm-status ${item.status.toLowerCase()}">${item.status === "COMPLETED" ? "已完成" : "失败开放"}</span>
+    <button class="favorite-button${item.favorite ? " is-favorite" : ""}" type="button" data-favorite-id="${item.id}" title="${item.favorite ? "取消收藏" : "收藏制品"}" aria-label="${item.favorite ? "取消收藏" : "收藏制品"}"><i data-lucide="star"></i></button>
     <i data-lucide="chevron-right"></i>
-  </button>`).join("");
+  </div>`).join("");
   container.querySelectorAll(".llm-artifact-row").forEach((button, index) => {
     button.onclick = () => openArtifact(records[index]);
+    button.onkeydown = event => { if (event.key === "Enter" || event.key === " ") openArtifact(records[index]); };
+  });
+  container.querySelectorAll("[data-favorite-id]").forEach(button => {
+    button.onclick = event => { event.stopPropagation(); toggleArtifactFavorite(button.dataset.favoriteId); };
   });
 }
 
@@ -161,6 +171,8 @@ function renderKnowledge() {
 }
 
 function openArtifact(item) {
+  state.detailArtifact = item;
+  updateFavoriteButton(document.getElementById("favoriteArtifactBtn"), item.favorite);
   document.getElementById("dialogStage").textContent = `${stageLabel(item.stage)} · ${item.status}`;
   document.getElementById("dialogTitle").textContent = ROLE_LABELS[item.role] || item.role;
   document.getElementById("dialogIdentity").textContent = `${item.candidate_id || "NO CANDIDATE"} · ITER ${item.iteration}`;
@@ -168,6 +180,33 @@ function openArtifact(item) {
   document.getElementById("dialogPayload").textContent = JSON.stringify(item.artifact, null, 2);
   document.getElementById("artifactDialog").showModal();
   window.lucide?.createIcons();
+}
+
+async function toggleArtifactFavorite(artifactId) {
+  const item = state.snapshot?.artifacts.find(record => String(record.id) === String(artifactId));
+  if (!item) return;
+  try {
+    const response = await fetch(`/api/favorites/llm_artifact/${encodeURIComponent(item.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ favorite: !item.favorite, label: `${ROLE_LABELS[item.role] || item.role} · ITER ${item.iteration}`, context: { task_id: item.task_id, candidate_id: item.candidate_id } }),
+    });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || `HTTP ${response.status}`);
+    item.favorite = !item.favorite;
+    if (String(state.detailArtifact?.id) === String(item.id)) {
+      state.detailArtifact = item;
+      updateFavoriteButton(document.getElementById("favoriteArtifactBtn"), item.favorite);
+    }
+    renderCurrentView();
+    toast(item.favorite ? "角色制品已收藏" : "角色制品已取消收藏");
+  } catch (error) { toast(error.message, true); }
+}
+
+function updateFavoriteButton(node, active) {
+  node.classList.toggle("is-favorite", Boolean(active));
+  node.title = active ? "取消收藏" : "收藏制品";
+  node.setAttribute("aria-label", node.title);
+  window.lucide?.createIcons({ nodes: [node] });
 }
 
 function artifactHeadline(item) {

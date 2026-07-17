@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoAlpha 自动研究任务</title>
   <link rel="stylesheet" href="/static/styles.css?v=20260717-recent-protocol-v1">
-  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v1">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
 </head>
 <body>
   <header class="app-header">
@@ -41,6 +41,7 @@
         <label class="search-field">搜索任务<input id="taskSearch" type="search" placeholder="名称、任务 ID、数据目录"></label>
         <label>市场<select id="marketFilter"><option value="all">全部市场</option></select></label>
         <label>状态<select id="statusFilter"><option value="all">全部状态</option></select></label>
+        <label class="favorite-toggle"><input id="favoriteTaskFilter" type="checkbox">仅收藏</label>
         <button class="icon-button" id="refreshTasks" title="刷新任务"><i data-lucide="refresh-cw"></i></button>
       </div>
       <div class="task-table-wrap">
@@ -55,6 +56,7 @@
       <div class="panel-header">
         <div><h2 id="detailTaskName">任务详情</h2><p id="detailTaskIdentity">--</p></div>
         <div class="button-row task-control-row">
+          <button class="favorite-button" id="favoriteTaskBtn" type="button" title="收藏任务" aria-label="收藏任务"><i data-lucide="star"></i></button>
           <a class="button" id="openCurrentResearch" href="/"><i data-lucide="square-arrow-out-up-right"></i>研究工作台</a>
           <button class="button primary" id="startTaskBtn"><i data-lucide="play"></i>启动</button>
           <button class="button danger" id="stopTaskBtn"><i data-lucide="square"></i>停止</button>
@@ -104,6 +106,6 @@
   </dialog>
   <div id="toast" role="status"></div>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="/static/research_tasks.js?v=20260717-recent-protocol-v1"></script>
+  <script src="/static/research_tasks.js?v=20260718-favorites-v1"></script>
 </body>
 </html>

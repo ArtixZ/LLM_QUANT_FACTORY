@@ -387,6 +387,23 @@ class ManualBacktestMetadataRequest(BaseModel):
         return list(dict.fromkeys(cleaned))
 
 
+FavoriteEntityType = Literal[
+    "factor",
+    "research_task",
+    "llm_artifact",
+    "paper_portfolio",
+    "screener_preset",
+    "combine_task",
+    "strategy",
+]
+
+
+class FavoriteRequest(BaseModel):
+    favorite: bool = True
+    label: str = Field(default="", max_length=160)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 class LifecycleTransitionRequest(BaseModel):
     target_state: Literal[
         "RESEARCH",
@@ -970,17 +987,68 @@ async def research_task_workspace(task_id: str) -> dict[str, Any]:
     return _research_workspace_snapshot(task_id)
 
 
+@app.get("/api/favorites", dependencies=[Depends(_authorized)])
+async def favorite_index(entity_type: FavoriteEntityType | None = None) -> dict[str, Any]:
+    records = store.favorites(entity_type=entity_type, limit=5000)
+    return {
+        "favorites": records,
+        "entity_type": entity_type,
+        "count": len(records),
+    }
+
+
+@app.put(
+    "/api/favorites/{entity_type}/{entity_id}",
+    dependencies=[Depends(_authorized)],
+)
+async def update_favorite(
+    entity_type: FavoriteEntityType,
+    entity_id: str,
+    payload: FavoriteRequest,
+) -> dict[str, Any]:
+    try:
+        record = store.set_favorite(
+            entity_type,
+            entity_id,
+            favorite=payload.favorite,
+            label=payload.label,
+            context=payload.context,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    store.append_event(
+        "action",
+        "FAVORITE_ADDED" if payload.favorite else "FAVORITE_REMOVED",
+        "收藏已更新",
+        f"{entity_type}:{entity_id} 已{'加入' if payload.favorite else '移出'}收藏。",
+        payload={
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "favorite": payload.favorite,
+            "label": payload.label,
+        },
+    )
+    return {
+        "favorite": payload.favorite,
+        "record": record,
+    }
+
+
 @app.get("/api/llm-team", dependencies=[Depends(_authorized)])
 async def llm_team_snapshot(task_id: str | None = None) -> dict[str, Any]:
     if task_id and store.research_task(task_id) is None:
         raise HTTPException(status_code=404, detail="Research task not found")
+    artifacts = store.llm_role_artifacts(task_id=task_id, limit=300)
+    favorite_artifacts = store.favorite_ids("llm_artifact")
+    for artifact in artifacts:
+        artifact["favorite"] = str(artifact["id"]) in favorite_artifacts
     return {
         "variant": os.getenv("AUTOALPHA_VARIANT", "FULL LLM"),
         "enabled": store.settings().get("full_llm_enabled", "true") == "true",
         "task_id": task_id,
         "roles": role_catalog(),
         "summary": store.llm_role_summary(task_id=task_id),
-        "artifacts": store.llm_role_artifacts(task_id=task_id, limit=300),
+        "artifacts": artifacts,
         "knowledge": store.factor_knowledge_catalog(task_id=task_id, limit=500),
         "tasks": [
             {
@@ -1022,6 +1090,9 @@ async def data_center_snapshot() -> dict[str, Any]:
 @app.get("/api/research-tasks", dependencies=[Depends(_authorized)])
 async def research_task_index() -> dict[str, Any]:
     tasks = [_research_task_view(task) for task in store.research_tasks()]
+    favorite_tasks = store.favorite_ids("research_task")
+    for task in tasks:
+        task["favorite"] = task["task_id"] in favorite_tasks
     return {
         "tasks": tasks,
         "markets": [
@@ -1277,10 +1348,12 @@ async def factor_library(response: Response) -> dict[str, Any]:
         research_diagnostics=store.factor_research_diagnostics(),
         current_protocol=CANONICAL_LIBRARY_PROTOCOL,
     )
+    favorite_factors = store.favorite_ids("factor")
     for factor in library["factors"]:
         source = task_lookup.get(factor["source_task_id"])
         factor["source_task_name"] = source["name"] if source else factor["source_task_id"]
         factor["source_market"] = source["market"] if source else None
+        factor["favorite"] = factor["factor_id"] in favorite_factors
     library["research_tasks"] = [
         {"task_id": task["task_id"], "name": task["name"], "market": task["market"]}
         for task in task_lookup.values()
@@ -1469,7 +1542,11 @@ async def factor_screen(payload: FactorScreenRequest) -> dict[str, Any]:
 
 @app.get("/api/paper-portfolios", dependencies=[Depends(_authorized)])
 async def paper_portfolios() -> dict[str, Any]:
-    return {"portfolios": store.paper_portfolios(limit=200)}
+    portfolios = store.paper_portfolios(limit=200)
+    favorite_portfolios = store.favorite_ids("paper_portfolio")
+    for portfolio in portfolios:
+        portfolio["favorite"] = str(portfolio["id"]) in favorite_portfolios
+    return {"portfolios": portfolios}
 
 
 @app.get("/api/paper-portfolios/{portfolio_id}", dependencies=[Depends(_authorized)])
@@ -1477,6 +1554,7 @@ async def paper_portfolio(portfolio_id: int) -> dict[str, Any]:
     record = store.paper_portfolio(portfolio_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Paper portfolio not found")
+    record["favorite"] = store.favorite("paper_portfolio", str(portfolio_id)) is not None
     return record
 
 
@@ -1567,6 +1645,7 @@ async def delete_paper_portfolio(portfolio_id: int) -> dict[str, bool]:
         store.delete_paper_portfolio(portfolio_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    store.set_favorite("paper_portfolio", str(portfolio_id), favorite=False)
     store.append_event(
         "action",
         "PAPER_PORTFOLIO_DELETED",

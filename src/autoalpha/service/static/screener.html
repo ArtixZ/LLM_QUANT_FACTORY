@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoAlpha 选股器</title>
   <link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v1">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
 </head>
 <body>
   <header class="app-header">
@@ -34,6 +34,12 @@
     <aside class="panel screener-config">
       <div class="panel-header">
         <div><h2>选股设置</h2><p id="screenerDataRange">--</p></div>
+      </div>
+      <div class="screener-presets">
+        <label>收藏方案<select id="savedScreenPreset"><option value="">选择收藏方案</option></select></label>
+        <label>方案名称<input id="screenPresetName" maxlength="80" placeholder="例如：低回撤周频候选"></label>
+        <button class="favorite-button" id="saveScreenPreset" type="button" title="收藏当前选股方案" aria-label="收藏当前选股方案"><i data-lucide="star"></i></button>
+        <button class="icon-button" id="deleteScreenPreset" type="button" title="删除所选方案" aria-label="删除所选方案" disabled><i data-lucide="trash-2"></i></button>
       </div>
       <form id="screenerForm">
         <div class="screener-fields">
@@ -85,6 +91,6 @@
   </main>
   <div id="toast" role="status"></div>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="/static/screener.js"></script>
+  <script src="/static/screener.js?v=20260718-favorites-v1"></script>
 </body>
 </html>

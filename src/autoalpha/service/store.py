@@ -64,6 +64,15 @@ class ServiceStore:
                     metadata_json TEXT NOT NULL,
                     fingerprint TEXT NOT NULL UNIQUE
                 );
+                CREATE TABLE IF NOT EXISTS entity_favorites (
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    label TEXT NOT NULL DEFAULT '',
+                    context_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(entity_type, entity_id)
+                );
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp_utc TEXT NOT NULL,
@@ -346,6 +355,8 @@ class ServiceStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_factor_pool_status
                 ON factor_pool(status, source_iteration);
+                CREATE INDEX IF NOT EXISTS idx_entity_favorites_updated
+                ON entity_favorites(entity_type, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_research_tasks_status
                 ON research_tasks(status, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_portfolio_versions_accepted
@@ -556,6 +567,82 @@ class ServiceStore:
                 value=excluded.value, updated_at=excluded.updated_at""",
                 [(key, value, now) for key, value in values.items()],
             )
+
+    def set_favorite(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        favorite: bool,
+        label: str = "",
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        clean_type = entity_type.strip().lower()
+        clean_id = entity_id.strip()
+        clean_label = label.strip()
+        if not clean_type or len(clean_type) > 40:
+            raise ValueError("entity_type must contain 1 to 40 characters")
+        if not clean_id or len(clean_id) > 200:
+            raise ValueError("entity_id must contain 1 to 200 characters")
+        if len(clean_label) > 160:
+            raise ValueError("label must contain at most 160 characters")
+        context_json = _canonical(context or {})
+        if len(context_json.encode("utf-8")) > 32_768:
+            raise ValueError("favorite context must contain at most 32 KiB")
+        if not favorite:
+            with self.connection() as connection:
+                connection.execute(
+                    "DELETE FROM entity_favorites WHERE entity_type=? AND entity_id=?",
+                    (clean_type, clean_id),
+                )
+            return None
+        now = _now()
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO entity_favorites
+                (entity_type, entity_id, label, context_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                    label=excluded.label,
+                    context_json=excluded.context_json,
+                    updated_at=excluded.updated_at""",
+                (clean_type, clean_id, clean_label, context_json, now, now),
+            )
+        return self.favorite(clean_type, clean_id)
+
+    def favorite(self, entity_type: str, entity_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM entity_favorites WHERE entity_type=? AND entity_id=?",
+                (entity_type.strip().lower(), entity_id.strip()),
+            ).fetchone()
+        return self._favorite_record(row) if row else None
+
+    def favorites(
+        self, *, entity_type: str | None = None, limit: int = 1000
+    ) -> list[dict[str, Any]]:
+        parameters: list[Any] = []
+        where = ""
+        if entity_type:
+            where = "WHERE entity_type=?"
+            parameters.append(entity_type.strip().lower())
+        parameters.append(min(max(limit, 1), 5000))
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM entity_favorites {where} "  # noqa: S608
+                "ORDER BY updated_at DESC LIMIT ?",
+                parameters,
+            ).fetchall()
+        return [self._favorite_record(row) for row in rows]
+
+    def favorite_ids(self, entity_type: str) -> set[str]:
+        return {item["entity_id"] for item in self.favorites(entity_type=entity_type, limit=5000)}
+
+    @staticmethod
+    def _favorite_record(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["context"] = json.loads(item.pop("context_json"))
+        return item
 
     def save_settings_revision(
         self,
