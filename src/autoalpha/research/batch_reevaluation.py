@@ -18,11 +18,15 @@ def apply_batch_multiple_testing(
     if not metrics_by_factor:
         raise ValueError("At least one successful factor evaluation is required")
     factor_ids = list(metrics_by_factor)
-    p_values = [
-        float(metrics_by_factor[factor_id]["net_return_hac_p_value"]) for factor_id in factor_ids
-    ]
+    long_only = all(
+        "long_only_net_return_hac_p_value" in metrics_by_factor[factor_id]
+        for factor_id in factor_ids
+    )
+    p_value_key = "long_only_net_return_hac_p_value" if long_only else "net_return_hac_p_value"
+    fold_key = "long_only_walk_forward_folds" if long_only else "walk_forward_folds"
+    p_values = [float(metrics_by_factor[factor_id][p_value_key]) for factor_id in factor_ids]
     rejected = benjamini_hochberg(p_values, alpha=alpha)
-    pbo = _family_pbo([metrics_by_factor[factor_id] for factor_id in factor_ids])
+    pbo = _family_pbo([metrics_by_factor[factor_id] for factor_id in factor_ids], fold_key=fold_key)
     adjusted: dict[str, dict[str, Any]] = {}
     for index, factor_id in enumerate(factor_ids):
         metrics = copy.deepcopy(metrics_by_factor[factor_id])
@@ -33,14 +37,17 @@ def apply_batch_multiple_testing(
                 "multiple_testing_fdr_alpha": alpha,
                 "multiple_testing_fdr_passed": bool(rejected[index]),
                 "probability_backtest_overfitting": pbo,
+                "multiple_testing_primary_basis": (
+                    "A_SHARE_LONG_ONLY" if long_only else "LEGACY_ENGINE_OUTPUT"
+                ),
             }
         )
         adjusted[factor_id] = metrics
     return adjusted, pbo
 
 
-def _family_pbo(metrics: list[dict[str, Any]]) -> float:
-    profiles = [_fold_profile(item.get("walk_forward_folds", [])) for item in metrics]
+def _family_pbo(metrics: list[dict[str, Any]], *, fold_key: str) -> float:
+    profiles = [_fold_profile(item.get(fold_key, [])) for item in metrics]
     profiles = [profile for profile in profiles if profile]
     if len(profiles) < 2:
         return 0.0

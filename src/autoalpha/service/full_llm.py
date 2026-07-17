@@ -85,6 +85,9 @@ but you must not approve a factor, change a deterministic gate, choose portfolio
 hidden-test details, or request exact performance metrics. Treat all supplied evidence as public
 research evidence. Do not invent unavailable data. Keep arrays concise and use stable uppercase
 category identifiers where the contract requests them.
+The data contract distinguishes RESEARCH_ELIGIBLE fields from staged and catalog-only inventory.
+Only fields explicitly allowed in expressions may be treated as candidate inputs; staged products
+may be discussed as future data work but never assumed present in the evaluated candidate.
 """
 
 _SPECS = {
@@ -391,11 +394,7 @@ def evaluate_falsification_plan(
             continue
         relevant = mapping.get(test_type)
         status = (
-            "NOT_EVALUATED"
-            if relevant is None
-            else "FAILED"
-            if failures & relevant
-            else "PASSED"
+            "NOT_EVALUATED" if relevant is None else "FAILED" if failures & relevant else "PASSED"
         )
         results.append(
             {
@@ -450,6 +449,11 @@ def _data_contract_context(data_context: dict[str, Any]) -> dict[str, Any]:
         "first_trade_date",
         "last_trade_date",
         "available_factor_fields",
+        "field_catalog",
+        "data_products",
+        "data_policy",
+        "signal_timing",
+        "extended_data_experiment",
         "price_research_ready",
         "source_integrity_passed",
         "institutional_pit_ready",
@@ -491,9 +495,7 @@ def _normalize_artifact(
                 if str(tag).strip()
             }
         )
-        allowed_ids = {
-            str(item.get("factor_id")) for item in context.get("library_context", [])
-        }
+        allowed_ids = {str(item.get("factor_id")) for item in context.get("library_context", [])}
         related_factors = []
         for relation in clean.get("related_factors", [])[:12]:
             if not isinstance(relation, dict):

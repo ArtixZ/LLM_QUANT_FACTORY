@@ -8,7 +8,8 @@ const libraryState = {
   task: "all",
   status: "all",
   lifecycle: "all",
-  ranking: "overall",
+  ranking: "long_only_overall",
+  rankingAscending: false,
   detailFactor: null,
 };
 
@@ -28,6 +29,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 function bindLibraryControls() {
+  document.getElementById("canonicalLeaderboard").onclick = () => selectLeaderboard("long_only_overall");
+  document.getElementById("recentLeaderboard").onclick = () => selectLeaderboard("recent_long_only_overall");
   document.getElementById("factorSearch").addEventListener("input", event => {
     libraryState.query = event.target.value.trim().toLowerCase();
     renderFactorTable();
@@ -50,8 +53,14 @@ function bindLibraryControls() {
   });
   document.getElementById("rankingMetric").addEventListener("change", event => {
     libraryState.ranking = event.target.value;
+    libraryState.rankingAscending = !rankingDefinition().higher_is_better;
+    renderLeaderboardSwitch();
     renderFactorTable();
   });
+  document.getElementById("rankingDirection").onclick = () => {
+    libraryState.rankingAscending = !libraryState.rankingAscending;
+    renderFactorTable();
+  };
   document.getElementById("libraryRefresh").onclick = () => loadLibrary({ announce: true });
   document.getElementById("clearSelection").onclick = () => {
     libraryState.selected.clear();
@@ -61,6 +70,14 @@ function bindLibraryControls() {
   document.getElementById("openBacktest").onclick = () => {
     const factors = [...libraryState.selected].join(",");
     window.location.href = `/backtest?factors=${encodeURIComponent(factors)}`;
+  };
+  document.getElementById("openAutoCombine").onclick = () => {
+    const factors = [...libraryState.selected];
+    if (!factors.length) return;
+    const url = new URL("http://127.0.0.1:8888/");
+    url.searchParams.set("factors", factors.join(","));
+    url.searchParams.set("scope", "MANUAL");
+    window.open(url.toString(), "_blank", "noopener");
   };
   document.getElementById("selectVisible").addEventListener("change", event => {
     filteredFactors().forEach(factor => {
@@ -115,6 +132,22 @@ function hydrateFilters() {
     taskSelect.append(option(task.task_id, `${task.name} · ${marketLabel(task.market)}`));
   });
   taskSelect.value = [...taskSelect.options].some(item => item.value === currentTask) ? currentTask : "all";
+  const rankingSelect = document.getElementById("rankingMetric");
+  const currentRanking = libraryState.ranking;
+  rankingSelect.replaceChildren();
+  const rankingGroups = new Map();
+  (libraryState.data.ranking_options || []).forEach(definition => {
+    if (!rankingGroups.has(definition.group)) {
+      const group = document.createElement("optgroup");
+      group.label = definition.group;
+      rankingGroups.set(definition.group, group);
+      rankingSelect.append(group);
+    }
+    rankingGroups.get(definition.group).append(option(definition.id, definition.label));
+  });
+  const hasRanking = [...rankingSelect.options].some(item => item.value === currentRanking);
+  libraryState.ranking = hasRanking ? currentRanking : "long_only_overall";
+  rankingSelect.value = libraryState.ranking;
 }
 
 function renderSummary() {
@@ -130,7 +163,7 @@ function renderSummary() {
   text("dataEnd", libraryState.data.data.last_trade_date);
   text(
     "librarySummary",
-    `${summary.factor_count} 个持久化候选 · ${summary.stale_protocol_count} 个等待当前协议重评 · ${formatClock(libraryState.refreshedAt)} 已同步`,
+    `${summary.factor_count} 个持久化候选 · 主榜 ${summary.long_only_evaluated_count || 0} · 近期榜 ${summary.recent_long_only_evaluated_count || 0} · ${summary.stale_protocol_count} 个待统一重评 · ${formatClock(libraryState.refreshedAt)} 已同步`,
   );
 }
 
@@ -162,11 +195,67 @@ function filteredFactors() {
         .join(" ").toLowerCase();
       return haystack.includes(libraryState.query);
     })
-    .sort((left, right) => right.scores[libraryState.ranking] - left.scores[libraryState.ranking]);
+    .sort(compareFactors);
+}
+
+function rankingDefinition() {
+  return (libraryState.data?.ranking_options || []).find(item => item.id === libraryState.ranking)
+    || { id: "long_only_overall", label: "纯多综合分", format: "score", higher_is_better: true };
+}
+
+function rankingValue(factor) {
+  const value = factor.ranking_values?.[libraryState.ranking];
+  const parsed = Number(value);
+  return value !== null && value !== undefined && Number.isFinite(parsed) ? parsed : null;
+}
+
+function selectLeaderboard(ranking) {
+  libraryState.ranking = ranking;
+  libraryState.rankingAscending = false;
+  const select = document.getElementById("rankingMetric");
+  if ([...select.options].some(item => item.value === ranking)) select.value = ranking;
+  renderLeaderboardSwitch();
+  renderFactorTable();
+}
+
+function renderLeaderboardSwitch() {
+  const recent = boardMetricPrefix() === "recent_";
+  document.getElementById("canonicalLeaderboard")?.classList.toggle("active", !recent);
+  document.getElementById("recentLeaderboard")?.classList.toggle("active", recent);
+}
+
+function boardMetricPrefix() {
+  return libraryState.ranking.startsWith("recent_long_only") ? "recent_" : "";
+}
+
+function compareFactors(left, right) {
+  const leftValue = rankingValue(left), rightValue = rankingValue(right);
+  if (leftValue === null && rightValue !== null) return 1;
+  if (leftValue !== null && rightValue === null) return -1;
+  if (leftValue !== null && rightValue !== null && leftValue !== rightValue) {
+    return libraryState.rankingAscending ? leftValue - rightValue : rightValue - leftValue;
+  }
+  const overallDifference = Number(right.ranking_values?.long_only_overall ?? -Infinity) - Number(left.ranking_values?.long_only_overall ?? -Infinity);
+  if (Number.isFinite(overallDifference) && overallDifference !== 0) return overallDifference;
+  const iterationDifference = Number(left.source_iteration) - Number(right.source_iteration);
+  return iterationDifference || String(left.factor_id).localeCompare(String(right.factor_id));
 }
 
 function renderFactorTable() {
   const factors = filteredFactors();
+  const definition = rankingDefinition();
+  renderLeaderboardSwitch();
+  const recent = boardMetricPrefix() === "recent_";
+  text("boardSharpeHeader", recent ? "近期纯多夏普" : "主榜纯多夏普");
+  text("boardAnnualHeader", recent ? "近期纯多年化" : "主榜纯多年化");
+  text("boardDrawdownHeader", recent ? "近期纯多回撤" : "主榜纯多回撤");
+  text("boardWorstHeader", recent ? "近期纯多最差折" : "主榜纯多最差折");
+  text("rankingValueHeader", definition.label);
+  const direction = document.getElementById("rankingDirection");
+  direction.title = libraryState.rankingAscending ? `${definition.label}：升序，点击切换为降序` : `${definition.label}：降序，点击切换为升序`;
+  direction.setAttribute("aria-label", direction.title);
+  direction.innerHTML = `<i data-lucide="${libraryState.rankingAscending ? "arrow-up-wide-narrow" : "arrow-down-wide-narrow"}"></i>`;
+  if (window.lucide) window.lucide.createIcons({ nodes: [direction] });
   const body = document.getElementById("factorTableBody");
   body.replaceChildren(...factors.map((factor, index) => factorRow(factor, index + 1)));
   document.getElementById("factorEmpty").hidden = factors.length > 0;
@@ -219,12 +308,20 @@ function factorRow(factor, rank) {
   const lifecycle = statusPill(factor.lifecycle_state);
   if (factor.holdout_contaminated) lifecycle.title = "已人工查看当前隐藏期；更换研究世代不能清除污染";
   row.append(cell(lifecycle));
-  row.append(cell(element("strong", "score-value", historicalMetrics ? "--" : number(factor.scores[libraryState.ranking]))));
+  const selectedRankingCell = metricCell(formatRankingValue(rankingValue(factor), rankingDefinition().format), rankingUsesHistoricalEvidence(factor));
+  selectedRankingCell.classList.add("score-value");
+  if (rankingValue(factor) === null) selectedRankingCell.title = factor.protocol_stale ? "当前协议尚未重评该指标" : "该因子尚未生成此指标";
+  row.append(selectedRankingCell);
   const marginalCell = metricCell(number(factor.marginal_contribution?.incremental_net_ir), historicalMetrics);
   if (!factor.marginal_contribution && !historicalMetrics) {
     marginalCell.title = "未通过单因子门禁或未进入组合增删评估，因此没有边际 IR";
   }
   row.append(marginalCell);
+  const prefix = boardMetricPrefix();
+  row.append(metricCell(number(metrics[`${prefix}long_only_sharpe_ratio`]), historicalMetrics));
+  row.append(metricCell(percent(metrics[`${prefix}long_only_simple_annual_return`]), historicalMetrics));
+  row.append(metricCell(percent(metrics[`${prefix}long_only_max_drawdown`]), historicalMetrics));
+  row.append(metricCell(number(metrics[`${prefix}long_only_walk_forward_worst_sharpe`]), historicalMetrics));
   row.append(metricCell(number(metrics.sharpe_ratio), historicalMetrics));
   row.append(metricCell(percent(metrics.simple_annual_return), historicalMetrics));
   row.append(metricCell(percent(metrics.max_drawdown), historicalMetrics));
@@ -259,7 +356,25 @@ async function openFactorDetail(factor) {
   renderDefinitionList("expressionAudit", [["输入字段", [...stats.fields].join(" · ") || "--"], ["算子", [...stats.operators].join(" · ") || "--"], ["表达式节点", `${stats.nodes}`], ["估计最大回看", `${stats.lookback} 个交易期`], ["截面处理", stats.crossSectional ? "是" : "否"]]);
   const historicalMetrics = Boolean(factor.protocol_stale);
   const metrics = historicalMetrics ? (factor.historical_metric_summary || {}) : (factor.metric_summary || {}), marginal = factor.marginal_contribution || {};
-  renderDefinitionList("factorMetrics", [["评价口径", historicalMetrics ? "历史协议，仅供诊断" : "非投资性截面多空 Alpha 诊断"], ["单因子门禁", factor.status === "SCREENED_OUT" ? `未通过：${factor.status_reason || "未记录原因"}` : "通过"], ["综合机构分", historicalMetrics ? "--" : number(factor.scores?.overall)], ["Alpha多空夏普", number(metrics.sharpe_ratio)], ["Alpha多空年化", percent(metrics.simple_annual_return)], ["Alpha多空回撤", percent(metrics.max_drawdown)], ["Rank IC / IR", `${number4(metrics.rank_ic_mean)} / ${number(metrics.rank_ic_ir)}`], ["Pearson IC", number4(metrics.pearson_ic_mean)], ["Alpha年化换手", number(metrics.annual_turnover)], ["覆盖率", percent(metrics.coverage)], ["最差滚动夏普", number(metrics.walk_forward_worst_sharpe)], ["正收益窗口", percent(metrics.walk_forward_positive_fraction)], ["DSR 概率", percent(metrics.deflated_sharpe_probability)], ["A股组合边际净 IR", marginal.incremental_net_ir == null ? "未进入策略晋级" : number(marginal.incremental_net_ir)]]);
+  renderDefinitionList("factorMetrics", [
+    ["主评价口径", historicalMetrics ? "历史协议，仅供诊断" : "统一主榜 2015–2024 · A股纯多周频代理"],
+    ["单因子纯多门禁", factor.status === "SCREENED_OUT" ? `未通过：${factor.status_reason || "未记录原因"}` : "通过"],
+    ["统一主榜综合分", factor.long_only_score_available ? number(factor.scores?.long_only_overall) : "待统一重评"],
+    ["主榜夏普 / 年化", `${number(metrics.long_only_sharpe_ratio)} / ${percent(metrics.long_only_simple_annual_return)}`],
+    ["主榜回撤 / 最差折", `${percent(metrics.long_only_max_drawdown)} / ${number(metrics.long_only_walk_forward_worst_sharpe)}`],
+    ["近期榜综合分", factor.recent_long_only_score_available ? number(factor.scores?.recent_long_only_overall) : "待统一重评"],
+    ["近期夏普 / 年化", `${number(metrics.recent_long_only_sharpe_ratio)} / ${percent(metrics.recent_long_only_simple_annual_return)}`],
+    ["近期回撤 / 最差折", `${percent(metrics.recent_long_only_max_drawdown)} / ${number(metrics.recent_long_only_walk_forward_worst_sharpe)}`],
+    ["主榜正收益窗口", percent(metrics.long_only_walk_forward_positive_fraction)],
+    ["主榜 DSR 概率", percent(metrics.long_only_deflated_sharpe_probability)],
+    ["主榜年化换手", number(metrics.long_only_annual_turnover)],
+    ["主榜容量", currency(metrics.long_only_capacity_cny)],
+    ["组合边际净 IR", marginal.incremental_net_ir == null ? "未进入策略晋级" : number(marginal.incremental_net_ir)],
+    ["诊断 · Alpha多空夏普", number(metrics.sharpe_ratio)],
+    ["诊断 · Alpha多空年化", percent(metrics.simple_annual_return)],
+    ["诊断 · Rank IC / IR", `${number4(metrics.rank_ic_mean)} / ${number(metrics.rank_ic_ir)}`],
+    ["诊断 · Pearson IC", number4(metrics.pearson_ic_mean)],
+  ]);
   document.getElementById("factorRawExpression").textContent = JSON.stringify(factor.expression, null, 2);
   const factorQuery = encodeURIComponent(factor.factor_id);
   document.getElementById("openFactorScreener").href = `/screener?factors=${factorQuery}`;
@@ -396,7 +511,7 @@ function metricCell(content, historical = false) {
   const node = cellText(content);
   if (historical) {
     node.classList.add("historical-metric");
-    node.title = "历史协议指标，仅供诊断，不能参与当前排行榜";
+    node.title = "历史协议指标，仅供诊断；可排序，但不参与当前协议复合评分";
   }
   return node;
 }
@@ -412,9 +527,14 @@ function marketLabel(value) { return ({ CN_A: "A 股", HK: "港股", US: "美股
 function element(tagName, className = "", content = "") { const node = document.createElement(tagName); if (className) node.className = className; if (content !== "") node.textContent = content; return node; }
 function text(id, value) { document.getElementById(id).textContent = value; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]); }
-function number(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed.toFixed(2) : "--"; }
-function number4(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed.toFixed(4) : "--"; }
-function percent(value) { const parsed = Number(value); return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(2)}%` : "--"; }
+function numeric(value) { if (value === null || value === undefined || value === "" || typeof value === "boolean") return null; const parsed = Number(value); return Number.isFinite(parsed) ? parsed : null; }
+function number(value) { const parsed = numeric(value); return parsed === null ? "--" : parsed.toFixed(2); }
+function number4(value) { const parsed = numeric(value); return parsed === null ? "--" : parsed.toFixed(4); }
+function percent(value) { const parsed = numeric(value); return parsed === null ? "--" : `${(parsed * 100).toFixed(2)}%`; }
+function integer(value) { const parsed = numeric(value); return parsed === null ? "--" : Math.round(parsed).toLocaleString("zh-CN"); }
+function currency(value) { const parsed = numeric(value); return parsed === null ? "--" : new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", notation: "compact", maximumFractionDigits: 2 }).format(parsed); }
+function formatRankingValue(value, format) { return ({ percent, number4, integer, currency, score: number, number }[format] || number)(value); }
+function rankingUsesHistoricalEvidence(factor) { return Boolean(factor.protocol_stale && !["overall", "robustness", "return", "risk", "execution", "information", "long_only_overall", "long_only_return", "long_only_robustness", "long_only_risk", "long_only_execution", "marginal_incremental_net_ir", "source_iteration"].includes(libraryState.ranking)); }
 function formatClock(value) { return value instanceof Date && !Number.isNaN(value.valueOf()) ? value.toLocaleTimeString("zh-CN", { hour12: false }) : "--:--:--"; }
 
 let toastTimer;

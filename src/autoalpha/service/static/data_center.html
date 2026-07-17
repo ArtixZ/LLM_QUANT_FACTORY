@@ -47,6 +47,10 @@
           <button class="button primary" id="saveDataSettings" type="submit"><i data-lucide="save"></i>保存数据配置</button>
         </form>
         <div class="data-sync-actions">
+          <div class="data-sync-range">
+            <label>扩展数据起始日<input id="featureStartDate" type="date"></label>
+            <label>同步截至日<input id="featureEndDate" type="date"></label>
+          </div>
           <button class="button" id="startDataSync" type="button"><i data-lucide="download"></i>立即增量更新</button>
           <p id="syncActionNote">增量下载不复权截面与复权因子；历史覆盖完整后原子重建研究面板。</p>
           <div class="sync-progress-panel" id="syncProgressPanel" hidden>
@@ -59,6 +63,22 @@
       </aside>
 
       <section class="data-center-main">
+        <section class="panel data-products-panel">
+          <div class="panel-header"><div><h2>Tushare 数据产品</h2><p id="dataProductSummary">按研究用途管理接口、权限、时点风险与面板接入</p></div><span class="state-pill small" id="selectedProductCount">0 ENABLED</span></div>
+          <div class="data-product-toolbar">
+            <label>类别<select id="dataProductCategory"><option value="ALL">全部类别</option></select></label>
+            <label>状态<select id="dataProductState"><option value="ALL">全部状态</option><option value="READY">已落盘</option><option value="NOT_DOWNLOADED">待下载</option><option value="CATALOG">待接入</option><option value="PARTIAL">部分失败</option></select></label>
+            <label class="data-product-search">检索<input id="dataProductSearch" type="search" placeholder="接口、用途或因子族"></label>
+            <button class="button" id="selectRecommendedProducts" type="button"><i data-lucide="badge-check"></i>生产推荐</button>
+          </div>
+          <div class="data-product-table-wrap">
+            <table class="data-product-table">
+              <thead><tr><th>启用</th><th>数据产品</th><th>类别</th><th>研究特征</th><th>粒度 / 更新</th><th>可见时点</th><th>时点治理</th><th>落盘覆盖</th><th>面板</th><th>文档</th></tr></thead>
+              <tbody id="dataProductRows"></tbody>
+            </table>
+          </div>
+        </section>
+
         <section class="panel data-workspace-panel">
           <div class="panel-header"><div><h2>数据工作区</h2><p id="workspacePath">--</p></div><span class="state-pill small" id="qualityState">--</span></div>
           <div class="data-workspace-body">
@@ -84,6 +104,6 @@
   </main>
   <div id="toast" role="status"></div>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="/static/data_center.js?v=20260716-data-center-v2"></script>
+  <script src="/static/data_center.js?v=20260717-data-products-v2"></script>
 </body>
 </html>

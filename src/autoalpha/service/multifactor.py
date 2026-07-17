@@ -10,6 +10,7 @@ from autoalpha.backtest.ashare_vector import ASHARE_PROXY_RETURN_CONVENTION
 from autoalpha.backtest.timing import EOD_NEXT_OPEN_RETURN_CONVENTION
 from autoalpha.config import ResearchConfig
 from autoalpha.dsl.expression import Expression, FactorDefinition
+from autoalpha.service.canonical_evaluation import CANONICAL_LIBRARY_PROTOCOL
 from autoalpha.service.evaluator import PortfolioEvaluation, PriceVolumeEvaluator
 from autoalpha.service.store import ServiceStore
 
@@ -87,7 +88,7 @@ class MultiFactorResearchEngine:
             and record.get("source_task_id", "legacy-ashare") == self.source_task_id
             and record["factor_id"] not in contaminated
             and record.get("metrics", {}).get("evaluation_protocol")
-            == self.config.governance.protocol_version
+            == CANONICAL_LIBRARY_PROTOCOL
         ]
         if not eligible:
             return None
@@ -116,17 +117,36 @@ class MultiFactorResearchEngine:
         proposal: dict[str, Any],
         metrics: dict[str, Any],
     ) -> bool:
-        failures = _candidate_screen_failures(metrics, self.config)
+        admission_failures = _library_admission_failures(metrics, self.config)
+        promotion_failures = _candidate_screen_failures(metrics, self.config)
+        admitted = not admission_failures
+        metrics.update(
+            {
+                "library_admission_gate_passed": admitted,
+                "library_admission_gate_failures": admission_failures,
+                "production_promotion_gate_passed": not promotion_failures,
+                "production_promotion_gate_failures": promotion_failures,
+                "gate_model": (
+                    "LIBRARY_ADMISSION_THEN_PORTFOLIO_CONTRIBUTION_THEN_PRODUCTION"
+                ),
+            }
+        )
         self.store.upsert_factor_pool(
             factor_id=factor.factor_id,
             source_iteration=iteration,
             proposal=proposal,
             metrics=metrics,
-            status="ELIGIBLE" if not failures else "SCREENED_OUT",
-            status_reason=("candidate screen passed" if not failures else ", ".join(failures)),
+            status="ELIGIBLE" if admitted else "SCREENED_OUT",
+            status_reason=(
+                "library admission passed; production promotion pending"
+                if admitted and promotion_failures
+                else "library and production gates passed"
+                if admitted
+                else ", ".join(admission_failures)
+            ),
             source_task_id=self.source_task_id,
         )
-        return not failures
+        return admitted
 
     def decide(self, candidate: FactorDefinition, *, candidate_eligible: bool) -> PortfolioDecision:
         active_components = self.active_components()
@@ -423,11 +443,11 @@ def _portfolio_selection_key(option: PortfolioDecision) -> tuple[float, ...]:
 
 def _single_factor_utility(metrics: dict[str, Any]) -> float:
     return float(
-        metrics.get("sharpe_ratio", -100.0)
-        + 0.75 * metrics.get("simple_annual_return", 0.0)
-        + 0.50 * metrics.get("incremental_max_drawdown", -1.0)
-        - 0.002 * metrics.get("annual_turnover", 1_000.0)
-        - 0.25 * metrics.get("annual_return_dispersion", 1.0)
+        metrics.get("long_only_sharpe_ratio", -100.0)
+        + 0.75 * metrics.get("long_only_simple_annual_return", 0.0)
+        + 0.50 * metrics.get("long_only_max_drawdown", -1.0)
+        - 0.002 * metrics.get("long_only_annual_turnover", 1_000.0)
+        - 0.25 * metrics.get("long_only_annual_return_dispersion", 1.0)
     )
 
 
@@ -439,25 +459,28 @@ def _candidate_screen_failures(metrics: dict[str, Any], config: ResearchConfig) 
             metrics.get("evaluation_protocol") == config.governance.protocol_version
         ),
         "invalid_return_convention": (
-            metrics.get("return_convention") == EOD_NEXT_OPEN_RETURN_CONVENTION
+            metrics.get("long_only_return_convention") == ASHARE_PROXY_RETURN_CONVENTION
         ),
-        "non_positive_sharpe": float(metrics.get("sharpe_ratio", -1)) > 0,
-        "non_positive_annual_return": float(metrics.get("simple_annual_return", -1)) > 0,
-        "insufficient_coverage": float(metrics.get("coverage", 0)) >= 0.80,
-        "cost_stress": float(metrics.get("cost_stress_net_ir", -1)) > 0,
-        "excessive_turnover": float(metrics.get("annual_turnover", float("inf")))
+        "capital_survival": not bool(metrics.get("long_only_bankrupt", False)),
+        "non_positive_sharpe": float(metrics.get("long_only_sharpe_ratio", -1)) > 0,
+        "non_positive_annual_return": float(metrics.get("long_only_simple_annual_return", -1)) > 0,
+        "insufficient_coverage": float(metrics.get("long_only_coverage", 0)) >= 0.80,
+        "cost_stress": float(metrics.get("long_only_cost_stress_net_ir", -1)) > 0,
+        "excessive_turnover": float(metrics.get("long_only_annual_turnover", float("inf")))
         <= 2.0 * policy.maximum_annual_turnover,
-        "unstable_annual_returns": float(metrics.get("annual_return_dispersion", float("inf")))
+        "unstable_annual_returns": float(
+            metrics.get("long_only_annual_return_dispersion", float("inf"))
+        )
         <= 1.5 * policy.maximum_annual_return_dispersion,
-        "insufficient_walk_forward_folds": int(metrics.get("walk_forward_fold_count", 0))
+        "insufficient_walk_forward_folds": int(metrics.get("long_only_walk_forward_fold_count", 0))
         >= config.walk_forward.minimum_folds,
-        "unstable_walk_forward": float(metrics.get("walk_forward_positive_fraction", 0.0))
+        "unstable_walk_forward": float(metrics.get("long_only_walk_forward_positive_fraction", 0.0))
         >= policy.minimum_positive_fold_fraction,
-        "weak_worst_fold": float(metrics.get("walk_forward_worst_sharpe", -100.0))
+        "weak_worst_fold": float(metrics.get("long_only_walk_forward_worst_sharpe", -100.0))
         >= policy.minimum_worst_fold_net_ir,
-        "deflated_sharpe": float(metrics.get("deflated_sharpe_probability", 0.0))
+        "deflated_sharpe": float(metrics.get("long_only_deflated_sharpe_probability", 0.0))
         >= policy.minimum_deflated_sharpe_probability,
-        "net_return_significance": float(metrics.get("net_return_hac_p_value", 1.0))
+        "net_return_significance": float(metrics.get("long_only_net_return_hac_p_value", 1.0))
         <= policy.maximum_net_return_p_value,
         "parameter_instability": float(metrics.get("parameter_stability_positive_fraction", 0.0))
         >= policy.minimum_parameter_positive_fraction,
@@ -466,6 +489,33 @@ def _candidate_screen_failures(metrics: dict[str, Any], config: ResearchConfig) 
         "multiple_testing_fdr": bool(metrics.get("multiple_testing_fdr_passed", False)),
         "backtest_overfitting": float(metrics.get("probability_backtest_overfitting", 1.0))
         <= policy.maximum_probability_backtest_overfitting,
+    }
+    return [name for name, passed in checks.items() if not passed]
+
+
+def _library_admission_failures(metrics: dict[str, Any], config: ResearchConfig) -> list[str]:
+    """Retain bounded weak signals for portfolio tests without relaxing promotion gates."""
+    long_sharpe = float(metrics.get("long_only_sharpe_ratio", -100.0))
+    active_ir = float(metrics.get("long_only_active_information_ratio", long_sharpe))
+    rank_ic = abs(float(metrics.get("rank_ic_mean", 0.0)))
+    checks = {
+        "data_basis_incompatible": bool(metrics.get("data_basis_compatible", True)),
+        "stale_evaluation_protocol": (
+            metrics.get("evaluation_protocol") == CANONICAL_LIBRARY_PROTOCOL
+        ),
+        "invalid_return_convention": (
+            metrics.get("long_only_return_convention") == ASHARE_PROXY_RETURN_CONVENTION
+        ),
+        "capital_survival": not bool(metrics.get("long_only_bankrupt", False)),
+        "insufficient_coverage": float(metrics.get("long_only_coverage", 0.0))
+        >= config.evaluation.minimum_coverage,
+        "no_economic_signal": max(long_sharpe, active_ir, rank_ic * 100.0) > 0.0,
+        "unbounded_turnover": float(metrics.get("long_only_annual_turnover", float("inf")))
+        <= 4.0 * config.evaluation.maximum_annual_turnover,
+        "insufficient_walk_forward_folds": int(
+            metrics.get("long_only_walk_forward_fold_count", 0)
+        )
+        >= config.walk_forward.minimum_folds,
     }
     return [name for name, passed in checks.items() if not passed]
 

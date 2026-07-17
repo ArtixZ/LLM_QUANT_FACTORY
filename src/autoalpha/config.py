@@ -77,13 +77,14 @@ class ExperimentBudget:
 class AdaptiveDirectionConfig:
     enabled: bool = True
     maximum_attempts_per_campaign: int = 3
-    early_stop_consecutive_misses: int = 2
+    early_stop_consecutive_misses: int = 3
     recent_candidate_window: int = 24
     minimum_recent_candidates: int = 6
     cooldown_campaigns: int = 2
     minimum_turnover_reduction_fraction: float = 0.05
     minimum_coverage_improvement: float = 0.01
     minimum_correlation_reduction: float = 0.05
+    maximum_attempts_per_mechanism: int = 3
 
     def __post_init__(self) -> None:
         if self.maximum_attempts_per_campaign <= 0:
@@ -96,6 +97,8 @@ class AdaptiveDirectionConfig:
             raise ValueError("Direction minimum history cannot exceed its recent window")
         if self.cooldown_campaigns < 0:
             raise ValueError("Direction cooldown cannot be negative")
+        if not 1 <= self.maximum_attempts_per_mechanism <= self.maximum_attempts_per_campaign:
+            raise ValueError("Mechanism attempt budget must fit inside the campaign budget")
         fractions = (
             self.minimum_turnover_reduction_fraction,
             self.minimum_coverage_improvement,
@@ -122,7 +125,7 @@ class WalkForwardConfig:
 
 @dataclass(frozen=True)
 class GovernanceConfig:
-    protocol_version: str = "institutional_walkforward_v6_next_open"
+    protocol_version: str = "institutional_walkforward_v8_ashare_long_only_primary"
     maximum_holdout_evaluations_per_generation: int = 10
     minimum_public_gates_before_holdout: int = 1
     holdout_minimum_sharpe: float = 0.0
@@ -299,9 +302,7 @@ class ResearchConfig:
     walk_forward: WalkForwardConfig = field(default_factory=WalkForwardConfig)
     governance: GovernanceConfig = field(default_factory=GovernanceConfig)
     portfolio: PortfolioConstructionConfig = field(default_factory=PortfolioConstructionConfig)
-    strategy_evaluation: StrategyEvaluationConfig = field(
-        default_factory=StrategyEvaluationConfig
-    )
+    strategy_evaluation: StrategyEvaluationConfig = field(default_factory=StrategyEvaluationConfig)
     horizons: tuple[int, ...] = (1, 3, 5, 10, 20)
     minimum_cross_section: int = 30
     random_seed: int = 20260715
@@ -337,9 +338,7 @@ class ResearchConfig:
             walk_forward=WalkForwardConfig(**raw.get("walk_forward", {})),
             governance=GovernanceConfig(**raw.get("governance", {})),
             portfolio=PortfolioConstructionConfig(**raw.get("portfolio", {})),
-            strategy_evaluation=StrategyEvaluationConfig(
-                **raw.get("strategy_evaluation", {})
-            ),
+            strategy_evaluation=StrategyEvaluationConfig(**raw.get("strategy_evaluation", {})),
             horizons=tuple(raw["research"].get("horizons", (1, 3, 5, 10, 20))),
             minimum_cross_section=int(raw["research"].get("minimum_cross_section", 30)),
             random_seed=int(raw["research"].get("random_seed", 20260715)),

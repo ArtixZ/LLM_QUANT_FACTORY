@@ -19,6 +19,7 @@ from autoalpha.service.evaluator import (
     _compound_annual_return,
     _exploratory_gate_failures,
     _normalize_weights,
+    _standalone_long_only_metrics,
 )
 
 
@@ -34,22 +35,43 @@ def test_dashboard_return_metrics_use_explicit_annualization() -> None:
 def test_exploratory_gates_do_not_treat_zero_control_drawdown_as_incremental() -> None:
     config = ResearchConfig.from_toml(Path("config/research.toml"))
     metrics = {
-        "coverage": 0.95,
-        "incremental_net_ir": 0.64,
-        "incremental_annual_return": 0.07,
-        "incremental_max_drawdown": -0.18,
-        "return_drawdown_efficiency_change": 0.30,
-        "cost_stress_net_ir": 0.45,
-        "positive_year_ratio": 1.0,
-        "worst_year_incremental_return": 0.002,
-        "annual_return_dispersion": 0.05,
-        "annual_turnover": 51.0,
-        "capacity_cny": 160_000_000.0,
+        "long_only_coverage": 0.95,
+        "long_only_sharpe_ratio": 0.64,
+        "long_only_simple_annual_return": 0.07,
+        "long_only_cost_stress_net_ir": 0.45,
+        "long_only_positive_year_ratio": 1.0,
+        "long_only_worst_year_return": 0.002,
+        "long_only_annual_return_dispersion": 0.05,
+        "long_only_annual_turnover": 51.0,
+        "long_only_capacity_cny": 160_000_000.0,
     }
 
     failures = _exploratory_gate_failures(metrics, config)
 
     assert failures == ["turnover"]
+
+
+def test_exploratory_gates_ignore_strong_alpha_when_long_only_is_weak() -> None:
+    config = ResearchConfig.from_toml(Path("config/research.toml"))
+    metrics = {
+        "sharpe_ratio": 8.0,
+        "simple_annual_return": 0.80,
+        "long_only_coverage": 0.95,
+        "long_only_sharpe_ratio": -0.20,
+        "long_only_simple_annual_return": -0.02,
+        "long_only_cost_stress_net_ir": -0.10,
+        "long_only_positive_year_ratio": 0.40,
+        "long_only_worst_year_return": -0.10,
+        "long_only_annual_return_dispersion": 0.05,
+        "long_only_annual_turnover": 10.0,
+        "long_only_capacity_cny": 160_000_000.0,
+    }
+
+    failures = _exploratory_gate_failures(metrics, config)
+
+    assert "long_only_net_ir" in failures
+    assert "long_only_annual_return" in failures
+    assert "cost_stress" in failures
 
 
 def test_portfolio_weights_are_normalized_and_must_align() -> None:
@@ -122,11 +144,24 @@ def test_portfolio_evaluation_separates_alpha_diagnostic_from_ashare_strategy() 
 
     metrics = evaluator.evaluate_portfolio([factor]).metrics
 
-    assert metrics["portfolio_strategy_gate_basis"] == (
-        "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
-    )
+    assert metrics["portfolio_strategy_gate_basis"] == ("A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY")
     assert metrics["portfolio_mode"] == "long_only"
     assert metrics["portfolio_rebalance_schedule"] == "WEEKLY_FIRST_SESSION"
     assert metrics["portfolio_maximum_positions"] == 1
     assert metrics["alpha_diagnostic_scope"] == "NON_INVESTABLE_LONG_SHORT"
     assert metrics["portfolio_sharpe_ratio"] != metrics["alpha_diagnostic_sharpe_ratio"]
+    assert metrics["portfolio_benchmark_mode"] == "ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PROXY"
+    assert "portfolio_active_information_ratio" in metrics
+    assert "portfolio_market_beta" in metrics
+
+    long_only_all = evaluator._strategy_portfolio_path([factor], (1.0,))
+    long_only = long_only_all.loc[long_only_all.index >= pd.Timestamp("2020-01-02")].copy()
+    long_only.attrs.update(long_only_all.attrs)
+    standalone = _standalone_long_only_metrics(long_only, config, trials=1)
+
+    assert standalone["long_only_mode"] == "long_only"
+    assert standalone["long_only_sharpe_ratio"] == pytest.approx(metrics["portfolio_sharpe_ratio"])
+    assert standalone["long_only_simple_annual_return"] == pytest.approx(
+        metrics["portfolio_simple_annual_return"]
+    )
+    assert standalone["long_only_walk_forward_fold_count"] == 2

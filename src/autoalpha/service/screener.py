@@ -9,10 +9,11 @@ import numpy as np
 import pandas as pd
 
 from autoalpha.data.execution_basis import inspect_execution_data_basis
+from autoalpha.data.research_fields import field_definitions
 from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.dsl.compiler import FactorCompiler
 from autoalpha.dsl.expression import FactorDefinition
-from autoalpha.dsl.semantics import FieldDefinition, SemanticValidator
+from autoalpha.dsl.semantics import SemanticValidator
 
 
 @dataclass(frozen=True)
@@ -30,13 +31,11 @@ class CrossSectionalScreener:
         self.workspace.require_price_research()
         self.panel_path = Path(self.workspace.panel_path)
         basis = inspect_execution_data_basis(self.panel_path)
-        fields = [
-            FieldDefinition("open", "price"),
-            FieldDefinition("close", "price"),
-            FieldDefinition("adj_close", "price"),
-            FieldDefinition("amount", basis.amount_unit),
-            FieldDefinition("vol", basis.volume_unit),
-        ]
+        fields = field_definitions(
+            self.workspace.factor_fields,
+            amount_unit=basis.amount_unit,
+            volume_unit=basis.volume_unit,
+        )
         self.validator = SemanticValidator(fields, maximum_nodes=30, maximum_lookback=252)
         self.compiler = FactorCompiler(self.validator)
 
@@ -143,15 +142,13 @@ class CrossSectionalScreener:
     ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.Timestamp]:
         requested = pd.Timestamp(requested_date)
         load_start = requested - pd.Timedelta(days=500)
+        factor_fields = list(self.workspace.factor_fields)
         columns = [
             "trade_date",
             "ts_code",
             "name",
             "open",
-            "close",
-            "adj_close",
-            "vol",
-            "amount",
+            *factor_fields,
             "raw_close",
             "is_valid_ohlc",
             "is_tradable_observation",
@@ -174,7 +171,7 @@ class CrossSectionalScreener:
             )
         resolved_date = available_dates.max()
         valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
-        field_names = ["open", "close", "adj_close", "vol", "amount"]
+        field_names = ["open", *factor_fields]
         data.loc[~valid, field_names] = np.nan
         fields = {
             name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()

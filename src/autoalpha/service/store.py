@@ -1187,9 +1187,12 @@ class ServiceStore:
     ) -> dict[str, Any]:
         now = _now()
         with self.connection() as connection:
-            if connection.execute(
-                "SELECT 1 FROM factor_pool WHERE factor_id=?", (factor_id,)
-            ).fetchone() is None:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM factor_pool WHERE factor_id=?", (factor_id,)
+                ).fetchone()
+                is None
+            ):
                 raise KeyError(f"Factor not found: {factor_id}")
             connection.execute(
                 """INSERT INTO factor_knowledge
@@ -1217,9 +1220,12 @@ class ServiceStore:
                 target = str(relation.get("factor_id", ""))
                 if not target or target == factor_id:
                     continue
-                if connection.execute(
-                    "SELECT 1 FROM factor_pool WHERE factor_id=?", (target,)
-                ).fetchone() is None:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM factor_pool WHERE factor_id=?", (target,)
+                    ).fetchone()
+                    is None
+                ):
                     continue
                 confidence = _bounded_confidence(relation.get("confidence", 0.0))
                 connection.execute(
@@ -2572,10 +2578,10 @@ class ServiceStore:
                 continue
             metrics = record["metrics"]
             eligible = (
-                float(metrics.get("sharpe_ratio", float("-inf"))) > 0
-                and float(metrics.get("simple_annual_return", float("-inf"))) > 0
-                and float(metrics.get("coverage", 0)) >= 0.80
-                and float(metrics.get("cost_stress_net_ir", float("-inf"))) > 0
+                float(metrics.get("long_only_sharpe_ratio", float("-inf"))) > 0
+                and float(metrics.get("long_only_simple_annual_return", float("-inf"))) > 0
+                and float(metrics.get("long_only_coverage", 0)) >= 0.80
+                and float(metrics.get("long_only_cost_stress_net_ir", float("-inf"))) > 0
             )
             self.upsert_factor_pool(
                 factor_id=record["candidate_id"],
@@ -2583,7 +2589,7 @@ class ServiceStore:
                 proposal=record["proposal"],
                 metrics=metrics,
                 status="ELIGIBLE" if eligible else "SCREENED_OUT",
-                status_reason="legacy deterministic screen",
+                status_reason="legacy A-share long-only deterministic screen",
             )
             imported += 1
         return imported

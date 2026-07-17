@@ -90,3 +90,34 @@ def test_realistic_costs_reduce_equity_and_are_reported_in_cny() -> None:
 
     assert costed.equity.iloc[-1] < free.equity.iloc[-1]
     assert costed.metrics["total_transaction_cost_cny"] > 0
+
+
+def test_bankruptcy_is_a_terminal_screening_outcome_not_an_engine_error() -> None:
+    signal, adjusted_open, raw_open, can_buy, can_sell = _panels()
+    adjusted_open.loc[adjusted_open.index[10], "A"] = 0.000001
+    result = AshareVectorBacktester(
+        AshareVectorConfig(
+            gross_exposure=1.0,
+            selection_fraction=0.50,
+            maximum_positions=1,
+            commission_bps_each_side=0.0,
+            transfer_fee_bps_each_side=0.0,
+            stamp_duty_bps_sell=0.0,
+            minimum_commission_cny=0.0,
+            slippage_bps_each_side=20_000.0,
+        )
+    ).run(
+        signal,
+        adjusted_open,
+        raw_open,
+        can_buy,
+        can_sell,
+        start="2024-01-02",
+        end="2024-05-31",
+    )
+
+    assert result.metrics["bankrupt"] is True
+    assert result.metrics["bankruptcy_date"]
+    assert result.metrics["total_return"] <= -0.999999
+    terminal = result.path.index.get_loc(pd.Timestamp(result.metrics["bankruptcy_date"]))
+    assert (result.path.iloc[terminal + 1 :]["net"] == 0.0).all()

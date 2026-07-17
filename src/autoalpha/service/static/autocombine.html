@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoCombine · 多因子组合研究</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/autocombine.css">
+</head>
+<body>
+  <header class="app-header combine-header">
+    <div class="identity">
+      <h1>AutoCombine</h1>
+      <p>受约束的多因子组合搜索、稳健性评价与策略交付</p>
+    </div>
+    <div class="header-actions">
+      <nav class="app-nav" aria-label="组合研究导航">
+        <a href="http://127.0.0.1:8788/research-tasks"><i data-lucide="flask-conical"></i>AutoAlpha</a>
+        <a class="active" href="/"><i data-lucide="network"></i>组合任务</a>
+        <a href="/strategies"><i data-lucide="archive"></i>策略库</a>
+      </nav>
+      <span class="live-indicator" id="liveState"><i></i><span>实时</span></span>
+      <button class="button primary" id="newTaskButton"><i data-lucide="plus"></i>新建组合任务</button>
+    </div>
+  </header>
+
+  <main class="combine-shell">
+    <section class="summary-band" aria-label="AutoCombine 状态摘要">
+      <div><span>组合任务</span><strong id="taskCount">0</strong><small id="runningCount">0 个运行中</small></div>
+      <div><span>已评估组合</span><strong id="experimentCount">0</strong><small>每个子集与权重均审计</small></div>
+      <div><span>冻结可见因子</span><strong id="visibleFactorCount">0</strong><small>任务运行中不漂移</small></div>
+      <div><span>策略版本</span><strong id="strategyCount">0</strong><small>QUALIFIED 及以上</small></div>
+      <div><span>LLM Provider</span><strong id="providerState">--</strong><small>无凭证时自动降级确定性搜索</small></div>
+    </section>
+
+    <div class="combine-layout">
+      <aside class="panel task-rail">
+        <div class="rail-head">
+          <div><span>任务总表</span><strong>组合研究实例</strong></div>
+          <button class="icon-button" id="refreshButton" title="刷新"><i data-lucide="refresh-cw"></i></button>
+        </div>
+        <div class="rail-filters">
+          <label class="search-field"><i data-lucide="search"></i><input id="taskSearch" type="search" placeholder="搜索任务或快照"></label>
+          <select id="taskStatusFilter" aria-label="状态筛选">
+            <option value="">全部状态</option>
+            <option value="RUNNING">运行中</option>
+            <option value="READY">待启动</option>
+            <option value="PAUSED">已暂停</option>
+            <option value="COMPLETED">已完成</option>
+            <option value="PAUSED_FAILURE">异常暂停</option>
+          </select>
+        </div>
+        <div class="task-list" id="taskList"></div>
+      </aside>
+
+      <div class="combine-workspace">
+        <section class="panel empty-workspace" id="emptyWorkspace">
+          <i data-lucide="network"></i>
+          <h2>选择或创建一个组合研究任务</h2>
+          <p>每个任务独立冻结因子范围、研究时间协议、组合约束与实验预算。</p>
+          <button class="button primary" id="emptyNewTask"><i data-lucide="plus"></i>创建第一个任务</button>
+        </section>
+
+        <div id="taskWorkspace" hidden>
+          <section class="panel task-command">
+            <div class="task-title-row">
+              <div>
+                <span class="eyebrow">AUTOCOMBINE TASK</span>
+                <h2 id="taskTitle">--</h2>
+                <code id="taskIdentity">--</code>
+              </div>
+              <div class="task-actions">
+                <span class="state-pill" id="taskStatus">READY</span>
+                <button class="button primary" id="startTask"><i data-lucide="play"></i>启动</button>
+                <button class="button danger" id="stopTask"><i data-lucide="square"></i>停止</button>
+              </div>
+            </div>
+            <div class="task-kpis">
+              <div><span>当前阶段</span><strong id="taskPhase">--</strong></div>
+              <div><span>迭代预算</span><strong id="taskIteration">--</strong></div>
+              <div><span>可见因子</span><strong id="taskFactorCount">--</strong></div>
+              <div><span>因子数约束</span><strong id="taskFactorBounds">--</strong></div>
+              <div><span>权重约束</span><strong id="taskWeightBounds">--</strong></div>
+              <div><span>并发状态</span><strong id="taskWorker">--</strong></div>
+            </div>
+            <div class="progress-track"><i id="taskProgress"></i></div>
+            <div class="task-error" id="taskError" hidden></div>
+          </section>
+
+          <section class="panel flow-panel combine-flow">
+            <div class="panel-header"><div><h2>研究流程</h2><p>当前步骤高亮，盲测边界与公开搜索严格分离</p></div><span class="state-pill small" id="snapshotBadge">SNAPSHOT --</span></div>
+            <div class="combine-flow-grid" id="flowGrid">
+              <div class="flow-step" data-phase="PREFLIGHT"><span>01</span><strong>冻结快照</strong><p>因子、公式、数据与协议哈希</p></div>
+              <div class="flow-step" data-phase="SCREENING"><span>02</span><strong>预检聚类</strong><p>污染剔除与机制分散</p></div>
+              <div class="flow-step" data-phase="SEARCHING"><span>03</span><strong>组合搜索</strong><p>LLM 提议与确定性搜索协同</p></div>
+              <div class="flow-step" data-phase="ROBUSTNESS"><span>04</span><strong>稳健性门禁</strong><p>滚动窗口、成本、回撤与相关性</p></div>
+              <div class="flow-step blind" data-phase="BLIND_REVIEW"><span>05</span><strong>隔离盲测</strong><p>仅返回分类结论与证据哈希</p></div>
+              <div class="flow-step" data-phase="DELIVERY"><span>06</span><strong>策略交付</strong><p>生成可执行 StrategySpec 版本</p></div>
+            </div>
+          </section>
+
+          <section class="panel protocol-strip">
+            <div><span>公开探索</span><strong id="explorationRange">--</strong></div>
+            <div><span>公开验证</span><strong id="validationRange">--</strong></div>
+            <div class="hidden-boundary"><span>隐藏测试</span><strong id="holdoutRange">REDACTED</strong></div>
+            <div><span>数据工作区</span><strong id="dataPath">--</strong></div>
+          </section>
+
+          <div class="analysis-grid">
+            <section class="panel champion-panel">
+              <div class="panel-header"><div><h2>当前最佳组合</h2><p id="championSubtitle">尚无有效实验</p></div><button class="button" id="promoteButton" disabled><i data-lucide="package-check"></i>进入策略库</button></div>
+              <div class="champion-metrics">
+                <div><span>纯多夏普</span><strong id="bestSharpe">--</strong></div>
+                <div><span>简单年化</span><strong id="bestAnnual">--</strong></div>
+                <div><span>主动 IR</span><strong id="bestActiveIr">--</strong></div>
+                <div><span>最大回撤</span><strong id="bestDrawdown">--</strong></div>
+                <div><span>最差折夏普</span><strong id="bestWorstFold">--</strong></div>
+                <div><span>年化换手</span><strong id="bestTurnover">--</strong></div>
+              </div>
+              <div class="composition" id="bestComposition"></div>
+              <div class="gate-line" id="bestGates">等待候选</div>
+            </section>
+
+            <section class="panel chart-panel combine-chart-panel">
+              <div class="panel-header chart-header">
+                <div><h2>搜索轨迹</h2><p>公开评价指标随实验次数变化</p></div>
+                <label>指标<select id="chartMetric">
+                  <option value="portfolio_sharpe_ratio">纯多夏普</option>
+                  <option value="portfolio_simple_annual_return">简单年化</option>
+                  <option value="portfolio_active_information_ratio">主动 IR</option>
+                  <option value="portfolio_active_simple_annual_return">主动年化</option>
+                  <option value="portfolio_max_drawdown">最大回撤</option>
+                  <option value="portfolio_walk_forward_worst_sharpe">最差折夏普</option>
+                  <option value="portfolio_walk_forward_positive_fraction">正折比例</option>
+                  <option value="portfolio_annual_turnover">年化换手</option>
+                  <option value="portfolio_max_factor_correlation">最大相关性</option>
+                </select></label>
+              </div>
+              <div class="combine-chart"><canvas id="metricChart"></canvas><div id="chartEmpty">等待实验数据</div></div>
+              <div class="chart-key"><span class="passed">门禁通过</span><span class="rejected">未通过</span><span class="frontier">Pareto 前沿</span></div>
+            </section>
+          </div>
+
+          <section class="panel experiment-panel">
+            <div class="panel-header"><div><h2>组合实验档案</h2><p>子集、最终离散权重、来源、门禁与公开指标完整留痕</p></div><span id="experimentSummary">0 个实验</span></div>
+            <div class="experiment-table-wrap">
+              <table class="experiment-table">
+                <thead><tr><th>轮次</th><th>来源 / 动作</th><th>因子组合与权重</th><th>门禁</th><th>综合分</th><th>夏普</th><th>年化</th><th>主动 IR</th><th>回撤</th><th>最差折</th><th>换手</th><th>耗时</th></tr></thead>
+                <tbody id="experimentRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <div class="bottom-grid">
+            <section class="panel snapshot-panel">
+              <div class="panel-header"><div><h2>冻结因子空间</h2><p>搜索期间不可变更</p></div><span id="snapshotCount">0</span></div>
+              <div class="snapshot-list" id="snapshotList"></div>
+            </section>
+            <section class="panel log-panel combine-logs">
+              <div class="panel-header"><div><h2>任务日志与连续记忆</h2><p>行动、研究、审计和交付统一时间线</p></div></div>
+              <div class="log-tabs"><button class="active" data-log="events">事件</button><button data-log="memories">记忆</button></div>
+              <div class="combine-log-list" id="logList"></div>
+            </section>
+          </div>
+        </div>
+
+        <section class="panel strategy-workspace" id="strategyWorkspace" hidden>
+          <div class="panel-header"><div><h2>策略库</h2><p>由 AutoCombine 交付的可版本化 StrategySpec</p></div><span id="strategyLibraryCount">0 个版本</span></div>
+          <div class="strategy-list" id="strategyList"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <dialog class="task-dialog combine-dialog" id="taskDialog">
+    <form id="taskForm">
+      <div class="dialog-title"><div><span>NEW AUTOCOMBINE TASK</span><h2>创建组合研究任务</h2></div><button class="icon-button" type="button" id="closeDialog" title="关闭"><i data-lucide="x"></i></button></div>
+      <div class="combine-form-grid">
+        <section class="form-section">
+          <h3>任务与数据</h3>
+          <label>任务名称<input id="formName" required maxlength="100" placeholder="例如：A股稳健五因子组合"></label>
+          <label>市场<select id="formMarket"><option value="CN_A">A 股</option></select></label>
+          <label class="wide">数据工作区<input id="formDataPath" required></label>
+          <label class="wide">说明<textarea id="formNotes" maxlength="2000" placeholder="组合目标、约束理由与交付用途"></textarea></label>
+        </section>
+        <section class="form-section">
+          <h3>因子可见范围</h3>
+          <label>范围模式<select id="formScopeMode"><option value="SMART">智能候选池</option><option value="MANUAL">手动选择</option><option value="HYBRID">必选因子 + 智能补足</option></select></label>
+          <label>候选池上限<input id="formPoolLimit" type="number" min="5" max="100" value="30"></label>
+          <label class="wide">来源任务<select id="formSourceTask" multiple size="5"></select></label>
+          <label class="wide">因子状态<select id="formStatuses" multiple size="3"><option value="ELIGIBLE" selected>ELIGIBLE</option><option value="SCREENED_OUT" selected>SCREENED_OUT</option><option value="ACTIVE">ACTIVE</option></select></label>
+          <div class="factor-picker wide" id="factorPicker">
+            <div class="picker-head"><label class="search-field"><i data-lucide="search"></i><input id="factorPickerSearch" placeholder="搜索名称、ID、机制或来源任务"></label><strong id="factorPickerCount">0 已选</strong></div>
+            <div class="factor-picker-list" id="factorPickerList"></div>
+          </div>
+          <label class="wide advanced-factor-import">批量导入因子 ID<textarea id="formFactorIds" placeholder="每行或逗号分隔，导入后会同步到选择器"></textarea></label>
+        </section>
+        <section class="form-section">
+          <h3>时间协议</h3>
+          <label>探索起始<input id="formExplorationStart" type="date" required></label>
+          <label>探索结束<input id="formExplorationEnd" type="date" required></label>
+          <label>验证起始<input id="formValidationStart" type="date" required></label>
+          <label>验证结束<input id="formValidationEnd" type="date" required></label>
+          <label>隐藏起始<input id="formHoldoutStart" type="date" required></label>
+          <label>隐藏结束<input id="formHoldoutEnd" type="date" required></label>
+          <label>最少验证折<input id="formMinimumFolds" type="number" min="1" max="20" value="1"></label>
+        </section>
+        <section class="form-section">
+          <h3>组合约束</h3>
+          <label>最少因子<input id="formMinFactors" type="number" min="1" max="12" value="2"></label>
+          <label>最多因子<input id="formMaxFactors" type="number" min="1" max="12" value="5"></label>
+          <label>最小权重<input id="formMinWeight" type="number" min="0.01" max="0.5" step="0.01" value="0.05"></label>
+          <label>最大权重<input id="formMaxWeight" type="number" min="0.1" max="1" step="0.05" value="0.5"></label>
+          <label>权重步长<input id="formWeightStep" type="number" min="0.01" max="0.25" step="0.01" value="0.05"></label>
+          <label>同机制上限<input id="formFamilyLimit" type="number" min="1" max="5" value="2"></label>
+        </section>
+        <section class="form-section">
+          <h3>优化目标与门禁</h3>
+          <label class="wide">目标预设<select id="formObjectiveProfile"></select></label>
+          <p class="preset-description wide" id="presetDescription"></p>
+          <label>最低覆盖率<input id="formCoverage" type="number" min="0" max="1" step="0.05" value="0.8"></label>
+          <label>最低正折比例<input id="formPositiveFolds" type="number" min="0" max="1" step="0.05" value="0.5"></label>
+          <label>最差折夏普下限<input id="formWorstFold" type="number" min="-10" max="10" step="0.1" value="-0.5"></label>
+          <label>最大回撤<input id="formMaxDrawdown" type="number" min="0.01" max="1" step="0.01" value="0.3"></label>
+          <label>最大年化换手<input id="formMaxTurnover" type="number" min="0.1" max="1000" step="1" value="40"></label>
+          <label>最大因子相关性<input id="formMaxCorrelation" type="number" min="0" max="1" step="0.01" value="0.85"></label>
+          <label>最低简单年化<input id="formMinAnnual" type="number" min="-1" max="10" step="0.01" value="0"></label>
+        </section>
+        <section class="form-section">
+          <h3>实验预算</h3>
+          <label>最大实验数<input id="formExperiments" type="number" min="1" max="5000" value="60"></label>
+          <label>LLM 提议上限<input id="formLlmProposals" type="number" min="0" max="1000" value="20"></label>
+          <label>最长分钟<input id="formRuntime" type="number" min="1" max="10080" value="180"></label>
+          <label>每子集权重评价<input id="formWeightEvaluations" type="number" min="1" max="30" value="6"></label>
+          <label>迭代间隔秒<input id="formInterval" type="number" min="0" max="3600" step="0.5" value="0.5"></label>
+        </section>
+      </div>
+      <div class="form-boundary"><i data-lucide="shield-check"></i><span>任务创建即冻结因子与数据协议。隐藏测试精确指标不会进入 LLM 上下文。</span></div>
+      <div class="dialog-actions"><button class="button" type="button" id="cancelDialog">取消</button><button class="button primary" type="submit"><i data-lucide="snowflake"></i>冻结并创建</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status"></div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/static/autocombine.js?v=20260718-v1"></script>
+</body>
+</html>

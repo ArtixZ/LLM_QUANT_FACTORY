@@ -26,8 +26,11 @@ from autoalpha.backtest.presets import (
 )
 from autoalpha.config import ResearchConfig
 from autoalpha.data.execution_basis import inspect_execution_data_basis
+from autoalpha.data.research_fields import build_research_data_capabilities
+from autoalpha.data.tushare_catalog import DEFAULT_PRODUCT_IDS, resolve_products
 from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.portfolio.products import product_template, product_template_catalog
+from autoalpha.service.canonical_evaluation import CANONICAL_LIBRARY_PROTOCOL
 from autoalpha.service.credentials import SystemCredentialStore
 from autoalpha.service.data_center import build_data_center_snapshot
 from autoalpha.service.data_sync import DataSyncWorker
@@ -54,8 +57,8 @@ from autoalpha.service.store import ServiceStore
 from autoalpha.service.worker import SecretVault
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
-PROJECT_ROOT = Path.cwd()
-RUNTIME_ROOT = Path(os.getenv("AUTOALPHA_RUNTIME", PROJECT_ROOT / "runtime"))
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+RUNTIME_ROOT = Path(os.getenv("AUTOALPHA_RUNTIME", PROJECT_ROOT / "runtime-full-llm"))
 CONFIG_PATH = Path(os.getenv("AUTOALPHA_CONFIG", PROJECT_ROOT / "config/research.toml"))
 TRADE_STATEMENT_FIELDS = (
     "trade_id",
@@ -109,6 +112,7 @@ class DataCenterSettingsRequest(BaseModel):
     tushare_token: str | None = None
     data_auto_update_enabled: bool = True
     data_update_hour: int = Field(default=18, ge=0, le=23)
+    data_product_ids: list[str] = Field(default_factory=lambda: list(DEFAULT_PRODUCT_IDS))
 
     @field_validator("data_path", "market_data_root")
     @classmethod
@@ -116,6 +120,36 @@ class DataCenterSettingsRequest(BaseModel):
         if not value.strip():
             raise ValueError("value cannot be empty")
         return value.strip()
+
+    @field_validator("data_product_ids")
+    @classmethod
+    def valid_products(cls, value: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        resolve_products(cleaned)
+        if "core_market" not in cleaned:
+            raise ValueError("core_market must remain enabled for the canonical research panel")
+        return cleaned
+
+
+class DataSyncRequest(BaseModel):
+    dataset_ids: list[str] | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+
+    @field_validator("dataset_ids")
+    @classmethod
+    def valid_datasets(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        resolve_products(cleaned)
+        return cleaned
+
+    @model_validator(mode="after")
+    def valid_range(self) -> DataSyncRequest:
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValueError("start_date must not be after end_date")
+        return self
 
 
 class ManualLogRequest(BaseModel):
@@ -554,6 +588,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 "market_data_root": str(Path.home() / "MarketData" / "Ashare"),
                 "data_auto_update_enabled": "true",
                 "data_update_hour": "18",
+                "data_product_ids": json.dumps(DEFAULT_PRODUCT_IDS),
             }
         )
     else:
@@ -570,6 +605,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             missing_defaults["data_auto_update_enabled"] = "true"
         if "data_update_hour" not in settings:
             missing_defaults["data_update_hour"] = "18"
+        if "data_product_ids" not in settings:
+            missing_defaults["data_product_ids"] = json.dumps(DEFAULT_PRODUCT_IDS)
         if missing_defaults:
             store.save_settings(missing_defaults)
     _ensure_legacy_research_task()
@@ -739,6 +776,7 @@ def _research_workspace_snapshot(task_id: str) -> dict[str, Any]:
         try:
             workspace = inspect_data_workspace(Path(task["data_path"]))
             data_workspace = workspace.to_dict()
+            data_workspace["research_data_contract"] = build_research_data_capabilities(workspace)
             data_workspace["execution_basis"] = inspect_execution_data_basis(
                 Path(workspace.panel_path)
             ).to_dict()
@@ -805,34 +843,18 @@ def _research_workspace_snapshot(task_id: str) -> dict[str, Any]:
             },
             "portfolio": {
                 "holding_period_days": research_config.portfolio.holding_period_days,
-                "target_gross_exposure": (
-                    research_config.strategy_evaluation.gross_exposure
-                ),
-                "initial_cash_cny": (
-                    research_config.strategy_evaluation.initial_cash_cny
-                ),
-                "maximum_positions": (
-                    research_config.strategy_evaluation.maximum_positions
-                ),
-                "rebalance_schedule": (
-                    research_config.strategy_evaluation.rebalance_schedule
-                ),
-                "execution_protocol": (
-                    research_config.strategy_evaluation.engine_protocol
-                ),
-                "execution_data_mode": (
-                    research_config.strategy_evaluation.execution_data_mode
-                ),
+                "target_gross_exposure": (research_config.strategy_evaluation.gross_exposure),
+                "initial_cash_cny": (research_config.strategy_evaluation.initial_cash_cny),
+                "maximum_positions": (research_config.strategy_evaluation.maximum_positions),
+                "rebalance_schedule": (research_config.strategy_evaluation.rebalance_schedule),
+                "execution_protocol": (research_config.strategy_evaluation.engine_protocol),
+                "execution_data_mode": (research_config.strategy_evaluation.execution_data_mode),
             },
             "evaluation_layers": {
-                "alpha_diagnostic": {
-                    "portfolio_mode": "market_neutral_long_short",
-                    "purpose": "factor_information_screen_only",
-                    "investable": False,
-                },
                 "strategy_promotion": {
                     "portfolio_mode": "long_only",
-                    "purpose": "portfolio_add_replace_governance",
+                    "purpose": "primary_single_factor_and_portfolio_governance",
+                    "primary": True,
                     "investable": False,
                     "protocol": research_config.strategy_evaluation.engine_protocol,
                     "limitations": list(
@@ -840,6 +862,12 @@ def _research_workspace_snapshot(task_id: str) -> dict[str, Any]:
                         if data_workspace
                         else []
                     ),
+                },
+                "alpha_diagnostic": {
+                    "portfolio_mode": "market_neutral_long_short",
+                    "purpose": "secondary_information_diagnostic_only",
+                    "primary": False,
+                    "investable": False,
                 },
             },
         },
@@ -1178,11 +1206,10 @@ async def research_task_activity(task_id: str) -> dict[str, Any]:
 async def factor_library(response: Response) -> dict[str, Any]:
     response.headers["Cache-Control"] = "no-store, max-age=0"
     task_lookup = {task["task_id"]: _research_task_view(task) for task in store.research_tasks()}
-    task_protocols: dict[str, str] = {}
     generation_ids: dict[str, str] = {}
     for task_id in task_lookup:
         _, task_config, generation_id, _ = _task_research_context(str(task_id))
-        task_protocols[str(task_id)] = task_config.governance.protocol_version
+        del task_config
         generation_ids[str(task_id)] = generation_id
     contamination = store.contaminated_factor_ids()
     library = build_factor_library(
@@ -1190,7 +1217,7 @@ async def factor_library(response: Response) -> dict[str, Any]:
         lifecycle_states=store.factor_lifecycle_states(),
         contaminated_factor_ids=contamination,
         research_diagnostics=store.factor_research_diagnostics(),
-        current_protocols=task_protocols,
+        current_protocol=CANONICAL_LIBRARY_PROTOCOL,
     )
     for factor in library["factors"]:
         source = task_lookup.get(factor["source_task_id"])
@@ -1819,6 +1846,7 @@ async def update_data_center_settings(payload: DataCenterSettingsRequest) -> dic
             "market_data_root": str(market_data_root),
             "data_auto_update_enabled": str(payload.data_auto_update_enabled).lower(),
             "data_update_hour": str(payload.data_update_hour),
+            "data_product_ids": json.dumps(payload.data_product_ids),
         }
     )
     store.append_event(
@@ -1833,6 +1861,7 @@ async def update_data_center_settings(payload: DataCenterSettingsRequest) -> dic
             "credential_backend": "system_keyring",
             "data_auto_update_enabled": payload.data_auto_update_enabled,
             "data_update_hour": payload.data_update_hour,
+            "data_product_ids": payload.data_product_ids,
             "data_fingerprint": workspace.fingerprint,
         },
     )
@@ -1840,9 +1869,14 @@ async def update_data_center_settings(payload: DataCenterSettingsRequest) -> dic
 
 
 @app.post("/api/data-sync/start", dependencies=[Depends(_authorized)])
-async def start_data_sync() -> dict[str, Any]:
+async def start_data_sync(payload: DataSyncRequest) -> dict[str, Any]:
     try:
-        return await data_sync_worker.start(trigger="manual")
+        return await data_sync_worker.start(
+            trigger="manual",
+            dataset_ids=payload.dataset_ids,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+        )
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 

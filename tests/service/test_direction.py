@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from autoalpha.config import ResearchConfig
-from autoalpha.service.direction import assess_direction_outcome, diagnose_direction
+from autoalpha.service.direction import (
+    assess_direction_outcome,
+    classify_mechanism,
+    diagnose_direction,
+)
 from autoalpha.service.store import ServiceStore
 
 
@@ -42,6 +46,80 @@ def test_campaign_cooldown_forces_a_different_direction() -> None:
 
     assert plan.definition.direction != "RESTORE_STABILITY"
     assert "RESTORE_STABILITY" in plan.evidence["blocked_by_cooldown"]
+
+
+def test_unexplored_eligible_extended_data_receives_a_bounded_direction() -> None:
+    config = _config()
+    recent = [{} for _ in range(config.adaptive_direction.minimum_recent_candidates)]
+
+    plan = diagnose_direction(
+        {},
+        recent,
+        blocked_directions=set(),
+        config=config,
+        data_experiment={
+            "eligible_extended_fields": ["turnover_rate", "net_mf_amount"],
+            "under_tested_fields": ["turnover_rate", "net_mf_amount"],
+            "recent_extended_experiments": 0,
+        },
+    )
+
+    assert plan.definition.direction == "EXPLORE_EXTENDED_DATA"
+    assert plan.evidence["eligible_extended_fields"] == ["net_mf_amount", "turnover_rate"]
+    assert plan.evidence["target_mechanism"] == "VALUATION"
+
+
+def test_mechanism_classifier_uses_economic_data_domain_before_factor_label() -> None:
+    assert (
+        classify_mechanism(fields={"net_mf_amount", "amount"}, family="Momentum")
+        == "ORDER_FLOW"
+    )
+    assert classify_mechanism(fields={"pb"}, family="Liquidity") == "VALUATION"
+
+
+def test_exploration_campaign_counts_library_admission_without_portfolio_promotion() -> None:
+    outcome = assess_direction_outcome(
+        "EXPLORE_NEW_MECHANISM",
+        {},
+        {"portfolio_proposed_absolute_failures": ["deflated_sharpe"]},
+        accepted=False,
+        candidate_eligible=True,
+        config=_config(),
+    )
+
+    assert outcome["direction_improved"] is True
+    assert outcome["objective_resolved"] is False
+
+
+def test_staged_only_extended_data_cannot_be_selected() -> None:
+    config = _config()
+
+    plan = diagnose_direction(
+        {},
+        [],
+        blocked_directions=set(),
+        config=config,
+        data_experiment={"eligible_extended_fields": [], "under_tested_fields": []},
+    )
+
+    assert plan.definition.direction != "EXPLORE_EXTENDED_DATA"
+
+
+def test_extended_direction_requires_actual_extended_field_usage() -> None:
+    config = _config()
+    outcome = assess_direction_outcome(
+        "EXPLORE_EXTENDED_DATA",
+        {},
+        {"portfolio_proposed_absolute_failures": []},
+        accepted=True,
+        candidate_eligible=True,
+        config=config,
+        candidate_fields={"adj_close"},
+        required_data_fields={"turnover_rate"},
+    )
+
+    assert outcome["direction_improved"] is False
+    assert outcome["required_data_field_used"] is False
 
 
 def test_direction_progress_requires_an_accepted_public_action() -> None:

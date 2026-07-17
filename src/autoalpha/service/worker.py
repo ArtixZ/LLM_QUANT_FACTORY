@@ -8,19 +8,31 @@ import uuid
 from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
 
 from autoalpha.config import ResearchConfig
+from autoalpha.data.research_fields import (
+    build_research_data_capabilities,
+    expression_fields,
+    products_for_fields,
+)
 from autoalpha.dsl.expression import FactorDefinition, field, operation
 from autoalpha.operations.artifacts import ArtifactRegistry
 from autoalpha.research.multiple_testing import probability_of_backtest_overfitting
 from autoalpha.research.statistics import benjamini_hochberg
 from autoalpha.service.blind_evaluator import BlindEvaluationBoundary
+from autoalpha.service.canonical_evaluation import (
+    CANONICAL_LIBRARY_PROTOCOL,
+    canonical_library_config,
+    evaluate_canonical_library_factor,
+)
 from autoalpha.service.direction import (
     assess_direction_outcome,
+    classify_mechanism,
     diagnose_direction,
     direction_definition,
 )
@@ -41,7 +53,7 @@ from autoalpha.service.multifactor import (
     factor_from_pool_record,
 )
 from autoalpha.service.openai_client import CompatibleChatClient, ModelInvocationError
-from autoalpha.service.research_protocol import task_research_config
+from autoalpha.service.research_protocol import research_evidence_tier, task_research_config
 from autoalpha.service.store import ServiceStore
 
 
@@ -99,6 +111,7 @@ class ContinuousResearchWorker:
         self.iteration_semaphore = iteration_semaphore
         self._task: asyncio.Task[None] | None = None
         self._evaluator: PriceVolumeEvaluator | None = None
+        self._canonical_evaluator: PriceVolumeEvaluator | None = None
 
     @property
     def alive(self) -> bool:
@@ -243,6 +256,12 @@ class ContinuousResearchWorker:
                         alpha=config.evaluation.maximum_net_return_p_value,
                     )
                 )
+                library_metrics = await asyncio.to_thread(
+                    self._canonical_library_metrics,
+                    Path(settings["data_path"]),
+                    factor,
+                    result.metrics,
+                )
                 engine = MultiFactorResearchEngine(
                     self.store,
                     evaluator,
@@ -255,7 +274,7 @@ class ContinuousResearchWorker:
                     factor,
                     iteration,
                     proposal,
-                    result.metrics,
+                    library_metrics,
                 )
                 decision = (
                     "CODEX_BASELINE_SINGLE_FACTOR_ELIGIBLE"
@@ -500,6 +519,7 @@ class ContinuousResearchWorker:
                     "maximum_holdout_attempts": generation["maximum_holdout_attempts"],
                 },
             )
+        data_capabilities = evaluator.data_capabilities
         self._update_state(phase="DIRECTION")
         research_program = await asyncio.to_thread(
             self._research_program_context,
@@ -507,6 +527,7 @@ class ContinuousResearchWorker:
             evaluator,
             run_id=run_id,
             generation_id=generation_id,
+            data_capabilities=data_capabilities,
         )
         direction_context = self._prepare_direction_campaign(
             run_id,
@@ -525,11 +546,12 @@ class ContinuousResearchWorker:
             "symbols": workspace.symbols,
             "first_trade_date": visible_start,
             "last_trade_date": visible_end,
-            "available_factor_fields": [
-                field
-                for field in ("close", "adj_close", "amount", "vol")
-                if field in workspace.columns
-            ],
+            "available_factor_fields": list(evaluator.factor_fields),
+            "field_catalog": data_capabilities["field_catalog"],
+            "data_products": data_capabilities["data_products"],
+            "data_policy": data_capabilities["policy"],
+            "signal_timing": data_capabilities["signal_timing"],
+            "extended_data_experiment": research_program["data_experiment"],
             "price_research_ready": workspace.price_research_ready,
             "source_integrity_passed": workspace.source_integrity_passed,
             "institutional_pit_ready": workspace.institutional_pit_ready,
@@ -550,6 +572,10 @@ class ContinuousResearchWorker:
                 "quality_passed": workspace.quality_passed,
                 "source_integrity_passed": workspace.source_integrity_passed,
                 "fingerprint": workspace.fingerprint,
+                "eligible_factor_fields": data_capabilities["eligible_fields"],
+                "eligible_extended_fields": data_capabilities["eligible_extended_fields"],
+                "staged_extended_fields": data_capabilities["staged_extended_fields"],
+                "data_contract_version": data_capabilities["contract_version"],
             },
         )
         memories = _select_research_memories(
@@ -605,6 +631,21 @@ class ContinuousResearchWorker:
             factor = proposal.factor
             try:
                 evaluator.validator.validate(factor.expression)
+                candidate_fields = expression_fields(factor.expression)
+                _validate_data_direction_alignment(
+                    candidate_fields,
+                    direction_context=direction_context,
+                )
+                candidate_mechanism = classify_mechanism(
+                    fields=candidate_fields,
+                    family=factor.family,
+                    name=factor.name,
+                    hypothesis=factor.hypothesis,
+                )
+                _validate_mechanism_direction_alignment(
+                    candidate_mechanism,
+                    direction_context=direction_context,
+                )
                 if self.store.candidate_exists(factor.factor_id):
                     raise ValueError(f"Duplicate candidate expression: {factor.factor_id}")
                 duplicate_structure = _matching_structure(
@@ -671,7 +712,33 @@ class ContinuousResearchWorker:
             **proposal.raw,
             "expected_direction": factor.expected_direction,
             "expression": factor.expression.to_dict(),
+            "data_lineage": {
+                "factor_fields": sorted(candidate_fields),
+                "source_products": products_for_fields(candidate_fields),
+                "signal_timing": data_capabilities["signal_timing"],
+                "data_contract_version": data_capabilities["contract_version"],
+            },
+            "canonical_mechanism": candidate_mechanism,
         }
+        extended_fields_used = sorted(
+            candidate_fields & set(data_capabilities["eligible_extended_fields"])
+        )
+        if extended_fields_used:
+            self.store.append_event(
+                "research",
+                "EXTENDED_DATA_EXPERIMENT_STARTED",
+                "扩展数据候选进入实验",
+                f"候选使用已解锁字段：{', '.join(extended_fields_used)}。",
+                run_id=run_id,
+                iteration=iteration,
+                payload={
+                    "candidate_id": factor.factor_id,
+                    "factor_fields": sorted(candidate_fields),
+                    "extended_fields": extended_fields_used,
+                    "source_products": products_for_fields(candidate_fields),
+                    "next_session_timing_enforced": True,
+                },
+            )
         pre_role_outcomes: dict[str, RoleOutcome] = {}
         if llm_team is not None:
             self._update_state(phase="LLM_PRE_REVIEW")
@@ -716,6 +783,7 @@ class ContinuousResearchWorker:
                 "change": proposal.change,
                 "expected": proposal.expected,
                 "expression": factor.expression.to_dict(),
+                "data_lineage": canonical_proposal["data_lineage"],
                 "usage": proposal.usage,
             },
         )
@@ -724,7 +792,7 @@ class ContinuousResearchWorker:
             "action",
             "EVALUATION_STARTED",
             "执行确定性评估",
-            f"候选 {factor.factor_id} 已进入价量研究评估器。",
+            f"候选 {factor.factor_id} 已进入截面研究评估器。",
             run_id=run_id,
             iteration=iteration,
         )
@@ -739,6 +807,12 @@ class ContinuousResearchWorker:
                 generation=generation_id,
                 alpha=config.evaluation.maximum_net_return_p_value,
             )
+        )
+        library_metrics = await asyncio.to_thread(
+            self._canonical_library_metrics,
+            Path(settings["data_path"]),
+            factor,
+            result.metrics,
         )
         self._update_state(phase="PORTFOLIO")
         engine = MultiFactorResearchEngine(
@@ -765,7 +839,7 @@ class ContinuousResearchWorker:
                 },
             )
         candidate_eligible = engine.register_candidate(
-            factor, iteration, canonical_proposal, result.metrics
+            factor, iteration, canonical_proposal, library_metrics
         )
         self.store.append_event(
             "research",
@@ -777,7 +851,8 @@ class ContinuousResearchWorker:
             payload={
                 "candidate_id": factor.factor_id,
                 "eligible": candidate_eligible,
-                "single_factor_metrics": result.metrics,
+                "single_factor_metrics": library_metrics,
+                "source_task_metrics": result.metrics,
             },
         )
         portfolio_role_outcome: RoleOutcome | None = None
@@ -823,6 +898,7 @@ class ContinuousResearchWorker:
             portfolio_decision=portfolio_decision,
             direction_context=direction_context,
             config=config,
+            candidate_fields=candidate_fields,
         )
         governance_metrics: dict[str, Any] = {
             "research_generation": generation_id,
@@ -833,6 +909,7 @@ class ContinuousResearchWorker:
             "holdout_verdict": "NOT_EVALUATED_PUBLIC_GATES_FAILED",
             "capital_verdict": "NOT_EVALUATED_HOLDOUT_REQUIRED",
             "adaptive_direction": direction_metrics,
+            "research_evidence_tier": evaluator.research_evidence_tier,
         }
         feasibility_recovery = _is_public_feasibility_recovery(portfolio_decision)
         governance_metrics["public_protocol_gate_passed"] = bool(
@@ -846,7 +923,25 @@ class ContinuousResearchWorker:
         )
         proposed_factor_ids = [item.factor_id for item in portfolio_decision.factors]
         contamination = self.store.portfolio_contamination(generation_id, proposed_factor_ids)
-        if feasibility_recovery:
+        if portfolio_decision.accepted and evaluator.research_evidence_tier != "PRIMARY_DISCOVERY":
+            experiment_status = "RETAINED"
+            experiment_verdict = "REGIME_SLICE_RESEARCH_ONLY"
+            governance_metrics["holdout_verdict"] = "NOT_EVALUATED_REGIME_SLICE_ONLY"
+            governance_metrics["capital_verdict"] = "NOT_EVALUATED_PRIMARY_DISCOVERY_REQUIRED"
+            self.store.append_event(
+                "audit",
+                "REGIME_SLICE_PROMOTION_BLOCKED",
+                "短窗口任务仅保留状态切片证据",
+                "候选可以入库并参与边际研究，但不能访问盲测或成为生产晋级依据。",
+                run_id=run_id,
+                iteration=iteration,
+                payload={
+                    "task_id": self.task_id,
+                    "research_evidence_tier": evaluator.research_evidence_tier,
+                    "holdout_accessed": False,
+                },
+            )
+        elif feasibility_recovery:
             experiment_status = "RETAINED"
             experiment_verdict = "PUBLIC_FEASIBILITY_RECOVERY"
             governance_metrics["holdout_verdict"] = "NOT_EVALUATED_FEASIBILITY_RECOVERY_INCOMPLETE"
@@ -1090,22 +1185,16 @@ class ContinuousResearchWorker:
                     self.store.upsert_factor_knowledge(
                         factor_id=factor.factor_id,
                         canonical_mechanism=str(
-                            librarian.artifact.get(
-                                "canonical_mechanism", "OTHER_INTERPRETABLE"
-                            )
+                            librarian.artifact.get("canonical_mechanism", "OTHER_INTERPRETABLE")
                         ),
-                        mechanism_summary=str(
-                            librarian.artifact.get("mechanism_summary", "")
-                        ),
+                        mechanism_summary=str(librarian.artifact.get("mechanism_summary", "")),
                         tags=list(librarian.artifact.get("tags", [])),
                         review=reviewer.artifact if reviewer else {},
                         falsification={
                             "plan": falsification_plan,
                             "results": falsification_results,
                         },
-                        related_factors=list(
-                            librarian.artifact.get("related_factors", [])
-                        ),
+                        related_factors=list(librarian.artifact.get("related_factors", [])),
                     )
                 except (KeyError, TypeError, ValueError) as error:
                     self.store.append_event(
@@ -1323,6 +1412,47 @@ class ContinuousResearchWorker:
             self._evaluator = PriceVolumeEvaluator(data_path, config=config)
         return self._evaluator
 
+    def _canonical_library_metrics(
+        self,
+        data_path: Path,
+        factor: FactorDefinition,
+        source_task_metrics: dict[str, Any],
+    ) -> dict[str, Any]:
+        evaluator = self._get_canonical_evaluator(data_path)
+        records = self.store.factor_pool(limit=5000)
+        metrics = evaluate_canonical_library_factor(
+            evaluator,
+            factor,
+            trials=len(records) + 1,
+            source_task_metrics=source_task_metrics,
+        )
+        metrics["research_generation"] = f"canonical-ingest--{self.task_id}"
+        metrics.update(
+            _multiple_testing_adjustments(
+                metrics,
+                [record.get("metrics", {}) for record in records],
+                generation=str(metrics["research_generation"]),
+                alpha=evaluator.config.evaluation.maximum_net_return_p_value,
+            )
+        )
+        return metrics
+
+    def _get_canonical_evaluator(self, data_path: Path) -> PriceVolumeEvaluator:
+        base = ResearchConfig.from_toml(self.config_path)
+        task_evaluator = self._get_evaluator(data_path)
+        config = canonical_library_config(
+            base,
+            data_start=date.fromisoformat(task_evaluator.workspace.first_trade_date),
+        )
+        if (
+            self._canonical_evaluator is None
+            or self._canonical_evaluator.data_path != data_path
+            or self._canonical_evaluator.config.governance.protocol_version
+            != CANONICAL_LIBRARY_PROTOCOL
+        ):
+            self._canonical_evaluator = PriceVolumeEvaluator(data_path, config=config)
+        return self._canonical_evaluator
+
     def _prepare_direction_campaign(
         self,
         run_id: str,
@@ -1357,6 +1487,7 @@ class ContinuousResearchWorker:
                 recent,
                 blocked_directions=blocked,
                 config=config,
+                data_experiment=research_program.get("data_experiment"),
             )
             plan_payload = plan.to_dict()
             campaign = self.store.start_direction_campaign(
@@ -1395,6 +1526,13 @@ class ContinuousResearchWorker:
         campaign = self.store.direction_campaign(int(campaign["id"]))
         assert campaign is not None
         definition = direction_definition(str(campaign["direction"]))
+        data_experiment = research_program.get("data_experiment", {})
+        required_factor_fields = (
+            list(data_experiment.get("eligible_extended_fields", []))
+            if campaign["direction"] == "EXPLORE_EXTENDED_DATA"
+            else []
+        )
+        target_mechanism = str(campaign.get("evidence", {}).get("target_mechanism", ""))
         context = {
             "enabled": True,
             "campaign_id": campaign["id"],
@@ -1414,6 +1552,9 @@ class ContinuousResearchWorker:
             "feedback_source": "PUBLIC_RESEARCH_ONLY",
             "holdout_feedback_used": False,
             "attempt_id": attempt["id"],
+            "required_factor_fields": required_factor_fields,
+            "target_mechanism": target_mechanism,
+            "mechanism_attempt_budget": adaptive.maximum_attempts_per_mechanism,
         }
         self.store.append_event(
             "action",
@@ -1476,6 +1617,7 @@ class ContinuousResearchWorker:
         portfolio_decision: PortfolioDecision,
         direction_context: dict[str, Any],
         config: ResearchConfig,
+        candidate_fields: set[str],
     ) -> dict[str, Any]:
         if not direction_context.get("enabled", False):
             return {
@@ -1493,6 +1635,8 @@ class ContinuousResearchWorker:
             accepted=portfolio_decision.accepted,
             candidate_eligible=candidate_eligible,
             config=config,
+            candidate_fields=candidate_fields,
+            required_data_fields=set(direction_context.get("required_factor_fields", [])),
         )
         campaign = self.store.complete_direction_attempt(
             iteration=iteration,
@@ -1558,6 +1702,7 @@ class ContinuousResearchWorker:
         *,
         run_id: str | None = None,
         generation_id: str | None = None,
+        data_capabilities: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         active = self.store.active_portfolio(run_id=run_id)
         stored_protocol = active["metrics"].get("portfolio_evaluation_protocol") if active else None
@@ -1653,17 +1798,80 @@ class ContinuousResearchWorker:
         ][:500]
         family_counts = Counter(str(item["family"]) for item in pool)
         status_counts = Counter(str(item["status"]) for item in pool)
+        capabilities = data_capabilities or build_research_data_capabilities(evaluator.workspace)
+        eligible_extended = set(capabilities.get("eligible_extended_fields", []))
+        recent_pool = pool[:40]
+        field_usage: Counter[str] = Counter()
+        mechanism_counts: Counter[str] = Counter()
+        recent_extended_experiments = 0
+        for item in recent_pool:
+            proposal = item.get("proposal", {})
+            used = expression_fields(proposal.get("expression"))
+            field_usage.update(used & eligible_extended)
+            mechanism_counts.update(
+                [
+                    str(
+                        proposal.get("canonical_mechanism")
+                        or classify_mechanism(
+                            fields=used,
+                            family=str(item.get("family", "")),
+                            name=str(item.get("name", "")),
+                            hypothesis=str(proposal.get("hypothesis", "")),
+                        )
+                    )
+                ]
+            )
+            if used & eligible_extended:
+                recent_extended_experiments += 1
+        active_extended_fields = sorted(
+            {
+                field_name
+                for member in active_members
+                for field_name in expression_fields(member.get("expression"))
+                if field_name in eligible_extended
+            }
+        )
+        data_experiment = {
+            "enabled": bool(eligible_extended),
+            "eligible_extended_fields": sorted(eligible_extended),
+            "under_tested_fields": sorted(
+                field_name for field_name in eligible_extended if field_usage[field_name] == 0
+            ),
+            "recent_extended_experiments": recent_extended_experiments,
+            "recent_field_usage": dict(sorted(field_usage.items())),
+            "mechanism_counts": dict(sorted(mechanism_counts.items())),
+            "active_portfolio_extended_fields": active_extended_fields,
+            "maximum_direction_attempts": (
+                evaluator.config.adaptive_direction.maximum_attempts_per_campaign
+            ),
+            "instruction": (
+                "When the frozen direction is EXPLORE_EXTENDED_DATA, use one coherent mechanism "
+                "with at least one eligible extended field and compare its marginal portfolio "
+                "value."
+            ),
+        }
         policy = evaluator.config.evaluation
+        evidence_tier = getattr(
+            evaluator, "research_evidence_tier", research_evidence_tier(evaluator.config)
+        )
         resolved_generation = generation_id or evaluator.config.generation
         generation_state = self.store.generation_state(resolved_generation) or {}
         return {
             "objective": (
-                "Beat the active portfolio through incremental value or diversification gates; "
-                "do not merely maximize standalone IC or Sharpe."
+                "Improve the A-share long-only active portfolio through incremental value or "
+                "diversification gates; long-short Alpha and IC are secondary diagnostics and "
+                "cannot rescue a weak long-only candidate."
             ),
+            "primary_evaluation_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+            "research_evidence_tier": evidence_tier,
+            "production_promotion_allowed": (
+                evidence_tier == "PRIMARY_DISCOVERY"
+            ),
+            "secondary_diagnostics": ["LONG_SHORT_ALPHA", "IC", "RANK_IC"],
             "iteration": iteration,
             "plateau_iterations": max(0, iteration - last_accepted_iteration),
             "research_mandate": "assigned by the frozen adaptive direction campaign",
+            "data_experiment": data_experiment,
             "active_portfolio": {
                 "version_id": active["id"] if active and not protocol_stale else None,
                 "source_iteration": (
@@ -1792,15 +2000,19 @@ def _memory_summary(
             proposal.get("expression") if proposal else None
         ),
         "single_factor": {
-            "sharpe": metrics.get("sharpe_ratio"),
-            "annual_return": metrics.get("simple_annual_return"),
-            "max_drawdown": metrics.get("max_drawdown"),
+            "evaluation_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+            "sharpe": metrics.get("long_only_sharpe_ratio"),
+            "annual_return": metrics.get("long_only_simple_annual_return"),
+            "compound_annual_return": metrics.get("long_only_compound_annual_return"),
+            "max_drawdown": metrics.get("long_only_max_drawdown"),
             "rank_ic": metrics.get("rank_ic_mean"),
-            "turnover": metrics.get("annual_turnover"),
-            "coverage": metrics.get("coverage"),
-            "walk_forward_positive_fraction": metrics.get("walk_forward_positive_fraction"),
-            "walk_forward_worst_sharpe": metrics.get("walk_forward_worst_sharpe"),
-            "deflated_sharpe_probability": metrics.get("deflated_sharpe_probability"),
+            "turnover": metrics.get("long_only_annual_turnover"),
+            "coverage": metrics.get("long_only_coverage"),
+            "walk_forward_positive_fraction": metrics.get(
+                "long_only_walk_forward_positive_fraction"
+            ),
+            "walk_forward_worst_sharpe": metrics.get("long_only_walk_forward_worst_sharpe"),
+            "deflated_sharpe_probability": metrics.get("long_only_deflated_sharpe_probability"),
             "probability_backtest_overfitting": metrics.get("probability_backtest_overfitting"),
             "parameter_stability_positive_fraction": metrics.get(
                 "parameter_stability_positive_fraction"
@@ -1810,6 +2022,11 @@ def _memory_summary(
                 for failure in metrics.get("exploratory_gate_failures", [])
                 if failure not in {"incremental_drawdown", "return_drawdown_efficiency"}
             ],
+            "alpha_diagnostic": {
+                "sharpe": metrics.get("sharpe_ratio"),
+                "annual_return": metrics.get("simple_annual_return"),
+                "rank_ic": metrics.get("rank_ic_mean"),
+            },
         },
         "portfolio": {
             "action": metrics.get("portfolio_action"),
@@ -1961,16 +2178,24 @@ def _multiple_testing_adjustments(
     # Renaming a generation must not reset multiple-testing penalties.
     del generation
     prior = list(history)
+    p_value_key = (
+        "long_only_net_return_hac_p_value"
+        if "long_only_net_return_hac_p_value" in metrics
+        else "net_return_hac_p_value"
+    )
+    fold_key = (
+        "long_only_walk_forward_folds"
+        if "long_only_walk_forward_folds" in metrics
+        else "walk_forward_folds"
+    )
     p_values = [
-        float(item["net_return_hac_p_value"])
-        for item in prior
-        if isinstance(item.get("net_return_hac_p_value"), int | float)
+        float(item[p_value_key]) for item in prior if isinstance(item.get(p_value_key), int | float)
     ]
-    p_values.append(float(metrics["net_return_hac_p_value"]))
+    p_values.append(float(metrics[p_value_key]))
     rejected = benjamini_hochberg(p_values, alpha=alpha)
 
-    profiles = [_fold_profile(item.get("walk_forward_folds", [])) for item in prior]
-    profiles.append(_fold_profile(metrics.get("walk_forward_folds", [])))
+    profiles = [_fold_profile(item.get(fold_key, [])) for item in prior]
+    profiles.append(_fold_profile(metrics.get(fold_key, [])))
     profiles = [profile for profile in profiles if profile]
     pbo = 0.0
     if len(profiles) >= 2:
@@ -1988,6 +2213,9 @@ def _multiple_testing_adjustments(
         "multiple_testing_fdr_alpha": alpha,
         "multiple_testing_fdr_passed": bool(rejected[-1]),
         "probability_backtest_overfitting": float(pbo),
+        "multiple_testing_primary_basis": (
+            "A_SHARE_LONG_ONLY" if p_value_key.startswith("long_only_") else "ALPHA_DIAGNOSTIC"
+        ),
     }
 
 
@@ -2039,6 +2267,37 @@ def _expression_signature(expression: dict[str, Any] | None) -> str | None:
         )
     )
     return f"{operator}[{parameter_text}]({children})" if parameter_text or children else operator
+
+
+def _validate_data_direction_alignment(
+    candidate_fields: set[str], *, direction_context: dict[str, Any]
+) -> None:
+    if direction_context.get("direction") != "EXPLORE_EXTENDED_DATA":
+        return
+    required = {str(field) for field in direction_context.get("required_factor_fields", [])}
+    if not required:
+        raise ValueError("Extended-data campaign has no research-eligible extended fields")
+    if not candidate_fields & required:
+        raise ValueError(
+            "EXPLORE_EXTENDED_DATA requires at least one eligible extended field; "
+            f"allowed extended fields: {', '.join(sorted(required))}"
+        )
+
+
+def _validate_mechanism_direction_alignment(
+    candidate_mechanism: str, *, direction_context: dict[str, Any]
+) -> None:
+    if direction_context.get("direction") not in {
+        "EXPLORE_EXTENDED_DATA",
+        "EXPLORE_NEW_MECHANISM",
+    }:
+        return
+    target = str(direction_context.get("target_mechanism", ""))
+    if target and candidate_mechanism != target:
+        raise ValueError(
+            f"Frozen mechanism campaign requires {target}; proposal classified as "
+            f"{candidate_mechanism}. Change the economic mechanism, not only its parameters."
+        )
 
 
 def _matching_structure(

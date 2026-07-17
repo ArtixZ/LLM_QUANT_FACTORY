@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from autoalpha.data.current_panel import inspect_current_panel
+from autoalpha.data.research_fields import research_eligible_fields
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class DataWorkspaceReport:
     first_trade_date: str | None
     last_trade_date: str | None
     columns: tuple[str, ...]
+    factor_fields: tuple[str, ...]
     blockers: tuple[str, ...]
     warnings: tuple[str, ...]
     fingerprint: str
@@ -97,6 +99,16 @@ def inspect_data_workspace(configured_path: Path) -> DataWorkspaceReport:
         "quality": quality,
         "metadata": metadata,
     }
+    declared_feature_fields = metadata.get("research_feature_ready_fields", [])
+    if not isinstance(declared_feature_fields, list):
+        declared_feature_fields = []
+    factor_fields, _ = research_eligible_fields(
+        readiness.columns,
+        metadata,
+        required_start=str(first_date) if first_date else None,
+        required_end=str(last_date) if last_date else None,
+        declared_fields=declared_feature_fields,
+    )
     return DataWorkspaceReport(
         configured_path=str(configured),
         root_path=str(root),
@@ -115,6 +127,7 @@ def inspect_data_workspace(configured_path: Path) -> DataWorkspaceReport:
         first_trade_date=str(first_date) if first_date else None,
         last_trade_date=str(last_date) if last_date else None,
         columns=readiness.columns,
+        factor_fields=tuple(sorted(factor_fields)),
         blockers=tuple(blockers),
         warnings=tuple(warnings),
         fingerprint=_sha256(fingerprint_payload),

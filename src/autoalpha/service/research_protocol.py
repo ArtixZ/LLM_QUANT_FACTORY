@@ -25,6 +25,8 @@ MINIMUM_FOLD_TRADING_DAYS = 60
 RECENT_FIVE_YEAR_BACKWARD = "RECENT_FIVE_YEAR_BACKWARD"
 CUSTOM_PROTOCOL_DESIGN = "CUSTOM"
 PROTOCOL_DESIGNS = {CUSTOM_PROTOCOL_DESIGN, RECENT_FIVE_YEAR_BACKWARD}
+PRIMARY_MINIMUM_EXPLORATION_DAYS = 3 * 365
+PRIMARY_MINIMUM_VALIDATION_DAYS = 2 * 365
 
 
 def default_task_protocol(
@@ -284,6 +286,18 @@ def task_research_config(
         walk_forward=walk_forward,
         governance=governance,
     )
+
+
+def research_evidence_tier(config: ResearchConfig) -> str:
+    exploration_days = (config.splits.train.end - config.splits.train.start).days + 1
+    validation_days = (config.splits.validation.end - config.splits.validation.start).days + 1
+    if (
+        exploration_days >= PRIMARY_MINIMUM_EXPLORATION_DAYS
+        and validation_days >= PRIMARY_MINIMUM_VALIDATION_DAYS
+        and config.walk_forward.minimum_folds >= 2
+    ):
+        return "PRIMARY_DISCOVERY"
+    return "REGIME_SLICE_ONLY"
 
 
 def protocol_fingerprint(protocol: dict[str, Any]) -> str:

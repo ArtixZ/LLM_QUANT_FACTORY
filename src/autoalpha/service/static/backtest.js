@@ -16,7 +16,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (window.lucide) window.lucide.createIcons();
   bindBacktestControls();
   try {
-    await Promise.all([loadTemplates(), loadPresets(), loadFactors(), loadHistory()]);
+    await loadTemplates();
+    await Promise.all([loadPresets(), loadFactors(), loadHistory()]);
   } catch (error) {
     toast(error.message, true);
   }
@@ -135,7 +136,7 @@ async function loadTemplates() {
   backtestState.templates = payload.templates;
   const select = document.getElementById("productTemplate");
   select.replaceChildren(...payload.templates.map(template => option(template.template_id, template.name)));
-  select.value = "MARKET_NEUTRAL_RESEARCH";
+  select.value = "LONG_ONLY_CAPITAL";
   applyTemplateDefaults();
 }
 
@@ -683,7 +684,7 @@ function reuseRequest(record) {
     executionDataMode: request.execution_data_mode || "STRICT_PIT",
     rebalanceSchedule: request.rebalance_schedule || "DAILY_ROLLING",
     vectorCostModel: request.vector_cost_model || "legacy_half_turnover",
-    productTemplate: request.product_template || "MARKET_NEUTRAL_RESEARCH",
+    productTemplate: request.product_template || "LONG_ONLY_CAPITAL",
     selectionFraction: request.selection_fraction ?? 0.10,
     maximumPositions: request.maximum_positions ?? 30,
     lotSize: request.lot_size ?? 100,

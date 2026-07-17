@@ -25,14 +25,20 @@ from autoalpha.data.execution_basis import (
     expression_research_basis_blockers,
     inspect_execution_data_basis,
 )
+from autoalpha.data.research_fields import (
+    build_research_data_capabilities,
+    expression_fields,
+    field_definitions,
+)
 from autoalpha.data.workspace import DataWorkspaceReport, inspect_data_workspace
 from autoalpha.dsl.compiler import FactorCompiler
 from autoalpha.dsl.expression import Expression, FactorDefinition
-from autoalpha.dsl.semantics import FieldDefinition, SemanticValidator
+from autoalpha.dsl.semantics import SemanticValidator
 from autoalpha.research.evaluation import cross_sectional_ic
 from autoalpha.research.incremental import annual_robustness, compare_portfolios
 from autoalpha.research.multiple_testing import deflated_sharpe_ratio
 from autoalpha.research.statistics import hac_mean_inference
+from autoalpha.service.research_protocol import research_evidence_tier
 
 
 @dataclass(frozen=True)
@@ -67,15 +73,20 @@ class PriceVolumeEvaluator:
         if config is None and config_path is None:
             raise ValueError("Either config_path or config is required")
         self.config = config or ResearchConfig.from_toml(config_path)  # type: ignore[arg-type]
+        self.data_capabilities = build_research_data_capabilities(
+            self.workspace,
+            required_start=self.config.splits.train.start,
+            required_end=self.config.splits.validation.end,
+        )
+        self.factor_fields = tuple(self.data_capabilities["eligible_fields"])
+        self.research_evidence_tier = research_evidence_tier(self.config)
         basis = inspect_execution_data_basis(self.panel_path)
         self.execution_basis = basis
-        fields = [
-            FieldDefinition("open", "price"),
-            FieldDefinition("close", "price"),
-            FieldDefinition("adj_close", "price"),
-            FieldDefinition("amount", basis.amount_unit),
-            FieldDefinition("vol", basis.volume_unit),
-        ]
+        fields = field_definitions(
+            self.factor_fields,
+            amount_unit=basis.amount_unit,
+            volume_unit=basis.volume_unit,
+        )
         self.validator = SemanticValidator(fields, maximum_nodes=30, maximum_lookback=252)
         self.compiler = FactorCompiler(self.validator)
         self._fields: dict[str, pd.DataFrame] | None = None
@@ -84,13 +95,14 @@ class PriceVolumeEvaluator:
             tuple[tuple[str, float], ...], tuple[pd.DataFrame, pd.DataFrame]
         ] = OrderedDict()
         self._portfolio_path_cache_lock = Lock()
+        self._field_load_lock = Lock()
         self.trial_count = 1
 
     def set_trial_count(self, value: int) -> None:
         self.trial_count = max(1, int(value))
 
     def evaluate(self, factor: FactorDefinition) -> ExploratoryEvaluation:
-        fields = self._load_fields()
+        fields = self._load_fields(expression_fields(factor.expression))
         self.validator.validate(factor.expression)
         signal = self.compiler.evaluate(factor.expression, fields) * factor.expected_direction
         path = self._signal_path(signal)
@@ -131,12 +143,28 @@ class PriceVolumeEvaluator:
         folds = _walk_forward_metrics(path, self.config)
         inference = hac_mean_inference(net_return.to_numpy(), lags=min(5, len(net_return) - 1))
         dsr = deflated_sharpe_ratio(net_return.to_numpy(), trials=self.trial_count)
+        _, long_only_all = self._portfolio_paths([factor], (1.0,))
         parameter_stability = self._parameter_stability(factor)
         exploration = self._period_summary(
-            self._signal_path(self._factor_signal(factor)),
+            long_only_all,
             self.config.splits.train.start,
             self.config.splits.train.end,
         )
+        long_only_path = long_only_all.reindex(evaluation_dates).dropna().copy()
+        long_only_path.attrs.update(long_only_all.attrs)
+        long_only_metrics = _standalone_long_only_metrics(
+            long_only_path,
+            self.config,
+            trials=self.trial_count,
+        )
+        market_benchmark = self._market_benchmark_returns(long_only_path.index)
+        active_metrics = _active_return_metrics(
+            long_only_path,
+            market_benchmark,
+            self.config,
+            prefix="long_only",
+        )
+        neutral_metrics = self._size_neutral_diagnostics(signal, next_return, evaluation_dates)
         coverage = self._dynamic_coverage(signal)
         data_basis_blockers = expression_research_basis_blockers(
             factor.expression.to_dict(), self.execution_basis
@@ -168,6 +196,10 @@ class PriceVolumeEvaluator:
             "backtest_observations": len(net_return),
             "evaluation_protocol": self.config.governance.protocol_version,
             "research_generation": self.config.generation,
+            "research_evidence_tier": self.research_evidence_tier,
+            "task_production_promotion_allowed": (
+                self.research_evidence_tier == "PRIMARY_DISCOVERY"
+            ),
             "holding_period_days": self.config.portfolio.holding_period_days,
             "signal_availability": "END_OF_DAY_AFTER_CLOSE",
             "execution_lag_sessions": 1,
@@ -191,6 +223,9 @@ class PriceVolumeEvaluator:
             "parameter_stability_dispersion": parameter_stability["dispersion"],
             "parameter_neighborhood": parameter_stability["neighborhood"],
             "exploration_metrics": exploration,
+            **long_only_metrics,
+            **active_metrics,
+            **neutral_metrics,
         }
         gate_failures = _exploratory_gate_failures(metrics, self.config)
         metrics["exploratory_gate_passed"] = not gate_failures
@@ -217,6 +252,9 @@ class PriceVolumeEvaluator:
         """Evaluate alpha diagnostics and the deployable A-share portfolio separately."""
         if not factors:
             raise ValueError("A portfolio requires at least one factor")
+        evidence_tier = getattr(
+            self, "research_evidence_tier", research_evidence_tier(self.config)
+        )
         normalized_weights = _normalize_weights(factors, weights)
         alpha_all, proposed_all = self._portfolio_paths(factors, normalized_weights)
         evaluation_dates = _walk_forward_dates(proposed_all.index, self.config)
@@ -252,6 +290,13 @@ class PriceVolumeEvaluator:
         alpha_folds = _walk_forward_metrics(alpha_proposed, self.config)
         inference = hac_mean_inference(proposed["net"].to_numpy(), lags=min(5, len(proposed) - 1))
         dsr = deflated_sharpe_ratio(proposed["net"].to_numpy(), trials=self.trial_count)
+        market_benchmark = self._market_benchmark_returns(proposed.index)
+        active_metrics = _active_return_metrics(
+            proposed,
+            market_benchmark,
+            self.config,
+            prefix="portfolio",
+        )
         correlations = self._factor_correlations(factors)
         maximum_correlation = max((abs(value) for value in correlations.values()), default=0.0)
         proposed_sharpe = _annualized_ir(proposed["net"])
@@ -306,6 +351,10 @@ class PriceVolumeEvaluator:
                 for factor, weight in zip(factors, normalized_weights, strict=True)
             },
             "portfolio_evaluation_protocol": self.config.governance.protocol_version,
+            "portfolio_research_evidence_tier": evidence_tier,
+            "portfolio_task_production_promotion_allowed": (
+                evidence_tier == "PRIMARY_DISCOVERY"
+            ),
             "portfolio_holding_period_days": self.config.portfolio.holding_period_days,
             "portfolio_signal_availability": "END_OF_DAY_AFTER_CLOSE",
             "portfolio_execution_lag_sessions": 1,
@@ -314,27 +363,15 @@ class PriceVolumeEvaluator:
             "portfolio_strategy_scope": "PUBLIC_VALIDATION_EXECUTION_PROXY",
             "portfolio_mode": "long_only",
             "portfolio_execution_protocol": self.config.strategy_evaluation.engine_protocol,
-            "portfolio_execution_data_mode": (
-                self.config.strategy_evaluation.execution_data_mode
-            ),
-            "portfolio_rebalance_schedule": (
-                self.config.strategy_evaluation.rebalance_schedule
-            ),
-            "portfolio_target_gross_exposure": (
-                self.config.strategy_evaluation.gross_exposure
-            ),
-            "portfolio_maximum_positions": (
-                self.config.strategy_evaluation.maximum_positions
-            ),
-            "portfolio_initial_cash_cny": (
-                self.config.strategy_evaluation.initial_cash_cny
-            ),
+            "portfolio_execution_data_mode": (self.config.strategy_evaluation.execution_data_mode),
+            "portfolio_rebalance_schedule": (self.config.strategy_evaluation.rebalance_schedule),
+            "portfolio_target_gross_exposure": (self.config.strategy_evaluation.gross_exposure),
+            "portfolio_maximum_positions": (self.config.strategy_evaluation.maximum_positions),
+            "portfolio_initial_cash_cny": (self.config.strategy_evaluation.initial_cash_cny),
             "portfolio_average_gross_exposure": float(
                 proposed.attrs.get("average_gross_exposure", 0.0)
             ),
-            "portfolio_average_positions": float(
-                proposed.attrs.get("average_positions", 0.0)
-            ),
+            "portfolio_average_positions": float(proposed.attrs.get("average_positions", 0.0)),
             "portfolio_maximum_observed_positions": int(
                 proposed.attrs.get("maximum_observed_positions", 0)
             ),
@@ -363,25 +400,18 @@ class PriceVolumeEvaluator:
             "portfolio_net_return_hac_p_value": inference.p_value,
             "portfolio_deflated_sharpe_probability": dsr.probability,
             "portfolio_multiple_testing_trials": self.trial_count,
+            **active_metrics,
             "alpha_diagnostic_scope": "NON_INVESTABLE_LONG_SHORT",
             "alpha_diagnostic_sharpe_ratio": _annualized_ir(alpha_proposed["net"]),
-            "alpha_diagnostic_simple_annual_return": float(
-                alpha_proposed["net"].mean() * 245
-            ),
+            "alpha_diagnostic_simple_annual_return": float(alpha_proposed["net"].mean() * 245),
             "alpha_diagnostic_compound_annual_return": _compound_annual_return(
                 alpha_proposed["net"]
             ),
             "alpha_diagnostic_max_drawdown": _max_drawdown(alpha_proposed["net"]),
-            "alpha_diagnostic_cost_stress_net_ir": _annualized_ir(
-                alpha_proposed["stressed"]
-            ),
-            "alpha_diagnostic_annual_turnover": float(
-                alpha_proposed["turnover"].mean() * 245
-            ),
+            "alpha_diagnostic_cost_stress_net_ir": _annualized_ir(alpha_proposed["stressed"]),
+            "alpha_diagnostic_annual_turnover": float(alpha_proposed["turnover"].mean() * 245),
             "alpha_diagnostic_positive_year_ratio": alpha_annual.positive_year_ratio,
-            "alpha_diagnostic_annual_return_dispersion": (
-                alpha_annual.annual_return_dispersion
-            ),
+            "alpha_diagnostic_annual_return_dispersion": (alpha_annual.annual_return_dispersion),
             "alpha_diagnostic_walk_forward_folds": alpha_folds,
             "alpha_diagnostic_walk_forward_worst_sharpe": float(
                 min(fold["sharpe"] for fold in alpha_folds)
@@ -420,7 +450,7 @@ class PriceVolumeEvaluator:
         cached = self._signal_cache.get(factor.factor_id)
         if cached is not None:
             return cached
-        fields = self._load_fields()
+        fields = self._load_fields(expression_fields(factor.expression))
         raw = self.compiler.evaluate(factor.expression, fields) * factor.expected_direction
         start = pd.Timestamp(self.config.splits.train.start)
         end = pd.Timestamp(self.config.splits.validation.end)
@@ -545,9 +575,9 @@ class PriceVolumeEvaluator:
                 "average_positions": result.metrics["average_positions"],
                 "maximum_observed_positions": int(path["position_count"].max()),
                 "rebalance_count": result.metrics["rebalance_count"],
-                "total_transaction_cost_cny": result.metrics[
-                    "total_transaction_cost_cny"
-                ],
+                "total_transaction_cost_cny": result.metrics["total_transaction_cost_cny"],
+                "bankrupt": result.metrics["bankrupt"],
+                "bankruptcy_date": result.metrics["bankruptcy_date"],
             }
         )
         return path
@@ -596,6 +626,47 @@ class PriceVolumeEvaluator:
         covered = signal.notna() & eligible
         return float(covered.to_numpy().sum() / denominator)
 
+    def _market_benchmark_returns(self, index: pd.DatetimeIndex) -> pd.Series:
+        next_return = next_open_return_for_eod_signal(self._load_fields()["open"])
+        benchmark = next_return.mean(axis=1).reindex(index).fillna(0.0)
+        return benchmark * self.config.strategy_evaluation.gross_exposure
+
+    def _size_neutral_diagnostics(
+        self,
+        signal: pd.DataFrame,
+        next_return: pd.DataFrame,
+        evaluation_dates: pd.DatetimeIndex,
+    ) -> dict[str, Any]:
+        size_field = (
+            "circ_mv"
+            if "circ_mv" in self.factor_fields
+            else "total_mv"
+            if "total_mv" in self.factor_fields
+            else None
+        )
+        if size_field is None:
+            return {
+                "size_neutral_diagnostic_available": False,
+                "size_neutral_diagnostic_reason": "point-in-time capitalization field unavailable",
+            }
+        fields = self._load_fields({size_field})
+        exposure = np.log(fields[size_field].where(fields[size_field] > 0))
+        neutral = _cross_sectional_residual(signal, exposure).reindex(evaluation_dates)
+        neutral_ic = cross_sectional_ic(
+            neutral,
+            next_return.reindex(evaluation_dates),
+            minimum_names=self.config.minimum_cross_section,
+        )
+        neutral_path = self._signal_path(neutral).reindex(evaluation_dates).dropna()
+        return {
+            "size_neutral_diagnostic_available": True,
+            "size_neutral_exposure_field": size_field,
+            "size_neutral_rank_ic_mean": float(neutral_ic.mean()) if not neutral_ic.empty else 0.0,
+            "size_neutral_alpha_sharpe_ratio": _annualized_ir(neutral_path["net"]),
+            "industry_neutral_diagnostic_available": False,
+            "industry_neutral_diagnostic_reason": "historical industry classification unavailable",
+        }
+
     def _period_summary(self, path: pd.DataFrame, start: Any, end: Any) -> dict[str, Any]:
         selected = path.loc[(path.index >= pd.Timestamp(start)) & (path.index <= pd.Timestamp(end))]
         return {
@@ -626,11 +697,7 @@ class PriceVolumeEvaluator:
             )
             try:
                 self.validator.validate(expression)
-                raw = (
-                    self.compiler.evaluate(expression, self._load_fields())
-                    * variant.expected_direction
-                )
-                path = self._signal_path(raw)
+                path = self._portfolio_paths([variant], (1.0,))[1]
                 dates = _walk_forward_dates(path.index, self.config)
                 neighborhood[label] = _annualized_ir(path.loc[dates, "net"])
             except (TypeError, ValueError):
@@ -653,9 +720,26 @@ class PriceVolumeEvaluator:
                 correlations[f"{left.factor_id}:{right.factor_id}"] = value
         return correlations
 
-    def _load_fields(self) -> dict[str, pd.DataFrame]:
-        if self._fields is not None:
+    def _load_fields(
+        self, required_fields: set[str] | None = None
+    ) -> dict[str, pd.DataFrame]:
+        required = set(required_fields or set())
+        required.update({"open", "adj_close", "amount"})
+        if self._fields is not None and required.issubset(self._fields):
             return self._fields
+        lock = getattr(self, "_field_load_lock", None)
+        if lock is None:
+            return self._fields or {}
+        with lock:
+            if self._fields is not None and required.issubset(self._fields):
+                return self._fields
+            loaded = self._fields or {}
+            missing_factor_fields = sorted(
+                (required - set(loaded)) & set(self.factor_fields)
+            )
+            initial_load = not loaded
+            if not missing_factor_fields and not initial_load:
+                return loaded
         start = self.config.splits.train.start
         end = self.config.splits.validation.end
         years = range(start.year - 1, end.year + 1)
@@ -667,17 +751,18 @@ class PriceVolumeEvaluator:
         if not paths:
             raise FileNotFoundError(f"No parquet partitions found under {self.data_path}")
         available_columns = set(pq.read_schema(paths[0]).names)
-        base_columns = [
-            "trade_date",
-            "ts_code",
-            "open",
-            "close",
-            "adj_close",
-            "amount",
-            "vol",
-            "is_valid_ohlc",
-            "is_tradable_observation",
-        ]
+        factor_columns = [name for name in missing_factor_fields if name in available_columns]
+        base_columns = list(
+            dict.fromkeys(
+                [
+                    "trade_date",
+                    "ts_code",
+                    *factor_columns,
+                    "is_valid_ohlc",
+                    "is_tradable_observation",
+                ]
+            )
+        )
         optional_columns = [
             name
             for name in (
@@ -686,7 +771,7 @@ class PriceVolumeEvaluator:
                 "can_buy_open_proxy",
                 "can_sell_open_proxy",
             )
-            if name in available_columns
+            if initial_load and name in available_columns
         ]
         columns = [*base_columns, *optional_columns]
         frames = [pd.read_parquet(path, columns=columns) for path in paths]
@@ -695,12 +780,13 @@ class PriceVolumeEvaluator:
         warmup = pd.Timestamp(start) - pd.Timedelta(days=400)
         data = data[(data["trade_date"] >= warmup) & (data["trade_date"] <= pd.Timestamp(end))]
         valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
-        data.loc[~valid, ["open", "close", "adj_close", "amount", "vol"]] = np.nan
+        signal_columns = factor_columns
+        data.loc[~valid, signal_columns] = np.nan
         fields = {
             name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
-            for name in ("open", "close", "adj_close", "amount", "vol")
+            for name in signal_columns
         }
-        if self.execution_basis.capital_ledger_proxy_ready:
+        if initial_load and self.execution_basis.capital_ledger_proxy_ready:
             raw_open_name = "raw_open" if "raw_open" in data else "open"
             raw_open = data[raw_open_name].where(data["is_valid_ohlc"].fillna(False))
             data["_strategy_raw_open"] = raw_open
@@ -723,13 +809,115 @@ class PriceVolumeEvaluator:
                 fields[target] = data.pivot(
                     index="trade_date", columns="ts_code", values=source
                 ).sort_index()
-        self._fields = fields
+        loaded.update(fields)
+        self._fields = loaded
         return self._fields
 
 
+def _standalone_long_only_metrics(
+    path: pd.DataFrame,
+    config: ResearchConfig,
+    *,
+    trials: int,
+) -> dict[str, Any]:
+    if path.empty:
+        raise ValueError("Standalone long-only evaluation produced no observations")
+    annual = annual_robustness(path["net"])
+    folds = _walk_forward_metrics(path, config)
+    inference = hac_mean_inference(path["net"].to_numpy(), lags=min(5, len(path) - 1))
+    dsr = deflated_sharpe_ratio(path["net"].to_numpy(), trials=trials)
+    return {
+        "long_only_sharpe_ratio": _annualized_ir(path["net"]),
+        "long_only_simple_annual_return": float(path["net"].mean() * 245),
+        "long_only_compound_annual_return": _compound_annual_return(path["net"]),
+        "long_only_max_drawdown": _max_drawdown(path["net"]),
+        "long_only_cost_stress_net_ir": _annualized_ir(path["stressed"]),
+        "long_only_annual_turnover": float(path["turnover"].mean() * 245),
+        "long_only_coverage": float(path.attrs["coverage"]),
+        "long_only_capacity_cny": float(path.attrs["capacity_cny"]),
+        "long_only_positive_year_ratio": annual.positive_year_ratio,
+        "long_only_worst_year_return": annual.worst_year_return,
+        "long_only_annual_return_dispersion": annual.annual_return_dispersion,
+        "long_only_walk_forward_folds": folds,
+        "long_only_walk_forward_fold_count": len(folds),
+        "long_only_walk_forward_positive_fraction": float(
+            np.mean([fold["annual_return"] > 0 for fold in folds])
+        ),
+        "long_only_walk_forward_median_sharpe": float(
+            np.median([fold["sharpe"] for fold in folds])
+        ),
+        "long_only_walk_forward_worst_sharpe": float(min(fold["sharpe"] for fold in folds)),
+        "long_only_walk_forward_worst_drawdown": float(min(fold["max_drawdown"] for fold in folds)),
+        "long_only_net_return_hac_p_value": inference.p_value,
+        "long_only_deflated_sharpe_probability": dsr.probability,
+        "long_only_backtest_start": path.index.min().date().isoformat(),
+        "long_only_backtest_end": path.index.max().date().isoformat(),
+        "long_only_backtest_observations": len(path),
+        "long_only_average_gross_exposure": float(path.attrs.get("average_gross_exposure", 0.0)),
+        "long_only_average_positions": float(path.attrs.get("average_positions", 0.0)),
+        "long_only_rebalance_count": int(path.attrs.get("rebalance_count", 0)),
+        "long_only_bankrupt": bool(path.attrs.get("bankrupt", False)),
+        "long_only_bankruptcy_date": str(path.attrs.get("bankruptcy_date", "")),
+        "long_only_mode": "long_only",
+        "long_only_strategy_gate_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+    }
+
+
+def _active_return_metrics(
+    path: pd.DataFrame,
+    benchmark: pd.Series,
+    config: ResearchConfig,
+    *,
+    prefix: str,
+) -> dict[str, Any]:
+    aligned = benchmark.reindex(path.index).fillna(0.0)
+    active = path["net"] - aligned
+    active_frame = pd.DataFrame({"net": active, "turnover": path["turnover"]})
+    folds = _walk_forward_metrics(active_frame, config)
+    tracking_error = float(active.std(ddof=1) * math.sqrt(245))
+    benchmark_variance = float(aligned.var(ddof=1))
+    beta = (
+        float(path["net"].cov(aligned) / benchmark_variance)
+        if benchmark_variance > 1e-15
+        else 0.0
+    )
+    return {
+        f"{prefix}_benchmark_mode": "ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PROXY",
+        f"{prefix}_benchmark_simple_annual_return": float(aligned.mean() * 245),
+        f"{prefix}_active_information_ratio": _annualized_ir(active),
+        f"{prefix}_active_simple_annual_return": float(active.mean() * 245),
+        f"{prefix}_active_tracking_error": tracking_error,
+        f"{prefix}_market_beta": beta,
+        f"{prefix}_active_walk_forward_positive_fraction": float(
+            np.mean([fold["annual_return"] > 0 for fold in folds])
+        ),
+        f"{prefix}_active_walk_forward_worst_sharpe": float(
+            min(fold["sharpe"] for fold in folds)
+        ),
+    }
+
+
+def _cross_sectional_residual(signal: pd.DataFrame, exposure: pd.DataFrame) -> pd.DataFrame:
+    aligned_exposure = exposure.reindex(index=signal.index, columns=signal.columns)
+    valid = signal.notna() & aligned_exposure.notna()
+    y = signal.where(valid)
+    x = aligned_exposure.where(valid)
+    y_centered = y.sub(y.mean(axis=1), axis=0)
+    x_centered = x.sub(x.mean(axis=1), axis=0)
+    denominator = x_centered.pow(2).sum(axis=1).replace(0.0, np.nan)
+    beta = x_centered.mul(y_centered).sum(axis=1).div(denominator)
+    return y_centered.sub(x_centered.mul(beta, axis=0)).where(valid)
+
+
 def _annualized_ir(values: pd.Series) -> float:
+    mean = float(values.mean())
     standard_deviation = float(values.std(ddof=1))
-    return float(values.mean() / standard_deviation * math.sqrt(245))
+    if not math.isfinite(standard_deviation) or standard_deviation <= 1e-15:
+        if not math.isfinite(mean) or abs(mean) <= 1e-15:
+            return 0.0
+        return math.copysign(100.0, mean)
+    return float(mean / standard_deviation * math.sqrt(245))
 
 
 def _normalize_weights(
@@ -830,36 +1018,38 @@ def _scale_expression_parameters(expression: dict[str, Any], multiplier: float) 
 def _exploratory_gate_failures(metrics: dict[str, Any], config: ResearchConfig) -> list[str]:
     policy = config.evaluation
     checks = {
-        "coverage": metrics["coverage"] >= policy.minimum_coverage,
-        "incremental_net_ir": metrics["incremental_net_ir"] >= policy.minimum_incremental_net_ir,
-        "incremental_annual_return": metrics["incremental_annual_return"]
+        "coverage": metrics["long_only_coverage"] >= policy.minimum_coverage,
+        "long_only_net_ir": metrics["long_only_sharpe_ratio"] >= policy.minimum_incremental_net_ir,
+        "long_only_annual_return": metrics["long_only_simple_annual_return"]
         >= policy.minimum_incremental_annual_return,
-        "cost_stress": metrics["cost_stress_net_ir"] >= policy.minimum_cost_stress_net_ir,
-        "positive_year_ratio": metrics["positive_year_ratio"] >= policy.minimum_positive_year_ratio,
-        "worst_year": metrics["worst_year_incremental_return"]
+        "cost_stress": metrics["long_only_cost_stress_net_ir"] >= policy.minimum_cost_stress_net_ir,
+        "positive_year_ratio": metrics["long_only_positive_year_ratio"]
+        >= policy.minimum_positive_year_ratio,
+        "worst_year": metrics["long_only_worst_year_return"]
         >= policy.minimum_worst_year_incremental_return,
-        "annual_dispersion": metrics["annual_return_dispersion"]
+        "annual_dispersion": metrics["long_only_annual_return_dispersion"]
         <= policy.maximum_annual_return_dispersion,
-        "turnover": metrics["annual_turnover"] <= policy.maximum_annual_turnover,
-        "capacity": metrics["capacity_cny"] >= policy.minimum_capacity_cny,
+        "turnover": metrics["long_only_annual_turnover"] <= policy.maximum_annual_turnover,
+        "capacity": metrics["long_only_capacity_cny"] >= policy.minimum_capacity_cny,
         "walk_forward_fold_count": metrics.get(
-            "walk_forward_fold_count", config.walk_forward.minimum_folds
+            "long_only_walk_forward_fold_count", config.walk_forward.minimum_folds
         )
         >= config.walk_forward.minimum_folds,
         "walk_forward_positive_fraction": metrics.get(
-            "walk_forward_positive_fraction", policy.minimum_positive_fold_fraction
+            "long_only_walk_forward_positive_fraction", policy.minimum_positive_fold_fraction
         )
         >= policy.minimum_positive_fold_fraction,
         "walk_forward_worst_sharpe": metrics.get(
-            "walk_forward_worst_sharpe", policy.minimum_worst_fold_net_ir
+            "long_only_walk_forward_worst_sharpe", policy.minimum_worst_fold_net_ir
         )
         >= policy.minimum_worst_fold_net_ir,
         "deflated_sharpe": metrics.get(
-            "deflated_sharpe_probability", policy.minimum_deflated_sharpe_probability
+            "long_only_deflated_sharpe_probability",
+            policy.minimum_deflated_sharpe_probability,
         )
         >= policy.minimum_deflated_sharpe_probability,
         "net_return_significance": metrics.get(
-            "net_return_hac_p_value", policy.maximum_net_return_p_value
+            "long_only_net_return_hac_p_value", policy.maximum_net_return_p_value
         )
         <= policy.maximum_net_return_p_value,
         "parameter_positive_fraction": metrics.get(

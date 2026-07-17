@@ -5,13 +5,15 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from autoalpha.data.tushare_catalog import DEFAULT_PRODUCT_IDS, resolve_products
 from autoalpha.service.credentials import SystemCredentialStore
 from autoalpha.service.store import ServiceStore
 
@@ -58,14 +60,26 @@ class DataSyncWorker:
     def set_token(self, value: str) -> None:
         self.token_store.set(value)
 
-    async def start(self, *, trigger: str) -> dict[str, Any]:
+    async def start(
+        self,
+        *,
+        trigger: str,
+        dataset_ids: list[str] | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> dict[str, Any]:
         if self.alive:
             raise RuntimeError("A market-data sync is already running")
         if self.is_busy():
             raise RuntimeError("Stop research and manual backtests before refreshing market data")
         if not self.token_configured():
             raise RuntimeError("Tushare Token is not configured")
-        self._task = asyncio.create_task(self._run(trigger), name="autoalpha-market-data-sync")
+        selected = dataset_ids or _configured_product_ids(self.store.settings())
+        resolve_products(selected)
+        self._task = asyncio.create_task(
+            self._run(trigger, selected, start_date=start_date, end_date=end_date),
+            name="autoalpha-market-data-sync",
+        )
         return self.status()
 
     async def start_scheduler(self) -> None:
@@ -114,17 +128,34 @@ class DataSyncWorker:
             return
         await self.start(trigger="scheduled")
 
-    async def _run(self, trigger: str) -> dict[str, Any]:
-        self._status = {"state": "RUNNING", "updated_at": _now(), "trigger": trigger}
+    async def _run(
+        self,
+        trigger: str,
+        dataset_ids: list[str],
+        *,
+        start_date: date | None,
+        end_date: date | None,
+    ) -> dict[str, Any]:
+        self._status = {
+            "state": "RUNNING",
+            "updated_at": _now(),
+            "trigger": trigger,
+            "dataset_ids": dataset_ids,
+        }
         self.store.append_event(
             "action",
             "MARKET_DATA_SYNC_STARTED",
             "市场数据增量同步开始",
-            "拉取不复权日线截面与同日复权因子；历史覆盖完整后才原子重建研究面板。",
-            payload={"trigger": trigger, "mode": "NON_PIT_PROXY"},
+            "按已启用的数据产品拉取行情、估值、资金流和交易状态；覆盖检查后原子重建研究面板。",
+            payload={"trigger": trigger, "mode": "NON_PIT_PROXY", "dataset_ids": dataset_ids},
         )
         try:
-            result = await asyncio.to_thread(self._sync_blocking)
+            result = await asyncio.to_thread(
+                self._sync_blocking,
+                dataset_ids,
+                start_date=start_date,
+                end_date=end_date,
+            )
             sync_ok = result["download_returncode"] == 0
             panel_rebuilt = bool(result.get("panel_rebuilt"))
             status = (
@@ -166,7 +197,13 @@ class DataSyncWorker:
             )
             raise
 
-    def _sync_blocking(self) -> dict[str, Any]:
+    def _sync_blocking(
+        self,
+        dataset_ids: list[str],
+        *,
+        start_date: date | None,
+        end_date: date | None,
+    ) -> dict[str, Any]:
         token = os.getenv("TUSHARE_TOKEN") or self.token_store.get()
         if not token:
             raise RuntimeError("Tushare Token is not configured")
@@ -183,51 +220,97 @@ class DataSyncWorker:
         if not downloader_python.is_file():
             downloader_python = Path(sys.executable)
         env = {**os.environ, "TUSHARE_TOKEN": token}
-        download = subprocess.Popen(
-            [str(downloader_python), str(cli), "--adjustment", "both"],
-            cwd=market_data_root,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        while download.poll() is None:
-            progress = _download_progress(market_data_root)
-            self._status = {
-                "state": "RUNNING",
-                "updated_at": _now(),
-                "trigger": self._status.get("trigger"),
-                "download_progress": progress,
-            }
-            time.sleep(1)
-        stdout, stderr = download.communicate()
-        download_summary = _last_json_document(stdout)
+        selected = resolve_products(dataset_ids)
+        include_core = any(product.dataset_id == "core_market" for product in selected)
+        feature_products = [
+            product.dataset_id
+            for product in selected
+            if product.sync_strategy not in {"CORE_PIPELINE", "CATALOG"}
+        ]
+        download_summary: dict[str, Any] = {}
+        stderr = ""
+        core_returncode = 0
+        if include_core:
+            with tempfile.TemporaryFile(mode="w+") as out, tempfile.TemporaryFile(mode="w+") as err:
+                download = subprocess.Popen(
+                    [str(downloader_python), str(cli), "--adjustment", "both"],
+                    cwd=market_data_root,
+                    env=env,
+                    text=True,
+                    stdout=out,
+                    stderr=err,
+                )
+                self._wait_for_process(download, market_data_root, state="RUNNING_CORE")
+                out.seek(0)
+                err.seek(0)
+                stdout, stderr = out.read(), err.read()
+            download_summary["core_market"] = _last_json_document(stdout)
+            core_returncode = int(download.returncode or 0)
+
+        feature_error = ""
+        feature_returncode = 0
+        if feature_products:
+            feature_python = self.project_root / "AutoAlpha" / ".venv" / "bin" / "python"
+            if not feature_python.is_file():
+                feature_python = Path(sys.executable)
+            feature_command = [
+                str(feature_python),
+                "-m",
+                "autoalpha.data.tushare_feature_sync",
+                "--root",
+                str(market_data_root),
+                "--datasets",
+                ",".join(feature_products),
+                "--start-date",
+                (start_date.strftime("%Y%m%d") if start_date else _panel_start_date(settings)),
+                "--end-date",
+                (end_date.strftime("%Y%m%d") if end_date else "20991231"),
+            ]
+            with tempfile.TemporaryFile(mode="w+") as out, tempfile.TemporaryFile(mode="w+") as err:
+                feature = subprocess.Popen(
+                    feature_command,
+                    cwd=self.project_root / "AutoAlpha",
+                    env=env,
+                    text=True,
+                    stdout=out,
+                    stderr=err,
+                )
+                self._wait_for_process(feature, market_data_root, state="RUNNING_FEATURES")
+                out.seek(0)
+                err.seek(0)
+                feature_stdout, feature_error = out.read(), err.read()
+            download_summary["features"] = _last_json_document(feature_stdout)
+            feature_returncode = int(feature.returncode or 0)
+
         data_path = Path(settings["data_path"]).expanduser().resolve()
         source = market_data_root / "data" / "downloads" / "a_daily_cross_sectional_raw_adj"
         coverage = _cross_sectional_coverage(source, data_path)
-        if not coverage["ready"]:
+        if include_core and not coverage["ready"]:
             # A normal incremental run can report old historical gaps as a
             # non-zero exit.  Those gaps are exactly what the resumable
             # bootstrap process is designed to repair, so never let that
             # status prevent it from starting.
-            migration = subprocess.Popen(
-                [str(downloader_python), str(cli), "--bootstrap-history"],
-                cwd=market_data_root,
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            while migration.poll() is None:
-                self._status = {
-                    "state": "MIGRATING_HISTORY",
-                    "updated_at": _now(),
-                    "trigger": self._status.get("trigger"),
-                    "coverage": _cross_sectional_coverage(source, data_path),
-                    "download_progress": _download_progress(market_data_root),
-                }
-                time.sleep(1)
-            migration_stdout, migration_stderr = migration.communicate()
+            with tempfile.TemporaryFile(mode="w+") as out, tempfile.TemporaryFile(mode="w+") as err:
+                migration = subprocess.Popen(
+                    [str(downloader_python), str(cli), "--bootstrap-history"],
+                    cwd=market_data_root,
+                    env=env,
+                    text=True,
+                    stdout=out,
+                    stderr=err,
+                )
+                while migration.poll() is None:
+                    self._status = {
+                        "state": "MIGRATING_HISTORY",
+                        "updated_at": _now(),
+                        "trigger": self._status.get("trigger"),
+                        "coverage": _cross_sectional_coverage(source, data_path),
+                        "download_progress": _download_progress(market_data_root),
+                    }
+                    time.sleep(1)
+                out.seek(0)
+                err.seek(0)
+                migration_stdout, migration_stderr = out.read(), err.read()
             if migration.returncode != 0:
                 return {
                     "download_returncode": 0,
@@ -244,10 +327,7 @@ class DataSyncWorker:
                     ),
                 }
             coverage = _cross_sectional_coverage(source, data_path)
-            download_summary = {
-                "incremental": download_summary,
-                "migration": _last_json_document(migration_stdout),
-            }
+            download_summary["migration"] = _last_json_document(migration_stdout)
             if not coverage["ready"]:
                 return {
                     "download_returncode": 0,
@@ -277,6 +357,8 @@ class DataSyncWorker:
                 str(self.project_root / "data" / "catalog" / "daily_catalog.csv"),
                 "--report",
                 str(self.project_root / "data" / "catalog" / "data_quality.json"),
+                "--feature-store",
+                str(market_data_root / "data" / "downloads" / "a_share_feature_store"),
                 "--overwrite",
             ],
             cwd=self.project_root,
@@ -289,14 +371,32 @@ class DataSyncWorker:
             raise RuntimeError(_command_error("Cross-sectional panel rebuild", build))
         metadata = _last_json_document(build.stdout)
         return {
-            "download_returncode": 0,
+            "download_returncode": max(core_returncode, feature_returncode),
             "download_summary": download_summary,
-            "download_error": _trim_output(stderr),
+            "download_error": _trim_output(feature_error) or _trim_output(stderr),
             "download_progress": _download_progress(market_data_root),
             "panel_metadata": metadata,
             "panel_rebuilt": True,
             "coverage": coverage,
+            "dataset_ids": dataset_ids,
         }
+
+    def _wait_for_process(
+        self,
+        process: subprocess.Popen[str],
+        market_data_root: Path,
+        *,
+        state: str,
+    ) -> None:
+        while process.poll() is None:
+            self._status = {
+                "state": state,
+                "updated_at": _now(),
+                "trigger": self._status.get("trigger"),
+                "dataset_ids": self._status.get("dataset_ids", []),
+                "download_progress": _download_progress(market_data_root),
+            }
+            time.sleep(1)
 
 
 def _download_progress(market_data_root: Path) -> dict[str, Any]:
@@ -353,6 +453,31 @@ def _download_progress(market_data_root: Path) -> dict[str, Any]:
                     "updated_at": _path_timestamp(cross_state_path),
                     "last_message": _last_log_line(log_root / f"{cross_state_path.stem}.log"),
                     "target_date": target_date,
+                }
+            )
+        for state_path in sorted(state_root.glob("a_feature_*.json")):
+            state = _read_json_file(state_path)
+            completed_values = state.get("completed_dates", [])
+            completed = len(completed_values) if isinstance(completed_values, list) else 0
+            failed_values = state.get("failed_dates", {})
+            failed = len(failed_values) if isinstance(failed_values, dict) else 0
+            expected = state.get("expected_dates")
+            total = (
+                int(expected) if isinstance(expected, int) and expected > 0 else completed + failed
+            )
+            dataset_id = str(state.get("dataset_id") or state_path.stem.removeprefix("a_feature_"))
+            tasks.append(
+                {
+                    "task_key": state_path.stem,
+                    "dataset_id": dataset_id,
+                    "adjustment": "feature",
+                    "completed": completed,
+                    "failed": failed,
+                    "total": total,
+                    "checkpoint_percent": round(completed / total * 100, 2) if total else 0.0,
+                    "updated_at": _path_timestamp(state_path),
+                    "last_message": _last_log_line(log_root / f"{state_path.stem}.log"),
+                    "target_date": state.get("target_date"),
                 }
             )
     recent = max(tasks, key=lambda item: item["updated_at"] or "", default=None)
@@ -448,6 +573,25 @@ def _trim_output(value: str, limit: int = 2_000) -> str:
 def _command_error(label: str, result: subprocess.CompletedProcess[str]) -> str:
     output = _trim_output(result.stderr) or _trim_output(result.stdout)
     return f"{label} failed with exit code {result.returncode}: {output}"
+
+
+def _configured_product_ids(settings: dict[str, str]) -> list[str]:
+    raw = settings.get("data_product_ids")
+    if not raw:
+        return list(DEFAULT_PRODUCT_IDS)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return list(DEFAULT_PRODUCT_IDS)
+    if not isinstance(value, list):
+        return list(DEFAULT_PRODUCT_IDS)
+    return [str(item) for item in value]
+
+
+def _panel_start_date(settings: dict[str, str]) -> str:
+    metadata = _read_json_file(Path(settings.get("data_path", "")) / "_metadata.json")
+    value = str(metadata.get("first_trade_date", "2010-01-01"))
+    return value.replace("-", "")
 
 
 def _now() -> str:

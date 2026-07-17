@@ -103,6 +103,8 @@ def test_library_marks_metrics_from_an_old_protocol_as_stale() -> None:
     assert factor["metric_summary"]["sharpe_ratio"] is None
     assert factor["historical_metric_summary"]["sharpe_ratio"] == 2.0
     assert factor["scores"]["overall"] == 0.0
+    assert factor["ranking_values"]["overall"] is None
+    assert factor["ranking_values"]["sharpe_ratio"] == 2.0
     assert library["summary"]["eligible_count"] == 0
     assert library["summary"]["stale_protocol_count"] == 1
 
@@ -138,6 +140,38 @@ def test_library_uses_each_factor_source_task_protocol() -> None:
     assert not factors["F_1"]["protocol_stale"]
     assert factors["F_2"]["protocol_stale"]
     assert factors["F_2"]["current_protocol"] == "protocol-b"
+
+
+def test_central_batch_reevaluation_overrides_source_task_protocol_for_ranking() -> None:
+    record = _record(
+        "F_1",
+        status="SCREENED_OUT",
+        family="Momentum",
+        sharpe=2.0,
+        worst_fold=0.5,
+        turnover=10,
+    )
+    record["source_task_id"] = "task-a"
+    record["metrics"].update(
+        {
+            "evaluation_protocol": "central-v8",
+            "reevaluation_batch_id": "reeval-1",
+            "long_only_sharpe_ratio": 0.8,
+            "long_only_simple_annual_return": 0.12,
+        }
+    )
+
+    library = build_factor_library(
+        [record],
+        current_protocol="central-v8",
+        current_protocols={"task-a": "task-a-v8"},
+    )
+
+    factor = library["factors"][0]
+    assert factor["current_protocol"] == "central-v8"
+    assert factor["protocol_stale"] is False
+    assert factor["long_only_score_available"] is True
+    assert factor["ranking_values"]["long_only_sharpe_ratio"] == 0.8
 
 
 def test_library_blocks_holdout_contaminated_factor_promotion() -> None:
@@ -210,3 +244,91 @@ def test_library_adds_clusters_lifecycle_contamination_and_marginal_contribution
     assert factor["lifecycle_state"] == "SHADOW"
     assert factor["holdout_contaminated"]
     assert factor["marginal_contribution"]["incremental_net_ir"] == 0.42
+
+
+def test_library_exposes_long_only_scores_metrics_and_sort_metadata() -> None:
+    stronger = _record(
+        "F_1",
+        status="ELIGIBLE",
+        family="Momentum",
+        sharpe=0.2,
+        worst_fold=0.1,
+        turnover=8,
+    )
+    weaker = _record(
+        "F_2",
+        status="ELIGIBLE",
+        family="Liquidity",
+        sharpe=5.0,
+        worst_fold=0.1,
+        turnover=8,
+    )
+    for record, sharpe, annual, worst_fold in (
+        (stronger, 2.0, 0.20, 0.8),
+        (weaker, 0.8, 0.08, -0.1),
+    ):
+        record["metrics"].update(
+            {
+                "long_only_sharpe_ratio": sharpe,
+                "long_only_simple_annual_return": annual,
+                "long_only_compound_annual_return": annual - 0.01,
+                "long_only_max_drawdown": -0.08,
+                "long_only_worst_year_return": -0.03,
+                "long_only_annual_turnover": 7.0,
+                "long_only_coverage": 0.96,
+                "long_only_capacity_cny": 80_000_000,
+                "long_only_walk_forward_worst_sharpe": worst_fold,
+                "long_only_walk_forward_positive_fraction": 0.8,
+                    "long_only_deflated_sharpe_probability": 0.9,
+                    "long_only_annual_return_dispersion": 0.08,
+                    "recent_long_only_sharpe_ratio": sharpe - 0.1,
+                    "recent_long_only_simple_annual_return": annual - 0.01,
+                    "recent_long_only_compound_annual_return": annual - 0.02,
+                    "recent_long_only_max_drawdown": -0.10,
+                    "recent_long_only_worst_year_return": -0.04,
+                    "recent_long_only_annual_turnover": 6.0,
+                    "recent_long_only_coverage": 0.95,
+                    "recent_long_only_capacity_cny": 70_000_000,
+                    "recent_long_only_walk_forward_worst_sharpe": worst_fold - 0.1,
+                    "recent_long_only_walk_forward_positive_fraction": 0.8,
+                    "recent_long_only_deflated_sharpe_probability": 0.85,
+                    "recent_long_only_annual_return_dispersion": 0.09,
+            }
+        )
+
+    library = build_factor_library([stronger, weaker])
+    factors = {factor["factor_id"]: factor for factor in library["factors"]}
+    options = {option["id"]: option for option in library["ranking_options"]}
+
+    assert library["summary"]["long_only_evaluated_count"] == 2
+    assert library["summary"]["recent_long_only_evaluated_count"] == 2
+    assert library["summary"]["ranking_method"] == "A_SHARE_LONG_ONLY_PRIMARY"
+    assert library["factors"][0]["factor_id"] == "F_1"
+    assert factors["F_1"]["long_only_score_available"]
+    assert factors["F_1"]["recent_long_only_score_available"]
+    assert (
+        factors["F_1"]["scores"]["long_only_overall"]
+        > factors["F_2"]["scores"]["long_only_overall"]
+    )
+    assert factors["F_1"]["ranking_values"]["long_only_sharpe_ratio"] == 2.0
+    assert factors["F_1"]["metric_summary"]["long_only_simple_annual_return"] == 0.20
+    assert options["long_only_overall"]["group"] == "统一主榜（2015–2024）"
+    assert options["recent_long_only_overall"]["group"] == "近期榜（2020–2024）"
+    assert options["long_only_annual_turnover"]["higher_is_better"] is False
+
+
+def test_library_keeps_unavailable_long_only_rankings_null() -> None:
+    record = _record(
+        "F_1",
+        status="ACTIVE",
+        family="Momentum",
+        sharpe=1.0,
+        worst_fold=0.1,
+        turnover=8,
+    )
+
+    factor = build_factor_library([record])["factors"][0]
+
+    assert not factor["long_only_score_available"]
+    assert factor["ranking_values"]["long_only_overall"] is None
+    assert factor["ranking_values"]["long_only_sharpe_ratio"] is None

@@ -18,6 +18,7 @@
       <nav class="app-nav" aria-label="研究工作台">
         <a class="active" id="autoResearchNav" href="/"><i data-lucide="activity"></i>自动研究</a>
         <a href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a>
+        <a href="http://127.0.0.1:8888/"><i data-lucide="network"></i>AutoCombine</a>
         <a href="/llm-team"><i data-lucide="brain-circuit"></i>LLM 团队</a>
         <a href="/factors"><i data-lucide="library"></i>因子库</a>
         <a href="/screener"><i data-lucide="list-filter"></i>选股器</a>
@@ -115,6 +116,11 @@
             <span id="directionRemaining">未开始</span>
           </div>
         </div>
+        <div class="research-data-contract">
+          <div><span>AI 字段白名单</span><strong id="researchEligibleFields">--</strong></div>
+          <div><span>扩展字段状态</span><strong id="researchExtendedFields">--</strong></div>
+          <p id="researchDataProducts">正在读取研究数据契约</p>
+        </div>
         <div class="blind-boundary">
           <div><h3>隔离盲测与资本门禁</h3><p id="holdoutBoundary">隐藏指标不进入模型上下文</p></div>
           <div id="blindVerdicts" class="blind-verdicts"></div>
@@ -127,30 +133,47 @@
           <div class="chart-controls">
             <label>图表指标
               <select id="chartMetric">
-                <option value="sharpe_ratio">单因子 Alpha 多空夏普</option>
-                <option value="simple_annual_return">单因子 Alpha 多空年化</option>
+                <option value="long_only_sharpe_ratio" selected>单因子 A股纯多夏普</option>
+                <option value="long_only_active_information_ratio">单因子 A股纯多主动收益 IR</option>
+                <option value="long_only_active_simple_annual_return">单因子 A股纯多主动年化</option>
+                <option value="long_only_market_beta">单因子 A股纯多市场 Beta</option>
+                <option value="size_neutral_alpha_sharpe_ratio">市值中性 Alpha 夏普</option>
+                <option value="long_only_simple_annual_return">单因子 A股纯多简单年化</option>
+                <option value="long_only_compound_annual_return">单因子 A股纯多复合年化</option>
+                <option value="long_only_max_drawdown">单因子 A股纯多最大回撤</option>
+                <option value="long_only_annual_turnover">单因子 A股纯多年化换手</option>
+                <option value="long_only_cost_stress_net_ir">单因子 A股纯多成本压力 IR</option>
+                <option value="long_only_positive_year_ratio">单因子 A股纯多正收益年份</option>
+                <option value="long_only_walk_forward_worst_sharpe">单因子 A股纯多最差折夏普</option>
+                <option value="long_only_deflated_sharpe_probability">单因子 A股纯多 Deflated Sharpe</option>
+                <option value="long_only_coverage">单因子 A股纯多覆盖率</option>
+                <option value="long_only_capacity_cny">单因子 A股纯多容量估计</option>
+                <option value="sharpe_ratio">诊断 · 单因子 Alpha 多空夏普</option>
+                <option value="simple_annual_return">诊断 · 单因子 Alpha 多空年化</option>
                 <option value="pearson_ic_mean">IC</option>
                 <option value="rank_ic_mean">Rank IC</option>
                 <option value="rank_ic_ir">Rank IC IR</option>
                 <option value="pearson_ic_ir">IC IR</option>
-                <option value="compound_annual_return">复合年化</option>
-                <option value="incremental_net_ir">增量净 IR</option>
-                <option value="incremental_max_drawdown">最大回撤变化</option>
-                <option value="return_drawdown_efficiency_change">收益回撤效率</option>
-                <option value="cost_stress_net_ir">成本压力净 IR</option>
-                <option value="annual_turnover">年化换手</option>
-                <option value="coverage">覆盖率</option>
-                <option value="capacity_cny">容量估计</option>
-                <option value="positive_year_ratio">正收益年份占比</option>
-                <option value="annual_return_dispersion">年收益离散</option>
-                <option value="walk_forward_positive_fraction">滚动正折比例</option>
-                <option value="walk_forward_worst_sharpe">最差折夏普</option>
-                <option value="deflated_sharpe_probability">Deflated Sharpe 概率</option>
+                <option value="compound_annual_return">诊断 · 多空复合年化</option>
+                <option value="incremental_net_ir">诊断 · 多空增量净 IR</option>
+                <option value="incremental_max_drawdown">诊断 · 多空最大回撤变化</option>
+                <option value="return_drawdown_efficiency_change">诊断 · 多空收益回撤效率</option>
+                <option value="cost_stress_net_ir">诊断 · 多空成本压力净 IR</option>
+                <option value="annual_turnover">诊断 · 多空年化换手</option>
+                <option value="coverage">诊断 · 多空覆盖率</option>
+                <option value="capacity_cny">诊断 · 多空容量估计</option>
+                <option value="positive_year_ratio">诊断 · 多空正收益年份占比</option>
+                <option value="annual_return_dispersion">诊断 · 多空年收益离散</option>
+                <option value="walk_forward_positive_fraction">诊断 · 多空滚动正折比例</option>
+                <option value="walk_forward_worst_sharpe">诊断 · 多空最差折夏普</option>
+                <option value="deflated_sharpe_probability">诊断 · 多空 Deflated Sharpe 概率</option>
                 <option value="probability_backtest_overfitting">PBO</option>
                 <option value="parameter_stability_positive_fraction">参数邻域正向比例</option>
-                <option value="portfolio_sharpe_ratio">A股多头组合夏普</option>
-                <option value="portfolio_simple_annual_return">A股多头组合年化</option>
-                <option value="portfolio_max_drawdown">A股多头组合回撤</option>
+                <option value="portfolio_sharpe_ratio">多因子 A股纯多组合夏普</option>
+                <option value="portfolio_simple_annual_return">多因子 A股纯多组合年化</option>
+                <option value="portfolio_active_information_ratio">多因子 A股纯多主动收益 IR</option>
+                <option value="portfolio_active_simple_annual_return">多因子 A股纯多主动年化</option>
+                <option value="portfolio_max_drawdown">多因子 A股纯多组合回撤</option>
                 <option value="portfolio_incremental_net_ir">组合边际净 IR</option>
                 <option value="portfolio_annual_turnover">组合年化换手</option>
                 <option value="portfolio_max_factor_correlation">最大因子相关性</option>
@@ -187,7 +210,7 @@
           <article class="flow-step" data-phase="DIRECTION"><span>03</span><strong>方向自检</strong><p>公开证据诊断与三次预算</p></article>
           <article class="flow-step" data-phase="PROPOSAL"><span>04</span><strong>生成候选</strong><p>模型输出 canonical DSL</p></article>
           <article class="flow-step" data-phase="SEMANTICS"><span>05</span><strong>语义校验</strong><p>时序、单位与表达式去重</p></article>
-          <article class="flow-step" data-phase="EVALUATION"><span>06</span><strong>双层评价</strong><p>Alpha诊断与A股多头代理</p></article>
+          <article class="flow-step" data-phase="EVALUATION"><span>06</span><strong>纯多主评价</strong><p>A股多头门禁与Alpha辅助诊断</p></article>
           <article class="flow-step" data-phase="PORTFOLIO"><span>07</span><strong>组合增删</strong><p>保留、加入、删除或替换</p></article>
           <article class="flow-step" data-phase="HOLDOUT"><span>08</span><strong>隔离盲测</strong><p>一次性访问与分级反馈</p></article>
           <article class="flow-step" data-phase="CAPITAL_SIMULATION"><span>09</span><strong>资金仿真</strong><p>成交、费用、残仓与敞口</p></article>
@@ -252,6 +275,6 @@
 
   <div id="toast" role="status"></div>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="/static/app.js?v=20260716-task-scope-v3"></script>
+  <script src="/static/app.js?v=20260717-long-only-primary-v1"></script>
 </body>
 </html>

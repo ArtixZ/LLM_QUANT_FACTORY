@@ -7,6 +7,7 @@ from autoalpha.service.full_llm import (
     FACTOR_LIBRARIAN,
     FULL_LLM_ROLES,
     FullLLMResearchTeam,
+    _data_contract_context,
     categorical_research_feedback,
     evaluate_falsification_plan,
     role_catalog,
@@ -90,9 +91,7 @@ def test_librarian_normalizes_mechanism_and_filters_unknown_relations() -> None:
     outcomes = asyncio.run(
         team.pre_evaluation(
             candidate={"name": "factor", "expression": {"operator": "field"}},
-            library_context=[
-                {"factor_id": "F_ALLOWED", "name": "existing", "proposal": {}}
-            ],
+            library_context=[{"factor_id": "F_ALLOWED", "name": "existing", "proposal": {}}],
             data_context={"first_trade_date": "2020-01-01"},
         )
     )
@@ -138,10 +137,26 @@ def test_falsification_results_use_only_deterministic_gate_categories() -> None:
 def test_unexpected_role_failure_is_audited_and_iteration_can_continue() -> None:
     team = FullLLMResearchTeam(BrokenAnalysisClient())  # type: ignore[arg-type]
 
-    outcomes = asyncio.run(
-        team.pre_evaluation(candidate={}, library_context=[], data_context={})
-    )
+    outcomes = asyncio.run(team.pre_evaluation(candidate={}, library_context=[], data_context={}))
 
     assert len(outcomes) == 3
     assert all(outcome.status == "FAILED" for outcome in outcomes.values())
     assert all(outcome.artifact == {"advisory_available": False} for outcome in outcomes.values())
+
+
+def test_llm_roles_receive_field_semantics_and_product_inventory() -> None:
+    context = _data_contract_context(
+        {
+            "available_factor_fields": ["close", "turnover_rate"],
+            "field_catalog": [{"name": "turnover_rate", "status": "RESEARCH_ELIGIBLE"}],
+            "data_products": [{"dataset_id": "daily_basic"}],
+            "data_policy": {"staged_fields_forbidden": True},
+            "signal_timing": "END_OF_DAY_INFORMATION_MAY_TRADE_NEXT_SESSION_OPEN",
+            "extended_data_experiment": {"enabled": True},
+            "secret": "must-not-pass",
+        }
+    )
+
+    assert context["field_catalog"][0]["name"] == "turnover_rate"
+    assert context["data_products"][0]["dataset_id"] == "daily_basic"
+    assert "secret" not in context

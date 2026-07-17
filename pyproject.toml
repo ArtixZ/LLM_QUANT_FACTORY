@@ -17,6 +17,7 @@ dependencies = [
   "pandas>=2.2,<4",
   "pyarrow>=18,<24",
   "scipy>=1.14,<2",
+  "tushare>=1.4,<2",
   "uvicorn[standard]>=0.35,<1",
 ]
 
@@ -25,6 +26,7 @@ autoalpha = "autoalpha.cli:main"
 autoalpha-service = "autoalpha.service.app:main"
 autoalpha-batch-service = "autoalpha.service.batch_app:main"
 autoalpha-realistic-batch-service = "autoalpha.service.realistic_batch_app:main"
+autocombine-service = "autoalpha.service.autocombine_app:main"
 
 [dependency-groups]
 dev = [

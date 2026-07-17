@@ -42,7 +42,12 @@ def hac_mean_inference(
         long_run_variance += 2.0 * weight * autocovariance
     long_run_variance = max(long_run_variance, 0.0)
     standard_error = float(np.sqrt(long_run_variance / observations))
-    t_stat = mean / standard_error if standard_error > 0 else np.inf * np.sign(mean)
+    if standard_error > 0:
+        t_stat = mean / standard_error
+    elif mean == 0:
+        t_stat = 0.0
+    else:
+        t_stat = float(np.copysign(np.inf, mean))
     p_value = float(2.0 * stats.norm.sf(abs(t_stat)))
     critical = float(stats.norm.ppf(0.5 + confidence / 2.0))
     interval = (mean - critical * standard_error, mean + critical * standard_error)

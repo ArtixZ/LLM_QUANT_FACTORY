@@ -45,6 +45,10 @@ def test_expression_structure_detects_parameter_only_variants() -> None:
 
 def test_memory_summary_preserves_best_portfolio_failure() -> None:
     metrics = {
+        "long_only_sharpe_ratio": 0.8,
+        "long_only_simple_annual_return": 0.08,
+        "long_only_annual_turnover": 9.0,
+        "long_only_coverage": 0.96,
         "sharpe_ratio": 1.2,
         "simple_annual_return": 0.1,
         "rank_ic_mean": 0.02,
@@ -84,6 +88,8 @@ def test_memory_summary_preserves_best_portfolio_failure() -> None:
     assert memory["portfolio"]["failed_gates"] == ["portfolio_value"]
     assert memory["portfolio"]["best_option"]["weights"] == [0.9, 0.1]
     assert "rolling_mean" in memory["expression_signature"]
+    assert memory["single_factor"]["sharpe"] == 0.8
+    assert memory["single_factor"]["alpha_diagnostic"]["sharpe"] == 1.2
 
 
 def test_memory_summary_prioritizes_accepted_option_over_rejected_utility() -> None:
@@ -124,12 +130,15 @@ def test_multiple_testing_and_frozen_portfolio_identity_are_deterministic() -> N
         }
         for year in range(2015, 2025)
     ]
-    current = {"net_return_hac_p_value": 0.001, "walk_forward_folds": folds}
+    current = {
+        "long_only_net_return_hac_p_value": 0.001,
+        "long_only_walk_forward_folds": folds,
+    }
     history = [
         {
             "research_generation": "older-generation",
-            "net_return_hac_p_value": 0.002,
-            "walk_forward_folds": [
+            "long_only_net_return_hac_p_value": 0.002,
+            "long_only_walk_forward_folds": [
                 {**fold, "annual_return": fold["annual_return"] * 0.5} for fold in folds
             ],
         }
@@ -143,6 +152,7 @@ def test_multiple_testing_and_frozen_portfolio_identity_are_deterministic() -> N
     assert adjusted["multiple_testing_fdr_passed"] is True
     assert adjusted["multiple_testing_family_size"] == 2
     assert adjusted["multiple_testing_scope"] == "CUMULATIVE_ALL_GENERATIONS"
+    assert adjusted["multiple_testing_primary_basis"] == "A_SHARE_LONG_ONLY"
     assert 0 <= adjusted["probability_backtest_overfitting"] <= 1
     assert first == second
     assert len(first) == 64

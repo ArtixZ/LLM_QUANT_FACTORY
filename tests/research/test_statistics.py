@@ -24,6 +24,15 @@ def test_hac_standard_error_reflects_positive_serial_correlation() -> None:
     assert adjusted.observations == 2000
 
 
+def test_hac_mean_inference_handles_an_all_zero_sample() -> None:
+    result = hac_mean_inference(np.zeros(20), lags=5)
+
+    assert result.mean == 0.0
+    assert result.standard_error == 0.0
+    assert result.t_stat == 0.0
+    assert result.p_value == 1.0
+
+
 def test_benjamini_hochberg_controls_family() -> None:
     rejected = benjamini_hochberg([0.001, 0.01, 0.04, 0.20], alpha=0.05)
 

@@ -27,7 +27,12 @@ def deflated_sharpe_ratio(
         raise ValueError("At least three returns and one trial are required")
     standard_deviation = values.std(ddof=1)
     if standard_deviation <= 0:
-        raise ValueError("Returns must have non-zero variance")
+        expected_daily = _expected_maximum_sharpe(trials) / math.sqrt(values.size)
+        return DeflatedSharpeResult(
+            observed_sharpe=0.0,
+            expected_max_sharpe=expected_daily * math.sqrt(periods_per_year),
+            probability=0.0,
+        )
     daily_sharpe = float(values.mean() / standard_deviation)
     annualized = daily_sharpe * math.sqrt(periods_per_year)
     expected_daily = _expected_maximum_sharpe(trials) / math.sqrt(values.size)

@@ -12,6 +12,7 @@ from autoalpha.service.research_protocol import (
     default_task_protocol,
     protocol_blockers,
     recent_five_year_task_protocol,
+    research_evidence_tier,
     task_research_config,
     validation_fold_capacity,
 )
@@ -27,9 +28,11 @@ def test_recent_task_gets_an_independent_valid_protocol() -> None:
     assert task_config.splits.validation.end.isoformat() == protocol["validation_end"]
     assert task_config.splits.test.end.isoformat() == "2026-07-16"
     assert task_config.governance.protocol_version != base.governance.protocol_version
+    assert research_evidence_tier(task_config) == "REGIME_SLICE_ONLY"
 
 
 def test_recent_five_year_protocol_allocates_backward_from_latest_date() -> None:
+    base = ResearchConfig.from_toml(Path("config/research.toml"))
     protocol = recent_five_year_task_protocol("2010-01-04", "2026-07-16")
 
     assert protocol == {
@@ -47,6 +50,10 @@ def test_recent_five_year_protocol_allocates_backward_from_latest_date() -> None
         "holdout_months": 6,
     }
     assert protocol_blockers(protocol, data_start="2010-01-04", data_end="2026-07-16") == []
+    assert (
+        research_evidence_tier(task_research_config(base, protocol, task_id="recent-five"))
+        == "PRIMARY_DISCOVERY"
+    )
 
 
 def test_recent_five_year_protocol_rejects_stale_anchor_and_short_history() -> None:

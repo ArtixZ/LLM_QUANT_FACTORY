@@ -18,10 +18,11 @@ from autoalpha.backtest.timing import EOD_NEXT_OPEN_RETURN_CONVENTION, entry_ali
 from autoalpha.backtest.vector import VectorBacktestConfig, VectorBacktester, select_positions
 from autoalpha.config import ResearchConfig
 from autoalpha.data.execution_basis import inspect_execution_data_basis
+from autoalpha.data.research_fields import field_definitions
 from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.dsl.compiler import FactorCompiler
 from autoalpha.dsl.expression import Expression, FactorDefinition
-from autoalpha.dsl.semantics import FieldDefinition, SemanticValidator
+from autoalpha.dsl.semantics import SemanticValidator
 from autoalpha.portfolio.products import product_template
 from autoalpha.research.evaluation import cross_sectional_ic
 from autoalpha.research.multiple_testing import deflated_sharpe_ratio
@@ -95,13 +96,11 @@ class ManualFactorBacktester:
         self.config = ResearchConfig.from_toml(config_path)
         basis = inspect_execution_data_basis(self.panel_path)
         self.execution_basis = basis
-        fields = [
-            FieldDefinition("open", "price"),
-            FieldDefinition("close", "price"),
-            FieldDefinition("adj_close", "price"),
-            FieldDefinition("amount", basis.amount_unit),
-            FieldDefinition("vol", basis.volume_unit),
-        ]
+        fields = field_definitions(
+            self.workspace.factor_fields,
+            amount_unit=basis.amount_unit,
+            volume_unit=basis.volume_unit,
+        )
         self.validator = SemanticValidator(fields, maximum_nodes=30, maximum_lookback=252)
         self.compiler = FactorCompiler(self.validator)
 
@@ -315,9 +314,7 @@ class ManualFactorBacktester:
             "portfolio_mode": template.portfolio_mode,
             "product_template": template.template_id,
             "product_template_name": template.name,
-            "execution_mode": (
-                "a_share_capital_ledger" if use_ledger else "research_vector"
-            ),
+            "execution_mode": ("a_share_capital_ledger" if use_ledger else "research_vector"),
             "backtest_engine": spec.backtest_engine,
             "backtest_preset": spec.backtest_preset,
             "execution_data_mode": spec.execution_data_mode,

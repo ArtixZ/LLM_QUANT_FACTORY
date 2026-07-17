@@ -10,14 +10,16 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from autoalpha.backtest.ashare_vector import AshareVectorBacktester, AshareVectorConfig
 from autoalpha.backtest.capital import CapitalBacktestSpec, run_capital_backtest
 from autoalpha.backtest.costs import ChinaAExecutionCosts
-from autoalpha.backtest.timing import next_open_return_for_eod_signal
 from autoalpha.config import ResearchConfig
 from autoalpha.data.execution_basis import inspect_execution_data_basis
+from autoalpha.data.research_fields import field_definitions
+from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.dsl.compiler import FactorCompiler
 from autoalpha.dsl.expression import FactorDefinition, constant, operation
-from autoalpha.dsl.semantics import FieldDefinition, SemanticValidator
+from autoalpha.dsl.semantics import SemanticValidator
 
 
 @dataclass(frozen=True)
@@ -33,15 +35,20 @@ class BlindEvaluationBoundary:
     def __init__(self, panel_path: Path, config: ResearchConfig) -> None:
         self.panel_path = panel_path
         self.config = config
+        try:
+            self.workspace = inspect_data_workspace(panel_path)
+            self.factor_fields = self.workspace.factor_fields
+        except FileNotFoundError:
+            # Unit-level trusted-boundary tests may inject fields without a disk panel.
+            self.workspace = None
+            self.factor_fields = ("close", "adj_close", "amount", "vol")
         basis = inspect_execution_data_basis(panel_path)
         self.validator = SemanticValidator(
-            [
-                FieldDefinition("open", "price"),
-                FieldDefinition("close", "price"),
-                FieldDefinition("adj_close", "price"),
-                FieldDefinition("amount", basis.amount_unit),
-                FieldDefinition("vol", basis.volume_unit),
-            ],
+            field_definitions(
+                self.factor_fields,
+                amount_unit=basis.amount_unit,
+                volume_unit=basis.volume_unit,
+            ),
             maximum_nodes=30,
             maximum_lookback=252,
         )
@@ -150,17 +157,18 @@ class BlindEvaluationBoundary:
     def _load_holdout_fields(self) -> dict[str, pd.DataFrame]:
         split = self.config.splits.test
         warmup = pd.Timestamp(split.start) - pd.Timedelta(days=400)
-        columns = [
+        factor_columns = list(self.factor_fields)
+        columns = list(dict.fromkeys([
             "trade_date",
             "ts_code",
             "open",
-            "close",
-            "adj_close",
-            "amount",
-            "vol",
+            "raw_open",
+            "can_buy_open_proxy",
+            "can_sell_open_proxy",
+            *factor_columns,
             "is_valid_ohlc",
             "is_tradable_observation",
-        ]
+        ]))
         frames = []
         for year in range(warmup.year, split.end.year + 1):
             for path in sorted((self.panel_path / f"trade_year={year}").glob("*.parquet")):
@@ -173,11 +181,19 @@ class BlindEvaluationBoundary:
             (data["trade_date"] >= warmup) & (data["trade_date"] <= pd.Timestamp(split.end))
         ]
         valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
-        data.loc[~valid, ["open", "close", "adj_close", "amount", "vol"]] = np.nan
-        return {
+        value_columns = list(dict.fromkeys(["open", "raw_open", *factor_columns]))
+        data.loc[~valid, value_columns] = np.nan
+        result = {
             name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
-            for name in ("open", "close", "adj_close", "amount", "vol")
+            for name in value_columns
         }
+        result["can_buy_open_proxy"] = data.pivot(
+            index="trade_date", columns="ts_code", values="can_buy_open_proxy"
+        ).sort_index()
+        result["can_sell_open_proxy"] = data.pivot(
+            index="trade_date", columns="ts_code", values="can_sell_open_proxy"
+        ).sort_index()
+        return result
 
     def _portfolio_path(
         self,
@@ -197,30 +213,42 @@ class BlindEvaluationBoundary:
             composite = composite + signal * weight
 
         split = self.config.splits.test
-        composite = composite[
-            (composite.index >= pd.Timestamp(split.start))
-            & (composite.index <= pd.Timestamp(split.end))
-        ]
-        next_return = next_open_return_for_eod_signal(fields["open"])
-        ranks = composite.rank(axis=1, pct=True)
-        positions = (ranks >= 0.9).astype(float) - (ranks <= 0.1).astype(float)
-        gross = positions.abs().sum(axis=1).replace(0, np.nan)
-        targets = positions.div(gross, axis=0).fillna(0.0)
-        holdings = targets.rolling(self.config.portfolio.holding_period_days, min_periods=1).mean()
-        gross_return = (holdings * next_return.reindex(composite.index)).sum(axis=1, min_count=1)
-        turnover = holdings.diff().abs().sum(axis=1).mul(0.5)
-        one_way_bps = (
-            self.config.costs.commission_bps_each_side
-            + self.config.costs.transfer_fee_bps_each_side
-            + self.config.costs.stamp_duty_bps_sell / 2
+        strategy = self.config.strategy_evaluation
+        adjusted_open = fields["open"]
+        raw_open = fields.get("raw_open", adjusted_open)
+        can_buy = fields.get(
+            "can_buy_open_proxy",
+            pd.DataFrame(True, index=adjusted_open.index, columns=adjusted_open.columns),
         )
-        return pd.DataFrame(
-            {
-                "net": gross_return - turnover * one_way_bps / 10_000,
-                "stressed": gross_return - turnover * one_way_bps * 2 / 10_000,
-                "turnover": turnover,
-            }
-        ).dropna()
+        can_sell = fields.get(
+            "can_sell_open_proxy",
+            pd.DataFrame(True, index=adjusted_open.index, columns=adjusted_open.columns),
+        )
+        result = AshareVectorBacktester(
+            AshareVectorConfig(
+                initial_cash_cny=strategy.initial_cash_cny,
+                gross_exposure=strategy.gross_exposure,
+                selection_fraction=strategy.selection_fraction,
+                maximum_positions=strategy.maximum_positions,
+                rebalance_schedule=strategy.rebalance_schedule,
+                commission_bps_each_side=strategy.commission_bps_each_side,
+                stamp_duty_bps_sell=strategy.stamp_duty_bps_sell,
+                transfer_fee_bps_each_side=strategy.transfer_fee_bps_each_side,
+                minimum_commission_cny=strategy.minimum_commission_cny,
+                slippage_bps_each_side=strategy.slippage_bps_each_side,
+                use_historical_fee_schedule=strategy.use_historical_fee_schedule,
+                cost_stress_multiplier=strategy.cost_stress_multiplier,
+            )
+        ).run(
+            composite,
+            adjusted_open,
+            raw_open,
+            can_buy,
+            can_sell,
+            start=split.start,
+            end=split.end,
+        )
+        return result.path[["net", "stressed", "turnover"]]
 
 
 def _path_metrics(path: pd.DataFrame) -> dict[str, float]:

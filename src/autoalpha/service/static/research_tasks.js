@@ -104,7 +104,7 @@ function renderDetail(taskId) {
   text("detailSnapshotHash", `DATA ${task.snapshot_hash || "--"} · PROTOCOL ${task.protocol_hash || "--"}`);
   text("detailNotes", task.notes || "未填写任务备注");
   document.getElementById("taskDetailGrid").replaceChildren(...[
-    ["市场", marketLabel(task.market)], ["AI 可见数据", taskRange(task)], ["协议模式", protocolDesignLabel(task.protocol?.design)], ["协议版本", `REV ${task.protocol_revision || 1}`], ["当前轮次", formatNumber(task.iteration || 0)], ["运行 ID", task.run_id || "尚未启动"],
+    ["市场", marketLabel(task.market)], ["AI 可见数据", taskRange(task)], ["证据等级", task.readiness?.research_evidence_tier === "PRIMARY_DISCOVERY" ? "主研究" : "市场状态切片"], ["协议模式", protocolDesignLabel(task.protocol?.design)], ["协议版本", `REV ${task.protocol_revision || 1}`], ["当前轮次", formatNumber(task.iteration || 0)], ["运行 ID", task.run_id || "尚未启动"],
   ].map(([label, value]) => stat(label, value)));
   const running = ["RUNNING", "RETRYING", "STOPPING"].includes(task.status);
   const readiness = task.readiness || { runnable: false, blockers: ["研究运行条件尚未计算"] };

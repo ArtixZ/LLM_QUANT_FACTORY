@@ -42,6 +42,10 @@
 
     <section class="panel library-panel">
       <div class="library-toolbar">
+        <div class="leaderboard-switch" aria-label="因子排行榜时间口径">
+          <button class="leaderboard-option active" id="canonicalLeaderboard" type="button">统一主榜 <small>2015–2024</small></button>
+          <button class="leaderboard-option" id="recentLeaderboard" type="button">近期榜 <small>2020–2024</small></button>
+        </div>
         <label class="search-field">检索
           <span><i data-lucide="search"></i><input id="factorSearch" type="search" placeholder="名称、ID、家族或假设"></span>
         </label>
@@ -69,14 +73,10 @@
         </label>
         <label>排行榜
           <select id="rankingMetric">
-            <option value="overall">综合机构分</option>
-            <option value="robustness">稳健性</option>
-            <option value="return">收益质量</option>
-            <option value="risk">风险控制</option>
-            <option value="execution">可交易性</option>
-            <option value="information">信息诊断</option>
+            <option value="long_only_overall">纯多综合分</option>
           </select>
         </label>
+        <button class="icon-button" id="rankingDirection" title="切换排序方向" aria-label="切换排序方向"><i data-lucide="arrow-down-wide-narrow"></i></button>
         <button class="icon-button" id="libraryRefresh" title="刷新因子库"><i data-lucide="refresh-cw"></i></button>
       </div>
 
@@ -94,8 +94,12 @@
               <th>相似簇</th>
               <th>状态</th>
               <th>生命周期</th>
-              <th>综合分</th>
+              <th id="rankingValueHeader">纯多综合分</th>
               <th>边际 IR</th>
+              <th id="boardSharpeHeader">主榜纯多夏普</th>
+              <th id="boardAnnualHeader">主榜纯多年化</th>
+              <th id="boardDrawdownHeader">主榜纯多回撤</th>
+              <th id="boardWorstHeader">主榜纯多最差折</th>
               <th>Alpha多空夏普</th>
               <th>Alpha多空年化</th>
               <th>回撤</th>
@@ -115,6 +119,7 @@
     <div><strong id="selectedCount">0</strong><span>个因子已选</span></div>
     <div id="selectedNames"></div>
     <button class="button" id="clearSelection"><i data-lucide="x"></i>清空</button>
+    <button class="button" id="openAutoCombine"><i data-lucide="network"></i>优化组合</button>
     <button class="button primary" id="openBacktest"><i data-lucide="play"></i>组合回测</button>
   </div>
   <dialog class="factor-detail-dialog" id="factorDetailDialog" aria-labelledby="factorDetailTitle">
@@ -131,7 +136,7 @@
   </dialog>
   <div id="toast" role="status"></div>
   <script>window.MathJax = { tex: { displayMath: [["\\[", "\\]"]] }, startup: { typeset: false } };</script>
-  <script src="/static/factors.js?v=20260716-codex-baseline-v5"></script>
+  <script src="/static/factors.js?v=20260718-autocombine-v1"></script>
   <script async src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" onload="window.lucide&&window.lucide.createIcons()"></script>
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" onload="window.dispatchEvent(new Event('mathjax-ready'))"></script>
 </body>

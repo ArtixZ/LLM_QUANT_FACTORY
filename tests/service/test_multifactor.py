@@ -8,10 +8,12 @@ from autoalpha.backtest.ashare_vector import ASHARE_PROXY_RETURN_CONVENTION
 from autoalpha.backtest.timing import EOD_NEXT_OPEN_RETURN_CONVENTION
 from autoalpha.config import ResearchConfig
 from autoalpha.dsl.expression import FactorDefinition, field
+from autoalpha.service.canonical_evaluation import CANONICAL_LIBRARY_PROTOCOL
 from autoalpha.service.evaluator import PortfolioEvaluation
 from autoalpha.service.multifactor import (
     MultiFactorResearchEngine,
     _candidate_screen_failures,
+    _library_admission_failures,
     _portfolio_action_gate_failures,
 )
 from autoalpha.service.store import ServiceStore
@@ -275,12 +277,12 @@ def test_bootstrap_skips_factor_with_manually_exposed_holdout(tmp_path: Path) ->
             source_iteration=iteration,
             proposal=_proposal(factor),
             metrics={
-                "evaluation_protocol": config.governance.protocol_version,
-                "sharpe_ratio": sharpe,
-                "simple_annual_return": 0.1,
-                "incremental_max_drawdown": 0.0,
-                "annual_turnover": 1.0,
-                "annual_return_dispersion": 0.1,
+                "evaluation_protocol": CANONICAL_LIBRARY_PROTOCOL,
+                "long_only_sharpe_ratio": sharpe,
+                "long_only_simple_annual_return": 0.1,
+                "long_only_max_drawdown": 0.0,
+                "long_only_annual_turnover": 1.0,
+                "long_only_annual_return_dispersion": 0.1,
             },
             status="ELIGIBLE",
             status_reason="passed",
@@ -307,15 +309,64 @@ def test_bootstrap_skips_factor_with_manually_exposed_holdout(tmp_path: Path) ->
 def test_candidate_screen_rejects_extreme_turnover_before_portfolio_search() -> None:
     config = ResearchConfig.from_toml(Path("config/research.toml"))
     metrics = {
-        "sharpe_ratio": 1.0,
-        "simple_annual_return": 0.1,
-        "coverage": 0.95,
-        "cost_stress_net_ir": 0.8,
-        "annual_turnover": 100.0,
-        "annual_return_dispersion": 0.1,
+        "long_only_sharpe_ratio": 1.0,
+        "long_only_simple_annual_return": 0.1,
+        "long_only_coverage": 0.95,
+        "long_only_cost_stress_net_ir": 0.8,
+        "long_only_annual_turnover": 100.0,
+        "long_only_annual_return_dispersion": 0.1,
     }
 
     assert "excessive_turnover" in _candidate_screen_failures(metrics, config)
+
+
+def test_candidate_screen_uses_long_only_metrics_before_alpha_diagnostics() -> None:
+    config = ResearchConfig.from_toml(Path("config/research.toml"))
+    metrics = {
+        "evaluation_protocol": config.governance.protocol_version,
+        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_sharpe_ratio": -0.2,
+        "long_only_simple_annual_return": -0.01,
+        "long_only_coverage": 0.95,
+        "long_only_cost_stress_net_ir": -0.1,
+        "long_only_annual_turnover": 10.0,
+        "long_only_annual_return_dispersion": 0.05,
+        "long_only_walk_forward_fold_count": config.walk_forward.minimum_folds,
+        "long_only_walk_forward_positive_fraction": 0.8,
+        "long_only_walk_forward_worst_sharpe": 0.1,
+        "long_only_deflated_sharpe_probability": 0.99,
+        "long_only_net_return_hac_p_value": 0.01,
+        "parameter_stability_positive_fraction": 1.0,
+        "parameter_stability_worst_sharpe": 0.1,
+        "multiple_testing_fdr_passed": True,
+        "probability_backtest_overfitting": 0.1,
+        "sharpe_ratio": 9.0,
+        "simple_annual_return": 0.9,
+    }
+
+    failures = _candidate_screen_failures(metrics, config)
+
+    assert "non_positive_sharpe" in failures
+    assert "non_positive_annual_return" in failures
+    assert "cost_stress" in failures
+
+
+def test_library_admission_retains_weak_signal_without_relaxing_promotion() -> None:
+    config = ResearchConfig.from_toml(Path("config/research.toml"))
+    metrics = {
+        "evaluation_protocol": CANONICAL_LIBRARY_PROTOCOL,
+        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_sharpe_ratio": 0.25,
+        "long_only_active_information_ratio": 0.15,
+        "long_only_simple_annual_return": 0.04,
+        "long_only_coverage": 0.93,
+        "long_only_annual_turnover": 20.0,
+        "long_only_walk_forward_fold_count": config.walk_forward.minimum_folds,
+        "long_only_deflated_sharpe_probability": 0.05,
+    }
+
+    assert _library_admission_failures(metrics, config) == []
+    assert "deflated_sharpe" in _candidate_screen_failures(metrics, config)
 
 
 def test_stability_upgrade_can_repair_an_infeasible_incumbent() -> None:

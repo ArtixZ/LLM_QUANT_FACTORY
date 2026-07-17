@@ -1,7 +1,7 @@
 const state = {
   taskId: taskIdFromPath(),
   snapshot: null,
-  chartMetric: "sharpe_ratio",
+  chartMetric: "long_only_sharpe_ratio",
   logCategory: "all",
   stream: null,
   refreshTimer: null,
@@ -9,8 +9,23 @@ const state = {
 };
 
 const chartMetrics = {
-  sharpe_ratio: { label: "单因子 Alpha 多空夏普", format: "number", prefer: "max" },
-  simple_annual_return: { label: "单因子 Alpha 多空年化", format: "percent", prefer: "max" },
+  long_only_active_information_ratio: { label: "单因子 A股纯多主动收益 IR", format: "number", prefer: "max" },
+  long_only_active_simple_annual_return: { label: "单因子 A股纯多主动年化", format: "percent", prefer: "max" },
+  long_only_market_beta: { label: "单因子 A股纯多市场 Beta", format: "number", prefer: "min" },
+  size_neutral_alpha_sharpe_ratio: { label: "市值中性 Alpha 夏普", format: "number", prefer: "max" },
+  long_only_sharpe_ratio: { label: "单因子 A股纯多夏普", format: "number", prefer: "max" },
+  long_only_simple_annual_return: { label: "单因子 A股纯多简单年化", format: "percent", prefer: "max" },
+  long_only_compound_annual_return: { label: "单因子 A股纯多复合年化", format: "percent", prefer: "max" },
+  long_only_max_drawdown: { label: "单因子 A股纯多最大回撤", format: "percent", prefer: "max" },
+  long_only_annual_turnover: { label: "单因子 A股纯多年化换手", format: "number", prefer: "min" },
+  long_only_cost_stress_net_ir: { label: "单因子 A股纯多成本压力 IR", format: "number", prefer: "max" },
+  long_only_positive_year_ratio: { label: "单因子 A股纯多正收益年份", format: "percent", prefer: "max" },
+  long_only_walk_forward_worst_sharpe: { label: "单因子 A股纯多最差折夏普", format: "number", prefer: "max" },
+  long_only_deflated_sharpe_probability: { label: "单因子 A股纯多 Deflated Sharpe", format: "percent", prefer: "max" },
+  long_only_coverage: { label: "单因子 A股纯多覆盖率", format: "percent", prefer: "max" },
+  long_only_capacity_cny: { label: "单因子 A股纯多容量估计", format: "currency", prefer: "max" },
+  sharpe_ratio: { label: "诊断 · 单因子 Alpha 多空夏普", format: "number", prefer: "max" },
+  simple_annual_return: { label: "诊断 · 单因子 Alpha 多空年化", format: "percent", prefer: "max" },
   pearson_ic_mean: { label: "IC", format: "number4", prefer: "max" },
   rank_ic_mean: { label: "Rank IC", format: "number4", prefer: "max" },
   rank_ic_ir: { label: "Rank IC IR", format: "number", prefer: "max" },
@@ -30,9 +45,11 @@ const chartMetrics = {
   deflated_sharpe_probability: { label: "Deflated Sharpe 概率", format: "percent", prefer: "max" },
   probability_backtest_overfitting: { label: "PBO", format: "percent", prefer: "min" },
   parameter_stability_positive_fraction: { label: "参数邻域正向比例", format: "percent", prefer: "max" },
-  portfolio_sharpe_ratio: { label: "A股多头组合夏普", format: "number", prefer: "max" },
-  portfolio_simple_annual_return: { label: "A股多头组合年化", format: "percent", prefer: "max" },
-  portfolio_max_drawdown: { label: "A股多头组合回撤", format: "percent", prefer: "max" },
+  portfolio_sharpe_ratio: { label: "多因子 A股纯多组合夏普", format: "number", prefer: "max" },
+  portfolio_simple_annual_return: { label: "多因子 A股纯多组合年化", format: "percent", prefer: "max" },
+  portfolio_active_information_ratio: { label: "多因子 A股纯多主动收益 IR", format: "number", prefer: "max" },
+  portfolio_active_simple_annual_return: { label: "多因子 A股纯多主动年化", format: "percent", prefer: "max" },
+  portfolio_max_drawdown: { label: "多因子 A股纯多组合回撤", format: "percent", prefer: "max" },
   portfolio_incremental_net_ir: { label: "组合边际净 IR", format: "number", prefer: "max" },
   portfolio_annual_turnover: { label: "组合年化换手", format: "number", prefer: "min" },
   portfolio_max_factor_correlation: { label: "最大因子相关性", format: "number4", prefer: "min" },
@@ -51,7 +68,7 @@ const flowLabels = {
   DIRECTION: "正在自检公开证据并冻结本轮优化方向",
   PROPOSAL: "Researcher 正在生成候选",
   SEMANTICS: "正在校验 DSL、时序与重复表达式",
-  EVALUATION: "正在并行运行截面 Alpha 诊断与 A 股多头周频代理",
+  EVALUATION: "正在运行 A 股纯多周频主评价与截面 Alpha 辅助诊断",
   PORTFOLIO: "正在枚举组合保留、加入、删除与替换动作",
   HOLDOUT: "冻结组合正在隔离边界内执行一次性盲测",
   CAPITAL_SIMULATION: "正在执行带交易限制的人民币资金仿真",
@@ -87,7 +104,7 @@ function bindControls() {
   document.getElementById("manualLogForm").addEventListener("submit", appendManualLog);
   document.getElementById("chartMetric").addEventListener("change", event => {
     state.chartMetric = event.target.value;
-    renderChartSummary(state.snapshot?.metrics.at(-1) || null);
+    renderChartSummary();
     drawChart();
   });
   document.querySelectorAll("#logFilters button").forEach(button => {
@@ -225,7 +242,6 @@ function render() {
   const service = snapshot.state;
   const settings = snapshot.settings;
   const task = snapshot.research_task || {};
-  const latest = snapshot.metrics.at(-1) || null;
   renderTaskIdentity(task);
   const badge = document.getElementById("runStatus");
   badge.textContent = service.state;
@@ -246,7 +262,7 @@ function render() {
   hydrateSettings(settings, task);
   renderProtocol();
   renderMemory();
-  renderChartSummary(latest);
+  renderChartSummary();
   renderFlow(service);
   renderPortfolio();
   renderExperiments();
@@ -306,7 +322,7 @@ function formatMemory(content) {
     const best = portfolio.best_option;
     const parts = [
       `${memory.name || "候选"} · ${memory.family || "未分类"}`,
-      `Alpha多空夏普 ${number(single.sharpe)} · 年化 ${percent(single.annual_return)} · 换手 ${number(single.turnover)}`,
+      `A股纯多夏普 ${number(single.sharpe)} · 年化 ${percent(single.annual_return)} · 换手 ${number(single.turnover)}`,
     ];
     if (single.exploratory_failures?.length) {
       parts.push(`单因子未过：${single.exploratory_failures.join(", ")}`);
@@ -346,7 +362,7 @@ function renderProtocol() {
   const walk = protocol.walk_forward || {};
   const portfolio = protocol.portfolio || {};
   const strategy = protocol.evaluation_layers?.strategy_promotion || {};
-  text("protocolSummary", `${protocol.version || "--"} · Alpha筛选 → ${strategy.protocol || "A股策略门禁"}`);
+  text("protocolSummary", `${protocol.version || "--"} · A股纯多主筛 → ${strategy.protocol || "纯多组合门禁"} · 多空仅诊断`);
   text("generationStatus", generation.status || "NOT STARTED");
   text("protocolExploration", protocol.exploration ? `${protocol.exploration.start} — ${protocol.exploration.end}` : "--");
   text("protocolWalkForward", walk.first_validation_year ? `${walk.train_years}Y → ${walk.validation_years}Y · ${walk.first_validation_year}—${walk.last_validation_year}` : "--");
@@ -354,6 +370,7 @@ function renderProtocol() {
   text("holdoutBudget", generation.maximum_holdout_attempts == null ? "--" : `${generation.holdout_attempts} / ${generation.maximum_holdout_attempts}`);
   text("holdingPeriod", portfolio.holding_period_days ? `${portfolio.holding_period_days} 日` : "--");
   text("targetExposure", percent(portfolio.target_gross_exposure));
+  renderResearchDataContract();
   text("holdoutBoundary", protocol.holdout ? `${protocol.holdout.start} — ${protocol.holdout.end} · 仅分级结论与证据哈希` : "隐藏指标不进入模型上下文");
   const adaptive = state.snapshot.adaptive_direction || {};
   const campaign = adaptive.active || adaptive.latest;
@@ -398,24 +415,44 @@ function renderProtocol() {
   }));
 }
 
-function renderChartSummary(latest) {
+function renderResearchDataContract() {
+  const contract = state.snapshot.data_workspace?.research_data_contract;
+  if (!contract) {
+    text("researchEligibleFields", "不可用");
+    text("researchExtendedFields", "不可用");
+    text("researchDataProducts", state.snapshot.data_error || "研究数据契约尚未生成");
+    return;
+  }
+  const eligible = contract.eligible_fields || [];
+  const extended = contract.eligible_extended_fields || [];
+  const staged = contract.staged_extended_fields || [];
+  text("researchEligibleFields", `${eligible.length} 个 · ${eligible.join(", ") || "无"}`);
+  text("researchExtendedFields", `${extended.length} 已解锁 · ${staged.length} 待覆盖`);
+  const products = (contract.data_products || [])
+    .filter(item => ["daily_basic", "moneyflow", "stk_limit"].includes(item.dataset_id))
+    .map(item => `${item.label} ${item.research_state}`);
+  text("researchDataProducts", `${contract.signal_timing} · ${products.join(" · ")}`);
+}
+
+function renderChartSummary() {
   const key = state.chartMetric;
   const config = chartMetrics[key];
   const completed = state.snapshot.iterations.filter(item => item.metrics && Number.isFinite(Number(item.metrics[key])));
   const values = completed.map(item => Number(item.metrics[key]));
   const best = values.length ? (config.prefer === "min" ? Math.min(...values) : Math.max(...values)) : null;
+  const latest = completed.reduce((current, item) => !current || Number(item.iteration) > Number(current.iteration) ? item : current, null);
   text("chartTitle", `${config.label}迭代曲线`);
   text("latestMetricLabel", `latest · ${config.label}`);
   text("bestMetricLabel", `${config.prefer === "min" ? "lowest" : "best"} · ${config.label}`);
-  text("latestMetric", latest ? formatMetric(latest[key], config.format) : "--");
+  text("latestMetric", latest ? formatMetric(latest.metrics[key], config.format) : "--");
   text("bestMetric", best == null ? "--" : formatMetric(best, config.format));
   text("bestLegend", config.prefer === "min" ? "RUNNING LOWEST" : "RUNNING BEST");
   text("totalIterations", state.snapshot.iteration_stats.total);
   if (!latest) {
-    text("chartSubtitle", "等待首个有效实验");
+    text("chartSubtitle", state.snapshot.iteration_stats.total ? "历史轮次尚无该指标，将从下一轮开始记录" : "等待首个有效实验");
     return;
   }
-  text("chartSubtitle", `latest #${latest.iteration} · ${outcomeFromMetrics(latest)} · ${config.label}=${formatMetric(latest[key], config.format)} · gates=${latest.exploratory_gate_failure_count ?? "--"}`);
+  text("chartSubtitle", `latest #${latest.iteration} · ${iterationOutcome(latest).label} · ${config.label}=${formatMetric(latest.metrics[key], config.format)} · gates=${latest.metrics.exploratory_gate_failure_count ?? "--"}`);
 }
 
 function renderFlow(service) {
@@ -513,14 +550,14 @@ function renderExperimentCard(iteration) {
   const metrics = iteration.metrics;
   const proposal = iteration.proposal;
   const line = metrics
-    ? `alpha L/S ${number(metrics.sharpe_ratio)} · annual ${percent(metrics.simple_annual_return)} · rank_ic ${number4(metrics.rank_ic_mean)} · A股组合 ${metrics.portfolio_action || "--"}`
+    ? `A股纯多 ${number(metrics.long_only_sharpe_ratio)} · annual ${percent(metrics.long_only_simple_annual_return)} · alpha诊断 ${number(metrics.sharpe_ratio)} · rank_ic ${number4(metrics.rank_ic_mean)} · 组合 ${metrics.portfolio_action || "--"}`
     : iteration.error || proposal?.hypothesis || "候选正在处理";
   const tags = element("div", "tags");
   [
     iteration.candidate_id,
-    metrics && `return ${percent(metrics.simple_annual_return)}`,
-    metrics && `drawdown ${percent(metrics.incremental_max_drawdown)}`,
-    metrics && `coverage ${percent(metrics.coverage)}`,
+    metrics && `long return ${percent(metrics.long_only_simple_annual_return)}`,
+    metrics && `long drawdown ${percent(metrics.long_only_max_drawdown)}`,
+    metrics && `long coverage ${percent(metrics.long_only_coverage)}`,
     metrics && `gates ${metrics.exploratory_gate_failure_count ?? "--"}`,
     metrics?.portfolio_action && `${metrics.portfolio_action}${metrics.portfolio_action_accepted ? " accepted" : " hold"}`,
     metrics?.portfolio_factor_count && `${metrics.portfolio_factor_count} factors`,
@@ -677,18 +714,24 @@ function formatDateTime(value) {
 }
 
 function number(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed.toFixed(2) : "--";
+  const parsed = numeric(value);
+  return parsed === null ? "--" : parsed.toFixed(2);
 }
 
 function number4(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed.toFixed(4) : "--";
+  const parsed = numeric(value);
+  return parsed === null ? "--" : parsed.toFixed(4);
 }
 
 function percent(value) {
+  const parsed = numeric(value);
+  return parsed === null ? "--" : `${(parsed * 100).toFixed(2)}%`;
+}
+
+function numeric(value) {
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") return null;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(2)}%` : "--";
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatMetric(value, format) {
@@ -706,8 +749,8 @@ function formatAxis(value, format) {
 }
 
 function currency(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return "--";
+  const parsed = numeric(value);
+  if (parsed === null) return "--";
   return `${compactNumber(parsed)} 元`;
 }
 

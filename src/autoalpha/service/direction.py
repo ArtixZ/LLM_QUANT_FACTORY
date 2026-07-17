@@ -6,6 +6,17 @@ from typing import Any
 
 from autoalpha.config import ResearchConfig
 
+MECHANISM_DOMAINS = (
+    "VALUATION",
+    "ORDER_FLOW",
+    "CAPITALIZATION",
+    "TURNOVER_LIQUIDITY",
+    "PRICE_REVERSAL",
+    "MOMENTUM_TREND",
+    "VOLATILITY_RISK",
+    "OTHER_INTERPRETABLE",
+)
+
 
 @dataclass(frozen=True)
 class DirectionDefinition:
@@ -80,6 +91,17 @@ DIRECTIONS = (
         ("同一树的参数变体", "把低相关本身当作收益证据"),
     ),
     DirectionDefinition(
+        "EXPLORE_EXTENDED_DATA",
+        "扩展数据机制探索",
+        "使用至少一个已通过覆盖门禁的估值、换手或订单流字段，检验其对现有组合的独立边际价值。",
+        ("候选明确引用已解锁扩展字段", "通过单因子筛选并形成可验证的组合边际证据"),
+        (
+            "使用仅已下载但未覆盖研究区的字段",
+            "一次混合多个无关数据机制",
+            "把字段新颖性当作收益证据",
+        ),
+    ),
+    DirectionDefinition(
         "EXPLORE_NEW_MECHANISM",
         "新机制探索",
         "在其他方向冷却或证据不足时探索未充分覆盖的经济机制。",
@@ -97,6 +119,7 @@ def diagnose_direction(
     *,
     blocked_directions: set[str],
     config: ResearchConfig,
+    data_experiment: dict[str, Any] | None = None,
 ) -> DirectionPlan:
     scores = {item.direction: 0.0 for item in DIRECTIONS}
     reasons: dict[str, list[str]] = {item.direction: [] for item in DIRECTIONS}
@@ -203,9 +226,62 @@ def diagnose_direction(
         reasons["EXPLORE_NEW_MECHANISM"].append("当前世代公开样本不足，优先扩充机制证据")
     scores["EXPLORE_NEW_MECHANISM"] += 1.0
 
-    available = [item for item in DIRECTIONS if item.direction not in blocked_directions]
+    data_experiment = data_experiment or {}
+    eligible_extended = sorted(
+        {str(field) for field in data_experiment.get("eligible_extended_fields", [])}
+    )
+    under_tested = sorted(
+        {str(field) for field in data_experiment.get("under_tested_fields", [])}
+        & set(eligible_extended)
+    )
+    recent_extended = int(data_experiment.get("recent_extended_experiments", 0) or 0)
+    mechanism_counts = {
+        str(key): int(value)
+        for key, value in data_experiment.get("mechanism_counts", {}).items()
+        if str(key) in MECHANISM_DOMAINS
+    }
+    target_mechanism = min(
+        MECHANISM_DOMAINS,
+        key=lambda mechanism: (
+            mechanism_counts.get(mechanism, 0),
+            MECHANISM_DOMAINS.index(mechanism),
+        ),
+    )
+    if eligible_extended:
+        scores["EXPLORE_EXTENDED_DATA"] += 34.0 if recent_extended == 0 else 8.0
+        if under_tested:
+            scores["EXPLORE_EXTENDED_DATA"] += min(16.0, 2.0 * len(under_tested))
+            reasons["EXPLORE_EXTENDED_DATA"].append(
+                f"{len(under_tested)} 个已解锁扩展字段尚无候选实验"
+            )
+        elif recent_extended == 0:
+            reasons["EXPLORE_EXTENDED_DATA"].append("扩展数据已解锁但近期尚未形成机制实验")
+        extended_domains = (
+            "VALUATION",
+            "ORDER_FLOW",
+            "CAPITALIZATION",
+            "TURNOVER_LIQUIDITY",
+        )
+        target_mechanism = min(
+            extended_domains,
+            key=lambda mechanism: (
+                mechanism_counts.get(mechanism, 0),
+                extended_domains.index(mechanism),
+            ),
+        )
+
+    available = [
+        item
+        for item in DIRECTIONS
+        if item.direction not in blocked_directions
+        and (item.direction != "EXPLORE_EXTENDED_DATA" or bool(eligible_extended))
+    ]
     if not available:
-        available = list(DIRECTIONS)
+        available = [
+            item
+            for item in DIRECTIONS
+            if item.direction != "EXPLORE_EXTENDED_DATA" or bool(eligible_extended)
+        ]
     winner = max(available, key=lambda item: (scores[item.direction], -_direction_index(item)))
     rationale = tuple(reasons[winner.direction]) or ("没有主导绝对缺口，执行受预算的新机制探索",)
     return DirectionPlan(
@@ -218,6 +294,11 @@ def diagnose_direction(
             ),
             "related_failure_counts": dict(sorted(failure_counts.items())),
             "blocked_by_cooldown": sorted(blocked_directions),
+            "eligible_extended_fields": eligible_extended,
+            "under_tested_extended_fields": under_tested,
+            "recent_extended_experiments": recent_extended,
+            "mechanism_counts": mechanism_counts,
+            "target_mechanism": target_mechanism,
             "all_direction_scores": {key: round(value, 6) for key, value in scores.items()},
         },
     )
@@ -231,6 +312,8 @@ def assess_direction_outcome(
     accepted: bool,
     candidate_eligible: bool,
     config: ResearchConfig,
+    candidate_fields: set[str] | None = None,
+    required_data_fields: set[str] | None = None,
 ) -> dict[str, Any]:
     changes: dict[str, float | None] = {}
 
@@ -254,6 +337,8 @@ def assess_direction_outcome(
 
     policy = config.evaluation
     adaptive = config.adaptive_direction
+    observed_fields = set(candidate_fields or set())
+    required_fields = set(required_data_fields or set())
     tests = {
         "RESTORE_STABILITY": (
             _at_most(dispersion_change, -policy.minimum_stability_dispersion_reduction)
@@ -291,9 +376,13 @@ def assess_direction_outcome(
                 <= policy.maximum_library_correlation
             )
         ),
+        "EXPLORE_EXTENDED_DATA": (candidate_eligible and bool(observed_fields & required_fields)),
         "EXPLORE_NEW_MECHANISM": candidate_eligible,
     }
-    direction_improved = bool(accepted and tests.get(direction, False))
+    exploratory_direction = direction in {"EXPLORE_EXTENDED_DATA", "EXPLORE_NEW_MECHANISM"}
+    direction_improved = bool(
+        tests.get(direction, False) and (candidate_eligible if exploratory_direction else accepted)
+    )
     unresolved = proposed.get("portfolio_proposed_absolute_failures")
     objective_resolved = bool(
         direction_improved and isinstance(unresolved, list) and not unresolved
@@ -306,6 +395,9 @@ def assess_direction_outcome(
         "objective_resolved": objective_resolved,
         "metric_changes": changes,
         "unresolved_absolute_gates": unresolved if isinstance(unresolved, list) else [],
+        "candidate_fields": sorted(observed_fields),
+        "required_data_fields": sorted(required_fields),
+        "required_data_field_used": bool(observed_fields & required_fields),
     }
 
 
@@ -314,6 +406,30 @@ def direction_definition(direction: str) -> DirectionDefinition:
         return _BY_ID[direction]
     except KeyError as error:
         raise ValueError(f"Unknown adaptive research direction: {direction}") from error
+
+
+def classify_mechanism(
+    *, fields: set[str], family: str = "", name: str = "", hypothesis: str = ""
+) -> str:
+    """Map a proposal to one stable economic mechanism before expensive evaluation."""
+    lowered = f"{family} {name} {hypothesis}".casefold()
+    if fields & {"pe", "pe_ttm", "pb", "ps", "ps_ttm", "dv_ratio", "dv_ttm"}:
+        return "VALUATION"
+    if any(field.startswith(("buy_", "sell_", "net_mf")) for field in fields):
+        return "ORDER_FLOW"
+    if fields & {"total_mv", "circ_mv", "total_share", "float_share", "free_share"}:
+        return "CAPITALIZATION"
+    if fields & {"turnover_rate", "turnover_rate_f", "volume_ratio"}:
+        return "TURNOVER_LIQUIDITY"
+    if any(token in lowered for token in ("reversal", "mean reversion", "反转", "均值回归")):
+        return "PRICE_REVERSAL"
+    if any(token in lowered for token in ("momentum", "trend", "动量", "趋势")):
+        return "MOMENTUM_TREND"
+    if any(token in lowered for token in ("volatility", "risk", "波动", "风险")):
+        return "VOLATILITY_RISK"
+    if fields & {"amount", "vol"}:
+        return "TURNOVER_LIQUIDITY"
+    return "OTHER_INTERPRETABLE"
 
 
 def _score_minimum_violation(

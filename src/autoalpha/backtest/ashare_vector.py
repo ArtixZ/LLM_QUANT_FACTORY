@@ -93,8 +93,27 @@ class AshareVectorBacktester:
         weights = np.zeros(signal.shape[1], dtype=float)
         equity = self.config.initial_cash_cny
         rows: list[dict[str, float]] = []
+        bankrupt = False
+        bankruptcy_date: str | None = None
 
         for position in active_positions:
+            if bankrupt:
+                rows.append(
+                    {
+                        "gross": 0.0,
+                        "net": 0.0,
+                        "stressed": 0.0,
+                        "turnover": 0.0,
+                        "buy_turnover": 0.0,
+                        "sell_turnover": 0.0,
+                        "transaction_cost": 0.0,
+                        "transaction_cost_cny": 0.0,
+                        "gross_exposure": 0.0,
+                        "position_count": 0.0,
+                        "rebalance": 0.0,
+                    }
+                )
+                continue
             transaction_cost = 0.0
             buy_turnover = 0.0
             sell_turnover = 0.0
@@ -117,9 +136,14 @@ class AshareVectorBacktester:
             stressed_return = gross_return - transaction_cost * self.config.cost_stress_multiplier
             growth = 1.0 + net_return
             if not math.isfinite(growth) or growth <= 0:
-                raise RuntimeError(
-                    f"strategy bankrupt after execution costs on {dates[position].date()}"
-                )
+                # Bankruptcy is a valid, terminal strategy outcome. Keep a tiny
+                # positive ledger balance so downstream annualization remains
+                # finite, then hold cash for the rest of the evaluation window.
+                net_return = -1.0 + 1e-12
+                stressed_return = max(-1.0 + 1e-12, stressed_return)
+                growth = 1e-12
+                bankrupt = True
+                bankruptcy_date = dates[position].date().isoformat()
             rows.append(
                 {
                     "gross": gross_return,
@@ -136,8 +160,11 @@ class AshareVectorBacktester:
                 }
             )
             equity *= growth
-            weights = weights * (1.0 + asset_returns) / growth
-            weights[~np.isfinite(weights) | (weights < 0)] = 0.0
+            if bankrupt:
+                weights.fill(0.0)
+            else:
+                weights = weights * (1.0 + asset_returns) / growth
+                weights[~np.isfinite(weights) | (weights < 0)] = 0.0
 
         path = pd.DataFrame(rows, index=dates[active_positions])
         equity_path = self.config.initial_cash_cny * (1.0 + path["net"]).cumprod()
@@ -148,7 +175,11 @@ class AshareVectorBacktester:
             path=path,
             equity=equity_path,
             drawdown=drawdown,
-            metrics=_metrics(path, equity_path, drawdown, self.config),
+            metrics={
+                **_metrics(path, equity_path, drawdown, self.config),
+                "bankrupt": bankrupt,
+                "bankruptcy_date": bankruptcy_date or "",
+            },
         )
 
     def _desired_weights(

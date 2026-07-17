@@ -20,12 +20,12 @@ def test_research_config_round_trip_and_stable_fingerprint() -> None:
     assert first == reordered
     assert len(first) == 64
     assert config.canonical_dict()["splits"]["test"]["start"] == "2025-01-02"
-    assert config.generation == "institutional_v7_ashare_dual_stage_20260717"
+    assert config.generation == "institutional_v8_ashare_long_only_primary_20260717"
     assert config.strategy_evaluation.engine_protocol == (
         "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
     )
     assert config.governance.protocol_version == (
-        "institutional_walkforward_v7_ashare_dual_stage"
+        "institutional_walkforward_v8_ashare_long_only_primary"
     )
     assert config.adaptive_direction.maximum_attempts_per_campaign == 3
     assert config.walk_forward.first_validation_year == 2015

@@ -17,10 +17,11 @@ from autoalpha.backtest.timing import entry_aligned_open_return
 from autoalpha.backtest.vector import VectorBacktestConfig, VectorBacktester
 from autoalpha.config import ResearchConfig
 from autoalpha.data.execution_basis import inspect_execution_data_basis
+from autoalpha.data.research_fields import field_definitions
 from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.dsl.compiler import FactorCompiler
 from autoalpha.dsl.expression import Expression, FactorDefinition
-from autoalpha.dsl.semantics import FieldDefinition, SemanticValidator
+from autoalpha.dsl.semantics import SemanticValidator
 from autoalpha.research.evaluation import cross_sectional_ic
 from autoalpha.research.multiple_testing import deflated_sharpe_ratio
 from autoalpha.research.statistics import hac_mean_inference
@@ -135,13 +136,11 @@ class MassiveVectorBatchEngine:
         self.workspace = inspect_data_workspace(config.data_path)
         self.workspace.require_price_research()
         self.execution_basis = inspect_execution_data_basis(Path(self.workspace.panel_path))
-        self.validator_fields = [
-            FieldDefinition("open", "price"),
-            FieldDefinition("close", "price"),
-            FieldDefinition("adj_close", "price"),
-            FieldDefinition("amount", self.execution_basis.amount_unit),
-            FieldDefinition("vol", self.execution_basis.volume_unit),
-        ]
+        self.validator_fields = field_definitions(
+            self.workspace.factor_fields,
+            amount_unit=self.execution_basis.amount_unit,
+            volume_unit=self.execution_basis.volume_unit,
+        )
         self.fields = self._load_fields()
         self.entry_returns = entry_aligned_open_return(self.fields["open"])
         self.windows = generate_step_windows(
@@ -391,14 +390,12 @@ class MassiveVectorBatchEngine:
         panel_path = Path(self.workspace.panel_path)
         load_start = pd.Timestamp(self.config.start_date) - pd.Timedelta(days=800)
         load_end = pd.Timestamp(self.config.end_date) + pd.Timedelta(days=10)
+        factor_columns = list(self.workspace.factor_fields)
         columns = [
             "trade_date",
             "ts_code",
             "open",
-            "close",
-            "adj_close",
-            "amount",
-            "vol",
+            *factor_columns,
             "is_valid_ohlc",
             "is_tradable_observation",
         ]
@@ -412,7 +409,7 @@ class MassiveVectorBatchEngine:
         data["trade_date"] = pd.to_datetime(data["trade_date"])
         data = data[(data["trade_date"] >= load_start) & (data["trade_date"] <= load_end)]
         valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
-        value_columns = ["open", "close", "adj_close", "amount", "vol"]
+        value_columns = ["open", *factor_columns]
         data.loc[~valid, value_columns] = np.nan
         fields = {
             name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
@@ -466,9 +463,7 @@ def summarize_path(path: pd.DataFrame) -> dict[str, Any]:
     wealth = (1.0 + net).cumprod()
     bankrupt = bool((net <= -1.0).any() or wealth.iloc[-1] <= 0)
     drawdown = (wealth / wealth.cummax() - 1.0).clip(lower=-1.0)
-    compound_return = (
-        -1.0 if bankrupt else float(wealth.iloc[-1] ** (245 / len(net)) - 1.0)
-    )
+    compound_return = -1.0 if bankrupt else float(wealth.iloc[-1] ** (245 / len(net)) - 1.0)
     return {
         "simple_annual_return": float(net.mean() * 245),
         "compound_annual_return": compound_return,

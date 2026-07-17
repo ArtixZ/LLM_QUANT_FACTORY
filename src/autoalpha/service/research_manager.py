@@ -13,6 +13,7 @@ from autoalpha.service.research_protocol import (
     panel_validation_fold_capacity,
     protocol_blockers,
     protocol_data_blockers,
+    research_evidence_tier,
     task_research_config,
 )
 from autoalpha.service.store import ServiceStore
@@ -114,6 +115,12 @@ class ResearchTaskManager:
             "protocol_hash": task.get("protocol_hash"),
             "protocol_revision": task.get("protocol_revision", 1),
             "walk_forward_capacity": fold_capacity,
+            "research_evidence_tier": (
+                research_evidence_tier(task_config) if task_config else None
+            ),
+            "production_promotion_allowed": bool(
+                task_config and research_evidence_tier(task_config) == "PRIMARY_DISCOVERY"
+            ),
             "public_range": (
                 {
                     "start": task_config.splits.train.start.isoformat(),

@@ -14,9 +14,10 @@ import pandas as pd
 from autoalpha.backtest.costs import ChinaAExecutionCosts
 from autoalpha.backtest.ledger import LedgerBacktester, LedgerConfig, LedgerResult
 from autoalpha.data.execution_basis import inspect_execution_data_basis
+from autoalpha.data.research_fields import field_definitions
 from autoalpha.dsl.compiler import FactorCompiler
 from autoalpha.dsl.expression import Expression, FactorDefinition
-from autoalpha.dsl.semantics import FieldDefinition, SemanticValidator
+from autoalpha.dsl.semantics import SemanticValidator
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # noqa: E402
@@ -183,12 +184,7 @@ def _compile_signal(factor: FactorDefinition, data: pd.DataFrame) -> pd.DataFram
         values.loc[~valid, name] = np.nan
         fields[name] = values.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
     validator = SemanticValidator(
-        [
-            FieldDefinition("close", "price"),
-            FieldDefinition("adj_close", "price"),
-            FieldDefinition("amount", "currency"),
-            FieldDefinition("vol", "shares"),
-        ],
+        field_definitions(data.columns, include_open=False),
         # Composite portfolios contain several independently validated factor trees.
         maximum_nodes=160,
         maximum_lookback=252,

@@ -19,6 +19,14 @@ def test_deflated_sharpe_penalizes_more_trials() -> None:
     assert many_trials.probability < few_trials.probability
 
 
+def test_deflated_sharpe_conservatively_scores_zero_variance_returns() -> None:
+    result = deflated_sharpe_ratio(np.zeros(100), trials=50)
+
+    assert result.observed_sharpe == 0.0
+    assert result.expected_max_sharpe > 0.0
+    assert result.probability == 0.0
+
+
 def test_pbo_is_high_when_in_sample_winners_reverse_out_of_sample() -> None:
     performance = np.array(
         [

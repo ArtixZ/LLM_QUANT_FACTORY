@@ -14,7 +14,13 @@ from typing import Any
 
 from autoalpha.config import ResearchConfig
 from autoalpha.data.execution_basis import expression_research_basis_blockers
+from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.research.batch_reevaluation import apply_batch_multiple_testing
+from autoalpha.service.canonical_evaluation import (
+    CANONICAL_LIBRARY_PROTOCOL,
+    canonical_library_config,
+    evaluate_canonical_library_factor,
+)
 from autoalpha.service.evaluator import PriceVolumeEvaluator
 from autoalpha.service.multifactor import _candidate_screen_failures, factor_from_pool_record
 from autoalpha.service.store import ServiceStore
@@ -94,11 +100,15 @@ def main() -> None:
         raise RuntimeError(
             f"Automated research must be stopped before batch reevaluation; state={state['state']}"
         )
-    config = ResearchConfig.from_toml(config_path)
     data_path = (
         args.data_path.expanduser().resolve()
         if args.data_path
         else Path(store.settings()["data_path"]).expanduser().resolve()
+    )
+    workspace = inspect_data_workspace(data_path)
+    config = canonical_library_config(
+        ResearchConfig.from_toml(config_path),
+        data_start=datetime.fromisoformat(workspace.first_trade_date).date(),
     )
     output_root = PROJECT_ROOT / "output/reevaluation" / config.governance.protocol_version
     checkpoint_path = (args.checkpoint or output_root / "checkpoint.json").resolve()
@@ -115,10 +125,11 @@ def main() -> None:
     if not records:
         raise RuntimeError("No factors were selected for reevaluation")
 
-    evaluator = PriceVolumeEvaluator(data_path, config_path)
+    evaluator = PriceVolumeEvaluator(data_path, config=config)
     evaluator.set_trial_count(len(all_records))
     metadata = {
         "protocol": config.governance.protocol_version,
+        "canonical_protocol": CANONICAL_LIBRARY_PROTOCOL,
         "generation": config.generation,
         "data_path": str(data_path),
         "data_fingerprint": evaluator.workspace.fingerprint,
@@ -126,6 +137,9 @@ def main() -> None:
         "factor_ids": [str(record["factor_id"]) for record in records],
         "candidate_family_size": len(all_records),
         "public_validation_end": config.splits.validation.end.isoformat(),
+        "public_validation_start": config.splits.validation.start.isoformat(),
+        "recent_evaluation_start": "2020-01-01",
+        "recent_evaluation_end": "2024-12-31",
         "hidden_period_accessed": False,
         "return_convention": "EOD_T__OPEN_T1_TO_OPEN_T2",
     }
@@ -148,10 +162,7 @@ def main() -> None:
         for record in records
         if not (
             results.get(str(record["factor_id"]))
-            and (
-                results[str(record["factor_id"])].get("metrics") is not None
-                or results[str(record["factor_id"])].get("error")
-            )
+            and results[str(record["factor_id"])].get("metrics") is not None
         )
     ]
     completed = len(records) - len(pending)
@@ -163,7 +174,7 @@ def main() -> None:
     def evaluate_record(record: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         thread_evaluator = getattr(local, "evaluator", None)
         if thread_evaluator is None:
-            thread_evaluator = PriceVolumeEvaluator(data_path, config_path)
+            thread_evaluator = PriceVolumeEvaluator(data_path, config=config)
             thread_evaluator.set_trial_count(len(all_records))
             thread_evaluator._fields = shared_fields
             local.evaluator = thread_evaluator
@@ -346,9 +357,14 @@ def _evaluate_record(
 ) -> tuple[str, dict[str, Any]]:
     started = datetime.now(UTC)
     try:
-        evaluation = evaluator.evaluate(factor_from_pool_record(record))
+        metrics = evaluate_canonical_library_factor(
+            evaluator,
+            factor_from_pool_record(record),
+            trials=evaluator.trial_count,
+            source_task_metrics=record.get("metrics"),
+        )
         result = {
-            "metrics": _json_ready(evaluation.metrics),
+            "metrics": _json_ready(metrics),
             "error": None,
             "elapsed_seconds": (datetime.now(UTC) - started).total_seconds(),
         }
