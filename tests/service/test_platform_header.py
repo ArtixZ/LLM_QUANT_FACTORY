@@ -25,6 +25,11 @@ def test_every_platform_page_loads_the_shared_header() -> None:
         markup = (STATIC / filename).read_text(encoding="utf-8")
         assert "/static/platform_header.css" in markup, filename
         assert "/static/platform_header.js" in markup, filename
+        assert markup.count("/static/platform_header.js") == 1, filename
+        header_end = markup.index("</header>")
+        shared_script = markup.index("/static/platform_header.js")
+        main_start = markup.index("<main")
+        assert header_end < shared_script < main_start, filename
 
 
 def test_shared_header_is_the_single_canonical_navigation_source() -> None:
