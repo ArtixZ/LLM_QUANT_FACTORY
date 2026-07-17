@@ -80,6 +80,27 @@ def test_manual_and_hybrid_factor_scope_preserve_user_intent(tmp_path: Path) -> 
     assert hybrid[0]["required"] is True
 
 
+def test_contaminated_factor_remains_available_with_audit_marker(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    backtest_id = store.create_manual_backtest({"factor_ids": ["F_1"]})
+    store.record_manual_research_exposures(
+        backtest_id=backtest_id,
+        generation_id="test-generation",
+        factor_ids=["F_1"],
+        period_start="2025-01-01",
+        period_end="2026-01-01",
+        holdout_start="2025-01-01",
+        holdout_end="2026-12-31",
+    )
+    snapshot = build_factor_snapshot(
+        store,
+        {"mode": "MANUAL", "factor_ids": ["F_1"]},
+        DEFAULT_CONSTRUCTION,
+    )
+    assert [item["factor_id"] for item in snapshot] == ["F_1"]
+    assert snapshot[0]["holdout_contaminated"] is True
+
+
 def test_combine_store_persists_task_experiment_and_strategy(tmp_path: Path) -> None:
     base = _store(tmp_path)
     store = AutoCombineStore(base)

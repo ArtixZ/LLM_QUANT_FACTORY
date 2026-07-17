@@ -175,7 +175,7 @@ function renderExperiments(experiments, frontier, snapshot) {
 function renderSnapshot(snapshot) {
   $("snapshotCount").textContent = `${snapshot.length} 个因子`;
   $("snapshotList").innerHTML = snapshot.map((item, index) => `
-    <div class="snapshot-item"><code>#${index + 1}</code><strong title="${esc(item.factor_id)}">${esc(item.name)}</strong><span>${esc(item.family)}${item.required ? " · 必选" : ""}</span><span>${number(item.prefilter_score, 2)}</span></div>`).join("");
+    <div class="snapshot-item ${item.holdout_contaminated ? "contaminated" : ""}"><code>#${index + 1}</code><strong title="${esc(item.factor_id)}">${esc(item.name)}</strong><span>${esc(item.family)}${item.required ? " · 必选" : ""}${item.holdout_contaminated ? " · 污染" : ""}</span><span>${number(item.prefilter_score, 2)}</span></div>`).join("");
 }
 
 function renderLogs() {
@@ -258,7 +258,7 @@ function fillTaskDefaults() {
     return `<option value="${esc(task.task_id)}" selected>${esc(task.name)} · ${esc(statusLabel(task.status))} · ${Number(counts.total || 0)} 因子</option>`;
   }).join("");
   $("formObjectiveProfile").innerHTML = state.bootstrap.objective_presets.map((preset) => `<option value="${esc(preset.profile)}">${esc(preset.label)}</option>`).join("");
-  $("formObjectiveProfile").value = "ROBUST_ACTIVE_LONG_ONLY";
+  $("formObjectiveProfile").value = "DRAWDOWN_FIRST";
   applyObjectivePreset();
   renderFactorPicker();
 }
@@ -301,7 +301,7 @@ function renderFactorPicker() {
     <label class="picker-row ${state.factorSelection.has(factor.factor_id) ? "selected" : ""}">
       <input type="checkbox" data-picker-id="${esc(factor.factor_id)}" ${state.factorSelection.has(factor.factor_id) ? "checked" : ""} ${mode === "SMART" ? "disabled" : ""}>
       <span><strong>${esc(factor.name)}</strong><code>${esc(factor.factor_id)} · ${esc(sourceNames.get(factor.source_task_id) || factor.source_task_id || "--")}</code></span>
-      <span><b>${esc(factor.mechanism || factor.family)}</b><small>${esc(factor.status)}</small></span>
+      <span><b>${esc(factor.mechanism || factor.family)}</b><small>${esc(factor.status)}${factor.holdout_contaminated ? " · 污染可用" : ""}</small></span>
       <span><b>${number(factor.sharpe)}</b><small>${percent(factor.annual_return)}</small></span>
     </label>`).join("") || `<div class="empty-line">没有匹配因子</div>`;
   document.querySelectorAll("[data-picker-id]").forEach((input) => {

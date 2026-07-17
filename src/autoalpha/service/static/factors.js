@@ -71,13 +71,23 @@ function bindLibraryControls() {
     const factors = [...libraryState.selected].join(",");
     window.location.href = `/backtest?factors=${encodeURIComponent(factors)}`;
   };
-  document.getElementById("openAutoCombine").onclick = () => {
+  document.getElementById("openAutoCombine").onclick = async () => {
     const factors = [...libraryState.selected];
     if (!factors.length) return;
-    const url = new URL("http://127.0.0.1:8888/");
-    url.searchParams.set("factors", factors.join(","));
-    url.searchParams.set("scope", "MANUAL");
-    window.open(url.toString(), "_blank", "noopener");
+    const button = document.getElementById("openAutoCombine");
+    button.disabled = true;
+    try {
+      const result = await api("/api/autocombine/quick-task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ factor_ids: factors, objective_profile: document.getElementById("quickObjectiveProfile").value, maximum_factors: 5, start_immediately: true }),
+      });
+      toast(result.started ? "组合优化任务已创建并启动" : "任务已创建，等待在 AutoCombine 启动");
+      window.location.href = result.task_url;
+    } catch (error) {
+      toast(error.message, true);
+      button.disabled = false;
+    }
   };
   document.getElementById("selectVisible").addEventListener("change", event => {
     filteredFactors().forEach(factor => {
@@ -486,8 +496,8 @@ function latexNumber(value) { const parsed = Number(value); return Number.isFini
 async function copyDetailText(label, value) { if (!value) return; try { await navigator.clipboard.writeText(value); toast(`${label} 已复制`); } catch (_) { toast(`无法复制 ${label}`, true); } }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "--" : date.toLocaleString("zh-CN", { hour12: false }); }
 
-async function api(path) {
-  const response = await fetch(path, { credentials: "same-origin", cache: "no-store" });
+async function api(path, options = {}) {
+  const response = await fetch(path, { credentials: "same-origin", cache: "no-store", ...options });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || `HTTP ${response.status}`);

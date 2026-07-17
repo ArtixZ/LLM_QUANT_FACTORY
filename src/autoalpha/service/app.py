@@ -6,6 +6,8 @@ import hashlib
 import hmac
 import json
 import os
+import urllib.error
+import urllib.request
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -30,6 +32,15 @@ from autoalpha.data.research_fields import build_research_data_capabilities
 from autoalpha.data.tushare_catalog import DEFAULT_PRODUCT_IDS, resolve_products
 from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.portfolio.products import product_template, product_template_catalog
+from autoalpha.service.autocombine import (
+    DEFAULT_BUDGET,
+    DEFAULT_CONSTRUCTION,
+    OBJECTIVE_PRESETS,
+)
+from autoalpha.service.autocombine import (
+    create_task_record as create_combine_task_record,
+)
+from autoalpha.service.autocombine_store import AutoCombineStore
 from autoalpha.service.canonical_evaluation import CANONICAL_LIBRARY_PROTOCOL
 from autoalpha.service.credentials import SystemCredentialStore
 from autoalpha.service.data_center import build_data_center_snapshot
@@ -318,6 +329,25 @@ class FactorScreenRequest(BaseModel):
         return value
 
 
+class QuickAutoCombineRequest(BaseModel):
+    factor_ids: list[str] = Field(min_length=1, max_length=100)
+    objective_profile: Literal[
+        "ROBUST_ACTIVE_LONG_ONLY",
+        "DRAWDOWN_FIRST",
+        "PORTFOLIO_SHARPE_FIRST",
+        "ABSOLUTE_LONG_ONLY",
+        "LOW_TURNOVER",
+        "DIVERSIFICATION_FIRST",
+    ] = "DRAWDOWN_FIRST"
+    maximum_factors: int = Field(default=5, ge=1, le=12)
+    start_immediately: bool = True
+
+    @field_validator("factor_ids")
+    @classmethod
+    def unique_factors(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+
 class PaperPortfolioRequest(FactorScreenRequest):
     name: str = Field(min_length=1, max_length=80)
     initial_cash_cny: float = Field(default=1_000_000, ge=10_000, le=10_000_000_000)
@@ -361,6 +391,7 @@ class LifecycleTransitionRequest(BaseModel):
 
 
 store = ServiceStore(RUNTIME_ROOT / "autoalpha.sqlite3")
+combine_store = AutoCombineStore(store)
 vault = SecretVault(credential_store=SystemCredentialStore())
 research_manager = ResearchTaskManager(
     store,
@@ -551,6 +582,21 @@ def _factor_source_context(
             detail=f"The current screener and backtest engines do not support market {market}",
         )
     return Path(data_path), market, task_ids
+
+
+def _start_autocombine_task(task_id: str) -> tuple[bool, str | None]:
+    base_url = os.getenv("AUTOCOMBINE_URL", "http://127.0.0.1:8888").rstrip("/")
+    request = urllib.request.Request(
+        f"{base_url}/api/tasks/{task_id}/start",
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5):  # noqa: S310
+            return True, None
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        return False, f"{type(error).__name__}: {error}"
 
 
 def _backfill_task_protocols() -> None:
@@ -1248,6 +1294,108 @@ async def factor_library(response: Response) -> dict[str, Any]:
         "contaminated_factor_count": len(contamination),
     }
     return library
+
+
+@app.post("/api/autocombine/quick-task", dependencies=[Depends(_authorized)])
+async def quick_autocombine_task(payload: QuickAutoCombineRequest) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for factor_id in payload.factor_ids:
+        record = store.factor_pool_record(factor_id)
+        if record is None:
+            missing.append(factor_id)
+        else:
+            records.append(record)
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Factors not found: {', '.join(missing)}")
+    try:
+        data_path, market, task_ids = _factor_source_context(records)
+        workspace = inspect_data_workspace(data_path)
+        protocol = default_task_protocol(
+            workspace.first_trade_date,
+            workspace.last_trade_date,
+            ResearchConfig.from_toml(CONFIG_PATH),
+        )
+        capacity = panel_validation_fold_capacity(protocol, Path(workspace.panel_path))
+        if int(capacity["maximum_folds"]) > 0:
+            protocol["minimum_folds"] = min(
+                int(protocol["minimum_folds"]), int(capacity["maximum_folds"])
+            )
+        blockers = protocol_blockers(
+            protocol,
+            data_start=workspace.first_trade_date,
+            data_end=workspace.last_trade_date,
+        )
+        blockers.extend(protocol_data_blockers(protocol, Path(workspace.panel_path)))
+        if blockers:
+            raise ValueError("；".join(blockers))
+        factor_count = len(records)
+        maximum_factors = min(payload.maximum_factors, factor_count)
+        minimum_factors = min(2, maximum_factors)
+        construction = {
+            **DEFAULT_CONSTRUCTION,
+            "min_factors": minimum_factors,
+            "max_factors": maximum_factors,
+            "candidate_pool_limit": max(5, min(100, factor_count)),
+        }
+        objective = {
+            key: value
+            for key, value in OBJECTIVE_PRESETS[payload.objective_profile].items()
+            if key not in {"label", "description"}
+        }
+        record = create_combine_task_record(
+            store,
+            name=f"因子库快速组合 · {factor_count} 因子",
+            market=market,
+            data_path=str(data_path),
+            protocol=protocol,
+            scope={
+                "mode": "MANUAL",
+                "factor_ids": payload.factor_ids,
+                "required_factor_ids": [],
+                "excluded_factor_ids": [],
+                "source_task_ids": task_ids,
+                "statuses": [],
+                "families": [],
+            },
+            construction=construction,
+            objective=objective,
+            budget=DEFAULT_BUDGET,
+            notes="由 AutoAlpha 因子库多选快速创建。",
+        )
+        task = combine_store.create_task(record)
+    except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    contaminated_count = sum(
+        bool(item.get("holdout_contaminated")) for item in task["factor_snapshot"]
+    )
+    combine_store.event(
+        task["task_id"],
+        "action",
+        "QUICK_COMBINE_TASK_CREATED",
+        "因子库快速组合已创建",
+        f"已冻结 {factor_count} 个手动候选，其中 {contaminated_count} 个带污染标记。",
+        level="WARN" if contaminated_count else "INFO",
+        payload={
+            "factor_ids": payload.factor_ids,
+            "objective_profile": payload.objective_profile,
+            "contaminated_count": contaminated_count,
+        },
+    )
+    started = False
+    start_error = None
+    if payload.start_immediately:
+        started, start_error = await asyncio.to_thread(
+            _start_autocombine_task, str(task["task_id"])
+        )
+    return {
+        "task_id": task["task_id"],
+        "task_url": f"http://127.0.0.1:8888/tasks/{task['task_id']}",
+        "factor_count": factor_count,
+        "contaminated_count": contaminated_count,
+        "started": started,
+        "start_error": start_error,
+    }
 
 
 @app.post("/api/screener", dependencies=[Depends(_authorized)])

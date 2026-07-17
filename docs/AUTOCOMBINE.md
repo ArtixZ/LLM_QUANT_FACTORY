@@ -22,6 +22,11 @@ resolved runtime path, task count, factor count, and factor-registry fingerprint
 ## Research Contract
 
 - A task freezes the data protocol, factor definitions, source lineage, and factor universe.
+- The task-creation UI defaults to `DRAWDOWN_FIRST`; operators can switch the objective preset
+  before creating a task without changing prior experiment history.
+- Holdout-contaminated factors remain available for exploratory combination research. Their
+  snapshot and event records carry an explicit contamination marker and cannot be represented as
+  fresh blind evidence.
 - V1 supports static A-share long-only composite signals with non-negative factor weights.
 - Factor direction is inherited from AutoAlpha and cannot be flipped inside AutoCombine.
 - The LLM proposes an existing factor subset and a mechanism hypothesis. It cannot create code,
@@ -46,6 +51,9 @@ Only a blind-passing candidate can be registered as a `QUALIFIED` StrategySpec. 
 production promotion remain separate lifecycle decisions.
 
 ## Main APIs
+
+- `POST /api/autocombine/quick-task` on AutoAlpha creates a manual factor snapshot from the factor
+  library selection and asks AutoCombine to start it immediately.
 
 ```text
 GET    /api/bootstrap

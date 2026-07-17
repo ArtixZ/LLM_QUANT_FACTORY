@@ -129,7 +129,7 @@ def build_factor_snapshot(
     for record in store.factor_pool(limit=5000):
         factor_id = str(record["factor_id"])
         available_ids.add(factor_id)
-        if factor_id in excluded or factor_id in contaminated:
+        if factor_id in excluded:
             continue
         selected_directly = factor_id in explicit or factor_id in required
         if mode == "MANUAL" and factor_id not in explicit:
@@ -174,6 +174,7 @@ def build_factor_snapshot(
                 "metrics": record.get("metrics") or {},
                 "prefilter_score": _prefilter_score(record.get("metrics") or {}),
                 "required": factor_id in required,
+                "holdout_contaminated": factor_id in contaminated,
             }
         )
     requested = explicit | required
@@ -182,7 +183,7 @@ def build_factor_snapshot(
         raise ValueError(f"因子不存在：{', '.join(sorted(unknown))}")
     missing = requested - {item["factor_id"] for item in records}
     if missing:
-        raise ValueError(f"因子不可用于组合研究（污染或表达式无效）：{', '.join(sorted(missing))}")
+        raise ValueError(f"因子表达式无效，无法用于组合研究：{', '.join(sorted(missing))}")
     records.sort(key=lambda item: item["prefilter_score"], reverse=True)
     limit = int(construction.get("candidate_pool_limit", 30))
     if mode == "MANUAL":

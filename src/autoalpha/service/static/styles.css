@@ -320,7 +320,8 @@ details pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow
 .research-status.failed { color: #a73632; background: #fff0ef; }
 .research-status.running { color: #2858a7; background: #eaf2ff; }
 .table-empty { margin: 0; padding: 24px; color: var(--muted); text-align: center; }
-.selection-dock { position: fixed; left: 50%; bottom: 18px; z-index: 8; width: min(980px, calc(100% - 28px)); min-height: 58px; padding: 9px 11px; transform: translateX(-50%); display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: 12px; border: 1px solid #abb9ce; border-radius: 6px; background: #fff; box-shadow: 0 12px 35px rgba(31,42,61,.18); }
+.selection-dock { position: fixed; left: 50%; bottom: 18px; z-index: 8; width: min(1120px, calc(100% - 28px)); min-height: 58px; padding: 9px 11px; transform: translateX(-50%); display: grid; grid-template-columns: auto minmax(0, 1fr) auto 150px auto auto; align-items: center; gap: 12px; border: 1px solid #abb9ce; border-radius: 6px; background: #fff; box-shadow: 0 12px 35px rgba(31,42,61,.18); }
+.selection-dock select { height: 34px; margin: 0; font-size: 9px; }
 .selection-dock > div:first-child { min-width: 72px; }
 .selection-dock strong { margin-right: 4px; color: var(--blue); font-size: 18px; }
 .selection-dock span, #selectedNames { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -560,6 +561,9 @@ details pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow
   .selection-dock { grid-template-columns: auto minmax(0, 1fr) auto; }
   .selection-dock #selectedNames { grid-column: 1 / -1; grid-row: 2; }
   .selection-dock #clearSelection { display: none; }
+  .selection-dock #quickObjectiveProfile { width: 100%; grid-column: 1 / 3; grid-row: 3; }
+  .selection-dock #openAutoCombine { grid-column: 3; grid-row: 3; }
+  .selection-dock #openBacktest { grid-column: 1 / -1; grid-row: 4; }
   .backtest-shell { grid-template-columns: minmax(0, 1fr); padding: 10px; }
   .backtest-config { position: static; max-height: none; }
   .backtest-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }

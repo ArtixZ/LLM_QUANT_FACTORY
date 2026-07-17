@@ -119,7 +119,8 @@
     <div><strong id="selectedCount">0</strong><span>个因子已选</span></div>
     <div id="selectedNames"></div>
     <button class="button" id="clearSelection"><i data-lucide="x"></i>清空</button>
-    <button class="button" id="openAutoCombine"><i data-lucide="network"></i>优化组合</button>
+    <select id="quickObjectiveProfile" aria-label="快速组合优化目标" title="快速组合优化目标"><option value="DRAWDOWN_FIRST" selected>降低回撤优先</option><option value="PORTFOLIO_SHARPE_FIRST">组合夏普优先</option><option value="ROBUST_ACTIVE_LONG_ONLY">稳健均衡</option><option value="ABSOLUTE_LONG_ONLY">年化收益优先</option><option value="LOW_TURNOVER">低换手优先</option><option value="DIVERSIFICATION_FIRST">分散化优先</option></select>
+    <button class="button" id="openAutoCombine" title="按当前目标立即创建并启动 AutoCombine 任务"><i data-lucide="network"></i>快速优化</button>
     <button class="button primary" id="openBacktest"><i data-lucide="play"></i>组合回测</button>
   </div>
   <dialog class="factor-detail-dialog" id="factorDetailDialog" aria-labelledby="factorDetailTitle">
@@ -136,7 +137,7 @@
   </dialog>
   <div id="toast" role="status"></div>
   <script>window.MathJax = { tex: { displayMath: [["\\[", "\\]"]] }, startup: { typeset: false } };</script>
-  <script src="/static/factors.js?v=20260718-autocombine-v1"></script>
+  <script src="/static/factors.js?v=20260718-quick-combine-v2"></script>
   <script async src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" onload="window.lucide&&window.lucide.createIcons()"></script>
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" onload="window.dispatchEvent(new Event('mathjax-ready'))"></script>
 </body>

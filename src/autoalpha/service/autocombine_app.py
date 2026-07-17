@@ -94,7 +94,7 @@ class ObjectiveSpec(BaseModel):
         "ABSOLUTE_LONG_ONLY",
         "LOW_TURNOVER",
         "DIVERSIFICATION_FIRST",
-    ] = "ROBUST_ACTIVE_LONG_ONLY"
+    ] = "DRAWDOWN_FIRST"
     preset_version: int = 1
     minimum_coverage: float = Field(default=0.80, ge=0, le=1)
     minimum_positive_fold_fraction: float = Field(default=0.50, ge=0, le=1)
@@ -237,6 +237,7 @@ async def bootstrap() -> dict[str, Any]:
     except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError):
         pass
     records = base_store.factor_pool(limit=5000)
+    contaminated_ids = base_store.contaminated_factor_ids()
     factors = [
         {
             "factor_id": record["factor_id"],
@@ -250,6 +251,7 @@ async def bootstrap() -> dict[str, Any]:
             "sharpe": (record.get("metrics") or {}).get("long_only_sharpe_ratio"),
             "annual_return": (record.get("metrics") or {}).get("long_only_simple_annual_return"),
             "max_drawdown": (record.get("metrics") or {}).get("long_only_max_drawdown"),
+            "holdout_contaminated": record["factor_id"] in contaminated_ids,
         }
         for record in records
     ]
@@ -338,12 +340,16 @@ async def create_task(payload: CombineTaskRequest) -> dict[str, Any]:
         task = combine_store.create_task(record)
     except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    contaminated_count = sum(
+        bool(item.get("holdout_contaminated")) for item in task["factor_snapshot"]
+    )
     combine_store.event(
         task["task_id"],
         "action",
         "COMBINE_TASK_CREATED",
         "AutoCombine 任务已创建",
-        f"已冻结 {task['factor_count']} 个可见因子，快照 {task['snapshot_hash'][:12]}。",
+        f"已冻结 {task['factor_count']} 个可见因子，快照 {task['snapshot_hash'][:12]}。"
+        + (f" 其中 {contaminated_count} 个因子带隐藏期污染标记。" if contaminated_count else ""),
         payload={"snapshot_hash": task["snapshot_hash"], "factor_count": task["factor_count"]},
     )
     return _task_view(task)
@@ -376,6 +382,7 @@ async def task_detail(task_id: str) -> dict[str, Any]:
                 "source_task_id": item["source_task_id"],
                 "prefilter_score": item["prefilter_score"],
                 "required": item.get("required", False),
+                "holdout_contaminated": item.get("holdout_contaminated", False),
             }
             for item in task["factor_snapshot"]
         ],

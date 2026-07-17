@@ -105,6 +105,7 @@
 .snapshot-item { padding: 8px 11px; display: grid; grid-template-columns: 44px minmax(130px, 1fr) minmax(90px, .7fr) 70px; gap: 8px; border-bottom: 1px solid #edf0f4; align-items: center; }
 .snapshot-item code, .snapshot-item span { color: var(--muted); font-size: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .snapshot-item strong { font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snapshot-item.contaminated { box-shadow: inset 3px 0 #d58a18; background: #fffaf0; }
 .log-tabs { padding: 6px 11px; display: flex; gap: 4px; border-bottom: 1px solid var(--line); background: #fbfcfd; }
 .log-tabs button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; font-size: 9px; }
 .log-tabs button.active { color: #fff; background: var(--ink); }
