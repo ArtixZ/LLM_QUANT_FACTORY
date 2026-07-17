@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
+from autoalpha.backtest.ashare_vector import (
+    ASHARE_PROXY_RETURN_CONVENTION,
+    AshareVectorBacktester,
+    AshareVectorConfig,
+)
 from autoalpha.backtest.timing import (
     EOD_NEXT_OPEN_RETURN_CONVENTION,
     next_open_return_for_eod_signal,
@@ -72,6 +80,10 @@ class PriceVolumeEvaluator:
         self.compiler = FactorCompiler(self.validator)
         self._fields: dict[str, pd.DataFrame] | None = None
         self._signal_cache: dict[str, pd.DataFrame] = {}
+        self._portfolio_path_cache: OrderedDict[
+            tuple[tuple[str, float], ...], tuple[pd.DataFrame, pd.DataFrame]
+        ] = OrderedDict()
+        self._portfolio_path_cache_lock = Lock()
         self.trial_count = 1
 
     def set_trial_count(self, value: int) -> None:
@@ -202,19 +214,21 @@ class PriceVolumeEvaluator:
         benchmark_factors: list[FactorDefinition] | None = None,
         benchmark_weights: list[float] | tuple[float, ...] | None = None,
     ) -> PortfolioEvaluation:
-        """Evaluate a weighted factor composite against the currently active composite."""
+        """Evaluate alpha diagnostics and the deployable A-share portfolio separately."""
         if not factors:
             raise ValueError("A portfolio requires at least one factor")
         normalized_weights = _normalize_weights(factors, weights)
-        proposed_all = self._portfolio_path(factors, normalized_weights)
+        alpha_all, proposed_all = self._portfolio_paths(factors, normalized_weights)
         evaluation_dates = _walk_forward_dates(proposed_all.index, self.config)
         proposed = proposed_all.loc[evaluation_dates].copy()
         proposed.attrs.update(proposed_all.attrs)
+        alpha_proposed = alpha_all.reindex(evaluation_dates).dropna().copy()
+        alpha_proposed.attrs.update(alpha_all.attrs)
         benchmark = (
-            self._portfolio_path(
+            self._portfolio_paths(
                 benchmark_factors,
                 _normalize_weights(benchmark_factors, benchmark_weights),
-            ).reindex(proposed.index)
+            )[1].reindex(proposed.index)
             if benchmark_factors
             else pd.DataFrame(
                 {
@@ -234,6 +248,8 @@ class PriceVolumeEvaluator:
         )
         annual = annual_robustness(proposed["net"])
         folds = _walk_forward_metrics(proposed, self.config)
+        alpha_annual = annual_robustness(alpha_proposed["net"])
+        alpha_folds = _walk_forward_metrics(alpha_proposed, self.config)
         inference = hac_mean_inference(proposed["net"].to_numpy(), lags=min(5, len(proposed) - 1))
         dsr = deflated_sharpe_ratio(proposed["net"].to_numpy(), trials=self.trial_count)
         correlations = self._factor_correlations(factors)
@@ -293,7 +309,45 @@ class PriceVolumeEvaluator:
             "portfolio_holding_period_days": self.config.portfolio.holding_period_days,
             "portfolio_signal_availability": "END_OF_DAY_AFTER_CLOSE",
             "portfolio_execution_lag_sessions": 1,
-            "portfolio_return_convention": EOD_NEXT_OPEN_RETURN_CONVENTION,
+            "portfolio_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+            "portfolio_strategy_gate_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+            "portfolio_strategy_scope": "PUBLIC_VALIDATION_EXECUTION_PROXY",
+            "portfolio_mode": "long_only",
+            "portfolio_execution_protocol": self.config.strategy_evaluation.engine_protocol,
+            "portfolio_execution_data_mode": (
+                self.config.strategy_evaluation.execution_data_mode
+            ),
+            "portfolio_rebalance_schedule": (
+                self.config.strategy_evaluation.rebalance_schedule
+            ),
+            "portfolio_target_gross_exposure": (
+                self.config.strategy_evaluation.gross_exposure
+            ),
+            "portfolio_maximum_positions": (
+                self.config.strategy_evaluation.maximum_positions
+            ),
+            "portfolio_initial_cash_cny": (
+                self.config.strategy_evaluation.initial_cash_cny
+            ),
+            "portfolio_average_gross_exposure": float(
+                proposed.attrs.get("average_gross_exposure", 0.0)
+            ),
+            "portfolio_average_positions": float(
+                proposed.attrs.get("average_positions", 0.0)
+            ),
+            "portfolio_maximum_observed_positions": int(
+                proposed.attrs.get("maximum_observed_positions", 0)
+            ),
+            "portfolio_rebalance_count": int(proposed.attrs.get("rebalance_count", 0)),
+            "portfolio_total_transaction_cost_cny": float(
+                proposed.attrs.get("total_transaction_cost_cny", 0.0)
+            ),
+            "portfolio_production_eligible": False,
+            "portfolio_production_blockers": [
+                "non-PIT historical ST, listing, delisting and suspension state",
+                "opening eligibility uses a price-limit proxy",
+                "vector weights approximate board lots and cash",
+            ],
             "portfolio_walk_forward_folds": folds,
             "portfolio_walk_forward_fold_count": len(folds),
             "portfolio_walk_forward_positive_fraction": float(
@@ -309,11 +363,58 @@ class PriceVolumeEvaluator:
             "portfolio_net_return_hac_p_value": inference.p_value,
             "portfolio_deflated_sharpe_probability": dsr.probability,
             "portfolio_multiple_testing_trials": self.trial_count,
+            "alpha_diagnostic_scope": "NON_INVESTABLE_LONG_SHORT",
+            "alpha_diagnostic_sharpe_ratio": _annualized_ir(alpha_proposed["net"]),
+            "alpha_diagnostic_simple_annual_return": float(
+                alpha_proposed["net"].mean() * 245
+            ),
+            "alpha_diagnostic_compound_annual_return": _compound_annual_return(
+                alpha_proposed["net"]
+            ),
+            "alpha_diagnostic_max_drawdown": _max_drawdown(alpha_proposed["net"]),
+            "alpha_diagnostic_cost_stress_net_ir": _annualized_ir(
+                alpha_proposed["stressed"]
+            ),
+            "alpha_diagnostic_annual_turnover": float(
+                alpha_proposed["turnover"].mean() * 245
+            ),
+            "alpha_diagnostic_positive_year_ratio": alpha_annual.positive_year_ratio,
+            "alpha_diagnostic_annual_return_dispersion": (
+                alpha_annual.annual_return_dispersion
+            ),
+            "alpha_diagnostic_walk_forward_folds": alpha_folds,
+            "alpha_diagnostic_walk_forward_worst_sharpe": float(
+                min(fold["sharpe"] for fold in alpha_folds)
+            ),
+            "alpha_diagnostic_return_convention": EOD_NEXT_OPEN_RETURN_CONVENTION,
         }
         numeric = [value for value in metrics.values() if isinstance(value, int | float)]
         if not all(np.isfinite(value) for value in numeric):
             raise ValueError("Portfolio evaluation produced non-finite metrics")
         return PortfolioEvaluation(metrics, proposed["net"], correlations)
+
+    def _portfolio_paths(
+        self,
+        factors: list[FactorDefinition],
+        weights: tuple[float, ...],
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        key = tuple(
+            (factor.factor_id, round(weight, 12))
+            for factor, weight in zip(factors, weights, strict=True)
+        )
+        with self._portfolio_path_cache_lock:
+            cached = self._portfolio_path_cache.get(key)
+            if cached is not None:
+                self._portfolio_path_cache.move_to_end(key)
+                return cached
+        alpha_path = self._alpha_portfolio_path(factors, weights)
+        strategy_path = self._strategy_portfolio_path(factors, weights)
+        with self._portfolio_path_cache_lock:
+            self._portfolio_path_cache[key] = (alpha_path, strategy_path)
+            self._portfolio_path_cache.move_to_end(key)
+            while len(self._portfolio_path_cache) > 256:
+                self._portfolio_path_cache.popitem(last=False)
+        return alpha_path, strategy_path
 
     def _factor_signal(self, factor: FactorDefinition) -> pd.DataFrame:
         cached = self._signal_cache.get(factor.factor_id)
@@ -334,7 +435,7 @@ class PriceVolumeEvaluator:
         for factor in factors:
             self._factor_signal(factor)
 
-    def _portfolio_path(
+    def _alpha_portfolio_path(
         self,
         factors: list[FactorDefinition],
         weights: list[float] | tuple[float, ...] | None = None,
@@ -368,12 +469,88 @@ class PriceVolumeEvaluator:
                 "turnover": turnover,
             }
         ).dropna()
-        selected_amount = self._load_fields()["amount"].where(positions.ne(0)).median(axis=1) * 1000
+        selected_amount = self._load_fields()["amount"].where(positions.ne(0)).median(axis=1)
         result.attrs["capacity_cny"] = float(
             selected_amount.median() * self.config.costs.max_adv_participation * 20
         )
         result.attrs["coverage"] = self._dynamic_coverage(composite)
         return result
+
+    def _strategy_portfolio_path(
+        self,
+        factors: list[FactorDefinition],
+        weights: list[float] | tuple[float, ...] | None = None,
+    ) -> pd.DataFrame:
+        strategy = self.config.strategy_evaluation
+        if not strategy.enabled:
+            raise RuntimeError("A-share strategy evaluation is disabled")
+        self.execution_basis.require_capital_ledger_proxy()
+        normalized_weights = _normalize_weights(factors, weights)
+        signals = [self._factor_signal(factor) for factor in factors]
+        composite = signals[0] * normalized_weights[0]
+        for signal, weight in zip(signals[1:], normalized_weights[1:], strict=True):
+            composite = composite + signal * weight
+        fields = self._load_fields()
+        missing = [
+            name
+            for name in ("raw_open", "can_buy_open_proxy", "can_sell_open_proxy")
+            if name not in fields
+        ]
+        if missing:
+            raise RuntimeError(f"A-share strategy proxy fields are missing: {missing}")
+        result = AshareVectorBacktester(
+            AshareVectorConfig(
+                initial_cash_cny=strategy.initial_cash_cny,
+                gross_exposure=strategy.gross_exposure,
+                selection_fraction=strategy.selection_fraction,
+                maximum_positions=strategy.maximum_positions,
+                rebalance_schedule=strategy.rebalance_schedule,  # type: ignore[arg-type]
+                commission_bps_each_side=strategy.commission_bps_each_side,
+                stamp_duty_bps_sell=strategy.stamp_duty_bps_sell,
+                transfer_fee_bps_each_side=strategy.transfer_fee_bps_each_side,
+                minimum_commission_cny=strategy.minimum_commission_cny,
+                slippage_bps_each_side=strategy.slippage_bps_each_side,
+                use_historical_fee_schedule=strategy.use_historical_fee_schedule,
+                cost_stress_multiplier=strategy.cost_stress_multiplier,
+            )
+        ).run(
+            composite,
+            fields["open"],
+            fields["raw_open"],
+            fields["can_buy_open_proxy"],
+            fields["can_sell_open_proxy"],
+            start=self.config.splits.train.start,
+            end=self.config.splits.validation.end,
+        )
+        path = result.path.copy()
+        ranks = composite.rank(axis=1, pct=True)
+        ordinal = composite.rank(axis=1, ascending=False, method="first")
+        selected = (ranks >= 1.0 - strategy.selection_fraction) & (
+            ordinal <= strategy.maximum_positions
+        )
+        median_adv = float(fields["amount"].where(selected).median(axis=1).median())
+        capacity = (
+            median_adv
+            * strategy.maximum_volume_participation
+            * strategy.maximum_positions
+            / strategy.gross_exposure
+            if math.isfinite(median_adv)
+            else 0.0
+        )
+        path.attrs.update(
+            {
+                "capacity_cny": capacity,
+                "coverage": self._dynamic_coverage(composite),
+                "average_gross_exposure": result.metrics["average_gross_exposure"],
+                "average_positions": result.metrics["average_positions"],
+                "maximum_observed_positions": int(path["position_count"].max()),
+                "rebalance_count": result.metrics["rebalance_count"],
+                "total_transaction_cost_cny": result.metrics[
+                    "total_transaction_cost_cny"
+                ],
+            }
+        )
+        return path
 
     def _signal_path(self, signal: pd.DataFrame) -> pd.DataFrame:
         next_return = next_open_return_for_eod_signal(self._load_fields()["open"]).reindex(
@@ -400,7 +577,7 @@ class PriceVolumeEvaluator:
                 "turnover": turnover,
             }
         ).dropna()
-        selected_amount = self._load_fields()["amount"].where(positions.ne(0)).median(axis=1) * 1000
+        selected_amount = self._load_fields()["amount"].where(positions.ne(0)).median(axis=1)
         result.attrs["capacity_cny"] = float(
             selected_amount.median() * self.config.costs.max_adv_participation * 20
         )
@@ -482,8 +659,15 @@ class PriceVolumeEvaluator:
         start = self.config.splits.train.start
         end = self.config.splits.validation.end
         years = range(start.year - 1, end.year + 1)
-        frames = []
-        columns = [
+        paths = [
+            path
+            for year in years
+            for path in sorted((self.panel_path / f"trade_year={year}").glob("*.parquet"))
+        ]
+        if not paths:
+            raise FileNotFoundError(f"No parquet partitions found under {self.data_path}")
+        available_columns = set(pq.read_schema(paths[0]).names)
+        base_columns = [
             "trade_date",
             "ts_code",
             "open",
@@ -494,11 +678,18 @@ class PriceVolumeEvaluator:
             "is_valid_ohlc",
             "is_tradable_observation",
         ]
-        for year in years:
-            for path in sorted((self.panel_path / f"trade_year={year}").glob("*.parquet")):
-                frames.append(pd.read_parquet(path, columns=columns))
-        if not frames:
-            raise FileNotFoundError(f"No parquet partitions found under {self.data_path}")
+        optional_columns = [
+            name
+            for name in (
+                "raw_open",
+                "raw_pre_close",
+                "can_buy_open_proxy",
+                "can_sell_open_proxy",
+            )
+            if name in available_columns
+        ]
+        columns = [*base_columns, *optional_columns]
+        frames = [pd.read_parquet(path, columns=columns) for path in paths]
         data = pd.concat(frames, ignore_index=True)
         data["trade_date"] = pd.to_datetime(data["trade_date"])
         warmup = pd.Timestamp(start) - pd.Timedelta(days=400)
@@ -509,6 +700,29 @@ class PriceVolumeEvaluator:
             name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
             for name in ("open", "close", "adj_close", "amount", "vol")
         }
+        if self.execution_basis.capital_ledger_proxy_ready:
+            raw_open_name = "raw_open" if "raw_open" in data else "open"
+            raw_open = data[raw_open_name].where(data["is_valid_ohlc"].fillna(False))
+            data["_strategy_raw_open"] = raw_open
+            if {"can_buy_open_proxy", "can_sell_open_proxy"}.issubset(data.columns):
+                data["_strategy_can_buy"] = valid & data["can_buy_open_proxy"].fillna(False)
+                data["_strategy_can_sell"] = valid & data["can_sell_open_proxy"].fillna(False)
+            elif "raw_pre_close" in data:
+                open_move = raw_open.div(data["raw_pre_close"]).sub(1.0)
+                threshold = self.config.strategy_evaluation.opening_limit_threshold
+                data["_strategy_can_buy"] = valid & open_move.lt(threshold)
+                data["_strategy_can_sell"] = valid & open_move.gt(-threshold)
+            else:
+                data["_strategy_can_buy"] = valid
+                data["_strategy_can_sell"] = valid
+            for source, target in (
+                ("_strategy_raw_open", "raw_open"),
+                ("_strategy_can_buy", "can_buy_open_proxy"),
+                ("_strategy_can_sell", "can_sell_open_proxy"),
+            ):
+                fields[target] = data.pivot(
+                    index="trade_date", columns="ts_code", values=source
+                ).sort_index()
         self._fields = fields
         return self._fields
 

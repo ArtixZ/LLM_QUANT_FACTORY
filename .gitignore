@@ -18,5 +18,7 @@ cache/*.pkl
 journal/
 runtime/
 runtime-full-llm/
+runtime-massive-batch/
+runtime-realistic-ashare-batch/
 output/
 tmp/

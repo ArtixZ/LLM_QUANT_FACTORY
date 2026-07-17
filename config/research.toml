@@ -1,6 +1,6 @@
 [research]
 name = "autoalpha_ashare_cross_section"
-generation = "institutional_v6_next_open_20260716"
+generation = "institutional_v7_ashare_dual_stage_20260717"
 horizons = [1, 3, 5, 10, 20]
 minimum_cross_section = 30
 random_seed = 20260715
@@ -28,7 +28,7 @@ last_validation_year = 2024
 minimum_folds = 6
 
 [governance]
-protocol_version = "institutional_walkforward_v6_next_open"
+protocol_version = "institutional_walkforward_v7_ashare_dual_stage"
 maximum_holdout_evaluations_per_generation = 10
 minimum_public_gates_before_holdout = 1
 holdout_minimum_sharpe = 0.0
@@ -38,13 +38,32 @@ holdout_maximum_drawdown = 0.20
 [portfolio]
 holding_period_days = 5
 initial_cash_cny = 1000000.0
-target_gross_exposure = 0.50
+target_gross_exposure = 0.90
 top_fraction = 0.10
 maximum_positions = 30
 minimum_capital_sharpe = 0.50
 maximum_capital_drawdown = 0.25
-maximum_realized_gross_exposure = 0.65
+maximum_realized_gross_exposure = 0.95
 maximum_residual_position_multiplier = 1.50
+
+[strategy_evaluation]
+enabled = true
+engine_protocol = "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
+execution_data_mode = "NON_PIT_PROXY"
+initial_cash_cny = 1000000.0
+gross_exposure = 0.90
+selection_fraction = 0.10
+maximum_positions = 30
+rebalance_schedule = "WEEKLY_FIRST_SESSION"
+opening_limit_threshold = 0.095
+commission_bps_each_side = 2.5
+stamp_duty_bps_sell = 5.0
+transfer_fee_bps_each_side = 0.1
+minimum_commission_cny = 5.0
+slippage_bps_each_side = 5.0
+use_historical_fee_schedule = true
+cost_stress_multiplier = 3.0
+maximum_volume_participation = 0.01
 
 [costs]
 commission_bps_each_side = 1.5

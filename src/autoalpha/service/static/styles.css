@@ -81,6 +81,10 @@
 .task-form-section span, .task-form-section small { display: block; }
 .task-form-section span { color: var(--ink); font-size: 11px; font-weight: 750; }
 .task-form-section small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.protocol-design-grid { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(180px, 1.4fr) repeat(3, minmax(110px, .7fr)); gap: 0 10px; padding: 4px 0 8px; }
+.protocol-design-grid label { margin: 0; }
+.protocol-design-summary { grid-column: 1 / -1; min-height: 27px; margin-top: 6px; padding: 6px 9px; color: #43536b; border: 1px solid #dce4ef; background: #f7f9fc; font-size: 9px; font-variant-numeric: tabular-nums; }
+.protocol-design-grid input:disabled { color: #8b96a7; background: #f1f3f6; }
 .task-form-note { margin: 0 14px 14px; padding: 8px 10px; display: flex; align-items: center; gap: 8px; color: #4f6179; border-left: 3px solid var(--blue); background: #f2f6ff; font-size: 10px; }
 .task-form-note svg { width: 15px; height: 15px; flex: 0 0 auto; }
 .dialog-actions { padding: 11px 14px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); background: #fbfcfd; }
@@ -101,6 +105,8 @@
   .task-summary-band > div, .task-detail-grid > div { border-right: 0; border-top: 1px solid var(--line); }
   .task-summary-band > div:first-child, .task-detail-grid > div:first-child { border-top: 0; }
   .task-toolbar .search-field, .task-form-grid label.wide { grid-column: auto; }
+  .protocol-design-grid { grid-column: auto; grid-template-columns: minmax(0, 1fr); }
+  .protocol-design-summary { grid-column: auto; }
   .task-control-row { width: 100%; }
   .task-control-row .button { flex: 1; }
   .task-activity-item { grid-template-columns: 64px minmax(0, 1fr); }
@@ -213,6 +219,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(36,94,234,.1
 .portfolio-kpis div { min-width: 0; }
 .portfolio-kpis span { display: block; color: var(--muted); font-size: 10px; }
 .portfolio-kpis strong { display: block; margin-top: 2px; font-size: 16px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.portfolio-execution-summary { margin: 0; padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.portfolio-diagnostic-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 10px 14px 6px; }
+.portfolio-diagnostic-heading span { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.portfolio-diagnostic-heading strong { font-size: 12px; }
+.alpha-diagnostic-kpis { border-top: 0; background: #f7f9fb; }
 .portfolio-body { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 18px; padding: 12px 14px 14px; }
 .portfolio-body h3 { margin: 0 0 8px; font-size: 12px; }
 .portfolio-members, .portfolio-actions { display: grid; gap: 6px; max-height: 250px; overflow: auto; }

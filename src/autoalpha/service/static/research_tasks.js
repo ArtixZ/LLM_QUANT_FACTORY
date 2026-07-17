@@ -24,6 +24,16 @@ function bindControls() {
   document.getElementById("stopTaskBtn").onclick = () => commandTask("stop");
   document.getElementById("refreshActivity").onclick = loadActivity;
   document.getElementById("autoSplitBtn").onclick = autoSplitProtocol;
+  document.getElementById("protocolDesign").addEventListener("change", updateProtocolDesign);
+  ["protocolExplorationYears", "protocolValidationYears", "protocolHoldoutMonths", "taskDataEnd"].forEach(id => {
+    document.getElementById(id).addEventListener("input", updateProtocolDesign);
+  });
+  ["explorationStart", "explorationEnd", "validationStart", "validationEnd", "holdoutStart", "holdoutEnd"].forEach(id => {
+    document.getElementById(id).addEventListener("input", () => {
+      document.getElementById("protocolDesign").value = "CUSTOM";
+      updateProtocolDesign();
+    });
+  });
 }
 
 async function loadTasks() {
@@ -94,13 +104,13 @@ function renderDetail(taskId) {
   text("detailSnapshotHash", `DATA ${task.snapshot_hash || "--"} · PROTOCOL ${task.protocol_hash || "--"}`);
   text("detailNotes", task.notes || "未填写任务备注");
   document.getElementById("taskDetailGrid").replaceChildren(...[
-    ["市场", marketLabel(task.market)], ["AI 可见数据", taskRange(task)], ["协议版本", `REV ${task.protocol_revision || 1}`], ["运行阶段", task.phase || "WAITING"], ["当前轮次", formatNumber(task.iteration || 0)], ["运行 ID", task.run_id || "尚未启动"],
+    ["市场", marketLabel(task.market)], ["AI 可见数据", taskRange(task)], ["协议模式", protocolDesignLabel(task.protocol?.design)], ["协议版本", `REV ${task.protocol_revision || 1}`], ["当前轮次", formatNumber(task.iteration || 0)], ["运行 ID", task.run_id || "尚未启动"],
   ].map(([label, value]) => stat(label, value)));
   const running = ["RUNNING", "RETRYING", "STOPPING"].includes(task.status);
   const readiness = task.readiness || { runnable: false, blockers: ["研究运行条件尚未计算"] };
   const readinessNode = document.getElementById("taskReadiness");
   readinessNode.hidden = false; readinessNode.classList.toggle("ready", readiness.runnable);
-  readinessNode.replaceChildren(element("strong", "", readiness.runnable ? "任务级研究协议已冻结" : "任务暂不可启动"), element("span", "", readiness.runnable ? `探索 ${task.protocol?.exploration_start} 至 ${task.protocol?.exploration_end} · 公开验证 ${task.protocol?.validation_start} 至 ${task.protocol?.validation_end} · 隐藏测试 ${task.protocol?.holdout_start} 至 ${task.protocol?.holdout_end}` : readiness.blockers.join("；")));
+  readinessNode.replaceChildren(element("strong", "", readiness.runnable ? `任务级研究协议已冻结 · ${protocolDesignLabel(task.protocol?.design)}` : "任务暂不可启动"), element("span", "", readiness.runnable ? `探索 ${task.protocol?.exploration_start} 至 ${task.protocol?.exploration_end} · 公开验证 ${task.protocol?.validation_start} 至 ${task.protocol?.validation_end} · 隐藏测试 ${task.protocol?.holdout_start} 至 ${task.protocol?.holdout_end}` : readiness.blockers.join("；")));
   document.getElementById("startTaskBtn").disabled = running || !readiness.runnable;
   document.getElementById("stopTaskBtn").disabled = !running || task.status === "STOPPING";
   document.getElementById("editTaskBtn").disabled = running;
@@ -153,6 +163,7 @@ function openTaskDialog(task = null) {
   document.getElementById("taskDataStart").value = task?.data_start || reference?.data_start || "";
   document.getElementById("taskDataEnd").value = task?.data_end || reference?.data_end || "";
   setProtocolFields(task?.protocol || null);
+  updateProtocolDesign();
   if (!task?.protocol) autoSplitProtocol();
   document.getElementById("taskNotes").value = task?.notes || "";
   document.getElementById("taskDialog").showModal();
@@ -175,55 +186,54 @@ function setProtocolFields(protocol) {
   const mapping = { explorationStart: "exploration_start", explorationEnd: "exploration_end", validationStart: "validation_start", validationEnd: "validation_end", holdoutStart: "holdout_start", holdoutEnd: "holdout_end" };
   Object.entries(mapping).forEach(([id, key]) => { document.getElementById(id).value = protocol?.[key] || ""; });
   document.getElementById("minimumFolds").value = protocol?.minimum_folds || 1;
+  document.getElementById("protocolDesign").value = protocol?.design || "CUSTOM";
+  document.getElementById("protocolExplorationYears").value = protocol?.exploration_years || 5;
+  document.getElementById("protocolValidationYears").value = protocol?.validation_years || 2;
+  document.getElementById("protocolHoldoutMonths").value = protocol?.holdout_months || 6;
 }
 
 function protocolFromForm() {
-  return { exploration_start: value("explorationStart"), exploration_end: value("explorationEnd"), validation_start: value("validationStart"), validation_end: value("validationEnd"), holdout_start: value("holdoutStart"), holdout_end: value("holdoutEnd"), minimum_folds: Number(value("minimumFolds")) };
+  const design = value("protocolDesign");
+  const protocol = { exploration_start: value("explorationStart"), exploration_end: value("explorationEnd"), validation_start: value("validationStart"), validation_end: value("validationEnd"), holdout_start: value("holdoutStart"), holdout_end: value("holdoutEnd"), minimum_folds: Number(value("minimumFolds")), design };
+  if (design === "RECENT_FIVE_YEAR_BACKWARD") {
+    protocol.anchor_date = value("taskDataEnd");
+    protocol.exploration_years = Number(value("protocolExplorationYears"));
+    protocol.validation_years = Number(value("protocolValidationYears"));
+    protocol.holdout_months = Number(value("protocolHoldoutMonths"));
+  }
+  return protocol;
 }
 
 async function autoSplitProtocol() {
   const startText = value("taskDataStart"), endText = value("taskDataEnd");
   if (!startText || !endText) { toast("请先填写任务数据起止日", true); return; }
-  const start = parseIsoDate(startText), end = parseIsoDate(endText);
-  const total = Math.max(1, Math.round((end - start) / 86400000) + 1);
-  let holdoutDays = Math.max(60, Math.round(total * 0.20));
-  let validationDays = Math.max(84, Math.round(total * 0.30));
-  if (holdoutDays + validationDays >= total) { holdoutDays = Math.max(1, Math.floor(total / 5)); validationDays = Math.max(1, Math.floor(total / 3)); }
-  const holdoutStart = addDays(end, -(holdoutDays - 1));
-  const validationEnd = addDays(holdoutStart, -1);
-  const validationStart = addDays(validationEnd, -(validationDays - 1));
-  const explorationEnd = addDays(validationStart, -1);
-  setProtocolFields({ exploration_start: startText, exploration_end: isoDate(explorationEnd), validation_start: isoDate(validationStart), validation_end: isoDate(validationEnd), holdout_start: isoDate(holdoutStart), holdout_end: endText, minimum_folds: availableFolds(validationStart, validationEnd) });
   try {
-    const preview = await api("/api/research-protocol/preview", {
+    const preview = await api("/api/research-protocol/preset", {
       method: "POST",
-      body: JSON.stringify({ data_path: value("taskDataPath"), protocol: protocolFromForm() }),
+      body: JSON.stringify({ data_path: value("taskDataPath"), data_start: startText, data_end: endText, design: value("protocolDesign"), exploration_years: Number(value("protocolExplorationYears")), validation_years: Number(value("protocolValidationYears")), holdout_months: Number(value("protocolHoldoutMonths")) }),
     });
-    const maximum = Number(preview.walk_forward_capacity?.maximum_folds || 1);
-    document.getElementById("minimumFolds").value = Math.max(1, Math.min(6, maximum));
+    setProtocolFields(preview.protocol);
+    updateProtocolDesign();
+    if (!preview.valid) throw new Error(preview.blockers.join("；"));
+    toast(`${protocolDesignLabel(preview.protocol.design)}已应用 · ${preview.walk_forward_capacity.maximum_folds} 个有效验证折`);
   } catch (error) {
-    toast(`真实交易日预检失败：${error.message}`, true);
+    toast(`协议模板应用失败：${error.message}`, true);
   }
 }
 
-function availableFolds(start, end) {
-  let count = 0;
-  for (let year = start.getUTCFullYear(); year <= end.getUTCFullYear(); year += 1) {
-    const left = new Date(Math.max(start.getTime(), Date.UTC(year, 0, 1)));
-    const right = new Date(Math.min(end.getTime(), Date.UTC(year, 11, 31)));
-    if (Math.round((right - left) / 86400000) + 1 >= 84) count += 1;
-  }
-  return Math.max(1, Math.min(6, count));
+function updateProtocolDesign() {
+  const recent = value("protocolDesign") === "RECENT_FIVE_YEAR_BACKWARD";
+  ["protocolExplorationYears", "protocolValidationYears", "protocolHoldoutMonths"].forEach(id => { document.getElementById(id).disabled = !recent; });
+  const summary = document.getElementById("protocolDesignSummary");
+  summary.textContent = recent ? `${value("protocolExplorationYears")} 年探索 · ${value("protocolValidationYears")} 年公开验证 · ${value("protocolHoldoutMonths")} 个月隐藏测试 · 锚定 ${value("taskDataEnd") || "最新日"}` : "按任务完整区间进行均衡自动划分；日期可继续手动调整";
 }
 
-function parseIsoDate(text) { return new Date(`${text}T00:00:00Z`); }
-function addDays(date, days) { return new Date(date.getTime() + days * 86400000); }
-function isoDate(date) { return date.toISOString().slice(0, 10); }
 function value(id) { return document.getElementById(id).value; }
 
 async function api(path, options = {}) { const response = await fetch(path, { ...options, credentials: "same-origin", headers: { "Content-Type": "application/json", ...(options.headers || {}) } }); if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || `HTTP ${response.status}`); } return response.json(); }
 function taskIdFromPath() { const parts = location.pathname.split("/").filter(Boolean); return parts.length === 2 ? decodeURIComponent(parts[1]) : null; }
 function taskRange(task) { const protocol = task.protocol || {}; return protocol.exploration_start && protocol.validation_end ? `${protocol.exploration_start} — ${protocol.validation_end}` : task.data_start && task.data_end ? `${task.data_start} — ${task.data_end}` : "等待数据"; }
+function protocolDesignLabel(value) { return value === "RECENT_FIVE_YEAR_BACKWARD" ? "近期五年倒推" : "均衡 / 自定义"; }
 function marketLabel(value) { return ({ CN_A: "A 股", HK: "港股", US: "美股" })[value] || value; }
 function pathBlock(value) { const node = element("code", "task-path", value || "--"); node.title = value || ""; return node; }
 function statusPill(value) { return element("span", `state-pill small ${value}`, value); }

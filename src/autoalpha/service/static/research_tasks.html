@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoAlpha 自动研究任务</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260716-task-protocol-v1">
+    <link rel="stylesheet" href="/static/styles.css?v=20260717-recent-protocol-v1">
 </head>
 <body>
   <header class="app-header">
@@ -77,7 +77,14 @@
         <label class="wide">研究数据目录<input id="taskDataPath" required autocomplete="off"></label>
         <label>任务数据起始日<input id="taskDataStart" type="date"></label>
         <label>任务数据结束日<input id="taskDataEnd" type="date"></label>
-        <div class="task-form-section wide"><div><span>研究协议切分</span><small>探索与公开验证对 LLM 可见；隐藏测试只返回分类结论</small></div><button class="button" id="autoSplitBtn" type="button"><i data-lucide="wand-sparkles"></i>自动划分</button></div>
+        <div class="task-form-section wide"><div><span>研究协议切分</span><small>探索与公开验证对 LLM 可见；隐藏测试只返回分类结论</small></div><button class="button" id="autoSplitBtn" type="button"><i data-lucide="wand-sparkles"></i>应用模板</button></div>
+        <div class="protocol-design-grid wide">
+          <label>切分模板<select id="protocolDesign"><option value="CUSTOM">均衡自动划分</option><option value="RECENT_FIVE_YEAR_BACKWARD">近期五年倒推</option></select></label>
+          <label>探索年数<input id="protocolExplorationYears" type="number" min="2" max="10" value="5"></label>
+          <label>公开验证年数<input id="protocolValidationYears" type="number" min="1" max="5" value="2"></label>
+          <label>隐藏测试月数<input id="protocolHoldoutMonths" type="number" min="3" max="24" value="6"></label>
+          <div class="protocol-design-summary" id="protocolDesignSummary">均衡自动划分</div>
+        </div>
         <label>探索区起始<input id="explorationStart" type="date" required></label>
         <label>探索区结束<input id="explorationEnd" type="date" required></label>
         <label>公开验证起始<input id="validationStart" type="date" required></label>
@@ -93,6 +100,6 @@
   </dialog>
   <div id="toast" role="status"></div>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="/static/research_tasks.js?v=20260717-fold-preflight-v4"></script>
+  <script src="/static/research_tasks.js?v=20260717-recent-protocol-v1"></script>
 </body>
 </html>

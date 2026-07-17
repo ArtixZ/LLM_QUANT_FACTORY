@@ -23,6 +23,8 @@ dependencies = [
 [project.scripts]
 autoalpha = "autoalpha.cli:main"
 autoalpha-service = "autoalpha.service.app:main"
+autoalpha-batch-service = "autoalpha.service.batch_app:main"
+autoalpha-realistic-batch-service = "autoalpha.service.realistic_batch_app:main"
 
 [dependency-groups]
 dev = [

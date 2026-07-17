@@ -38,15 +38,12 @@ def _legacy_reference(
         (ranks >= 1.0 - config.selection_fraction)
         & (ordinal_long <= config.maximum_positions_per_side)
     ).astype(float) - (
-        (ranks <= config.selection_fraction)
-        & (ordinal_short <= config.maximum_positions_per_side)
+        (ranks <= config.selection_fraction) & (ordinal_short <= config.maximum_positions_per_side)
     ).astype(float)
     gross = positions.abs().sum(axis=1).replace(0, np.nan)
     target = positions.div(gross, axis=0).fillna(0.0) * config.gross_exposure
     held = target.rolling(config.holding_period_days, min_periods=1).mean().shift(1)
-    gross_return = (held * entry_aligned_open_return(open_prices)).sum(
-        axis=1, min_count=1
-    ).dropna()
+    gross_return = (held * entry_aligned_open_return(open_prices)).sum(axis=1, min_count=1).dropna()
     turnover = held.diff().abs().sum(axis=1).mul(0.5).reindex(gross_return.index).fillna(0)
     one_way_bps = (
         config.commission_bps_each_side
@@ -92,18 +89,15 @@ def test_side_aware_costs_charge_each_traded_side() -> None:
     legacy = VectorBacktester(
         VectorBacktestConfig(**common, cost_model="legacy_half_turnover")
     ).run(signal, open_prices)
-    corrected = VectorBacktester(
-        VectorBacktestConfig(**common, cost_model="side_aware")
-    ).run(signal, open_prices)
+    corrected = VectorBacktester(VectorBacktestConfig(**common, cost_model="side_aware")).run(
+        signal, open_prices
+    )
 
     assert corrected.path["transaction_cost"].sum() > legacy.path["transaction_cost"].sum()
     expected = (
-        corrected.path["buy_turnover"] * 1.6
-        + corrected.path["sell_turnover"] * 6.6
+        corrected.path["buy_turnover"] * 1.6 + corrected.path["sell_turnover"] * 6.6
     ) / 10_000
-    pd.testing.assert_series_equal(
-        corrected.path["transaction_cost"], expected, check_names=False
-    )
+    pd.testing.assert_series_equal(corrected.path["transaction_cost"], expected, check_names=False)
 
 
 def test_future_price_change_does_not_alter_earlier_signal_returns() -> None:
@@ -120,9 +114,7 @@ def test_future_price_change_does_not_alter_earlier_signal_returns() -> None:
     changed = VectorBacktester(config).run(signal, changed_prices).path
 
     cutoff = signal.index[5]
-    pd.testing.assert_series_equal(
-        original.loc[:cutoff, "gross"], changed.loc[:cutoff, "gross"]
-    )
+    pd.testing.assert_series_equal(original.loc[:cutoff, "gross"], changed.loc[:cutoff, "gross"])
 
 
 def test_end_date_excludes_returns_exiting_after_requested_window() -> None:
@@ -137,3 +129,22 @@ def test_end_date_excludes_returns_exiting_after_requested_window() -> None:
     result = VectorBacktester(config).run(signal, open_prices, end=end)
 
     assert result.path.index.max() == signal.index[6]
+
+
+def test_precomputed_entry_returns_reproduce_default_vector_path() -> None:
+    signal, open_prices = _panels()
+    config = VectorBacktestConfig(
+        holding_period_days=3,
+        selection_fraction=0.34,
+        maximum_positions_per_side=2,
+    )
+    backtester = VectorBacktester(config)
+
+    default = backtester.run(signal, open_prices)
+    cached = backtester.run(
+        signal,
+        open_prices,
+        precomputed_entry_returns=entry_aligned_open_return(open_prices),
+    )
+
+    pd.testing.assert_frame_equal(default.path, cached.path)

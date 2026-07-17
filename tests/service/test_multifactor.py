@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from autoalpha.backtest.ashare_vector import ASHARE_PROXY_RETURN_CONVENTION
 from autoalpha.backtest.timing import EOD_NEXT_OPEN_RETURN_CONVENTION
 from autoalpha.config import ResearchConfig
 from autoalpha.dsl.expression import FactorDefinition, field
@@ -109,6 +110,20 @@ def test_initial_ineligible_candidate_is_recorded_as_hold_without_active_weights
     assert decision.factors == ()
     assert decision.weights == ()
     assert store.portfolio_history(run_id="run-new")[0]["id"] == version
+
+
+def test_strategy_gate_rejects_long_short_return_convention() -> None:
+    config = ResearchConfig.from_toml(Path("config/research.toml"))
+    metrics = FakeEvaluator().evaluate_portfolio([_factor("a", "amount")]).metrics
+    metrics["portfolio_strategy_gate_basis"] = "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
+
+    assert "invalid_return_convention" in _portfolio_action_gate_failures(metrics, config)
+
+    metrics["portfolio_return_convention"] = ASHARE_PROXY_RETURN_CONVENTION
+    assert "invalid_return_convention" not in _portfolio_action_gate_failures(metrics, config)
+
+    metrics["portfolio_maximum_observed_positions"] = 46
+    assert "residual_positions" in _portfolio_action_gate_failures(metrics, config)
 
 
 def test_initial_candidate_governance_veto_preserves_empty_incumbent(

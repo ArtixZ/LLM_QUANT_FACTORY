@@ -164,6 +164,54 @@ class PortfolioConstructionConfig:
 
 
 @dataclass(frozen=True)
+class StrategyEvaluationConfig:
+    enabled: bool = True
+    engine_protocol: str = "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
+    execution_data_mode: str = "NON_PIT_PROXY"
+    initial_cash_cny: float = 1_000_000.0
+    gross_exposure: float = 0.90
+    selection_fraction: float = 0.10
+    maximum_positions: int = 30
+    rebalance_schedule: str = "WEEKLY_FIRST_SESSION"
+    opening_limit_threshold: float = 0.095
+    commission_bps_each_side: float = 2.5
+    stamp_duty_bps_sell: float = 5.0
+    transfer_fee_bps_each_side: float = 0.1
+    minimum_commission_cny: float = 5.0
+    slippage_bps_each_side: float = 5.0
+    use_historical_fee_schedule: bool = True
+    cost_stress_multiplier: float = 3.0
+    maximum_volume_participation: float = 0.01
+
+    def __post_init__(self) -> None:
+        if not self.engine_protocol.strip() or self.execution_data_mode != "NON_PIT_PROXY":
+            raise ValueError("Strategy evaluation protocol is invalid")
+        if self.rebalance_schedule not in {
+            "WEEKLY_FIRST_SESSION",
+            "BIWEEKLY_FIRST_SESSION",
+            "MONTHLY_FIRST_SESSION",
+        }:
+            raise ValueError("Strategy rebalance schedule is invalid")
+        if not 0 < self.opening_limit_threshold <= 0.30:
+            raise ValueError("Strategy opening limit threshold is invalid")
+        if self.initial_cash_cny <= 0 or not 0 < self.gross_exposure <= 1:
+            raise ValueError("Strategy capital and exposure are invalid")
+        if not 0 < self.selection_fraction <= 0.5 or self.maximum_positions <= 0:
+            raise ValueError("Strategy selection settings are invalid")
+        if not 0 < self.maximum_volume_participation <= 1:
+            raise ValueError("Strategy volume participation must be in (0, 1]")
+        costs = (
+            self.commission_bps_each_side,
+            self.stamp_duty_bps_sell,
+            self.transfer_fee_bps_each_side,
+            self.minimum_commission_cny,
+            self.slippage_bps_each_side,
+        )
+        if any(value < 0 for value in costs) or self.cost_stress_multiplier < 1:
+            raise ValueError("Strategy execution costs are invalid")
+
+
+@dataclass(frozen=True)
 class EvaluationConfig:
     minimum_coverage: float = 0.80
     maximum_net_return_p_value: float = 0.10
@@ -251,6 +299,9 @@ class ResearchConfig:
     walk_forward: WalkForwardConfig = field(default_factory=WalkForwardConfig)
     governance: GovernanceConfig = field(default_factory=GovernanceConfig)
     portfolio: PortfolioConstructionConfig = field(default_factory=PortfolioConstructionConfig)
+    strategy_evaluation: StrategyEvaluationConfig = field(
+        default_factory=StrategyEvaluationConfig
+    )
     horizons: tuple[int, ...] = (1, 3, 5, 10, 20)
     minimum_cross_section: int = 30
     random_seed: int = 20260715
@@ -286,6 +337,9 @@ class ResearchConfig:
             walk_forward=WalkForwardConfig(**raw.get("walk_forward", {})),
             governance=GovernanceConfig(**raw.get("governance", {})),
             portfolio=PortfolioConstructionConfig(**raw.get("portfolio", {})),
+            strategy_evaluation=StrategyEvaluationConfig(
+                **raw.get("strategy_evaluation", {})
+            ),
             horizons=tuple(raw["research"].get("horizons", (1, 3, 5, 10, 20))),
             minimum_cross_section=int(raw["research"].get("minimum_cross_section", 30)),
             random_seed=int(raw["research"].get("random_seed", 20260715)),

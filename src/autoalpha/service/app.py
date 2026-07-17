@@ -38,12 +38,15 @@ from autoalpha.service.multifactor import factor_from_pool_record
 from autoalpha.service.paper_trading import PaperStrategySpec, PaperTradingEngine
 from autoalpha.service.research_manager import ResearchTaskManager
 from autoalpha.service.research_protocol import (
+    CUSTOM_PROTOCOL_DESIGN,
+    RECENT_FIVE_YEAR_BACKWARD,
     default_task_protocol,
     normalize_task_protocol,
     panel_validation_fold_capacity,
     protocol_blockers,
     protocol_data_blockers,
     protocol_fingerprint,
+    recent_five_year_task_protocol,
     task_research_config,
 )
 from autoalpha.service.screener import CrossSectionalScreener, ScreenerSpec
@@ -133,6 +136,27 @@ class ResearchProtocolRequest(BaseModel):
     holdout_start: date
     holdout_end: date
     minimum_folds: int = Field(default=1, ge=1, le=20)
+    design: Literal["CUSTOM", "RECENT_FIVE_YEAR_BACKWARD"] = CUSTOM_PROTOCOL_DESIGN
+    anchor_date: date | None = None
+    exploration_years: int | None = Field(default=None, ge=2, le=10)
+    validation_years: int | None = Field(default=None, ge=1, le=5)
+    holdout_months: int | None = Field(default=None, ge=3, le=24)
+
+
+class ResearchProtocolPresetRequest(BaseModel):
+    data_path: str
+    data_start: date
+    data_end: date
+    design: Literal["CUSTOM", "RECENT_FIVE_YEAR_BACKWARD"] = RECENT_FIVE_YEAR_BACKWARD
+    exploration_years: int = Field(default=5, ge=2, le=10)
+    validation_years: int = Field(default=2, ge=1, le=5)
+    holdout_months: int = Field(default=6, ge=3, le=24)
+
+    @model_validator(mode="after")
+    def validate_coverage(self) -> ResearchProtocolPresetRequest:
+        if self.data_start > self.data_end:
+            raise ValueError("data_start must not be after data_end")
+        return self
 
 
 class ResearchProtocolPreviewRequest(BaseModel):
@@ -421,9 +445,7 @@ def _resolved_task_protocol(
         data_end=str(snapshot["data_end"]),
     )
     if snapshot.get("panel_path"):
-        blockers.extend(
-            protocol_data_blockers(protocol, Path(str(snapshot["panel_path"])))
-        )
+        blockers.extend(protocol_data_blockers(protocol, Path(str(snapshot["panel_path"]))))
     if blockers:
         raise ValueError("；".join(blockers))
     return protocol
@@ -783,9 +805,42 @@ def _research_workspace_snapshot(task_id: str) -> dict[str, Any]:
             },
             "portfolio": {
                 "holding_period_days": research_config.portfolio.holding_period_days,
-                "target_gross_exposure": research_config.portfolio.target_gross_exposure,
-                "initial_cash_cny": research_config.portfolio.initial_cash_cny,
-                "maximum_positions": research_config.portfolio.maximum_positions,
+                "target_gross_exposure": (
+                    research_config.strategy_evaluation.gross_exposure
+                ),
+                "initial_cash_cny": (
+                    research_config.strategy_evaluation.initial_cash_cny
+                ),
+                "maximum_positions": (
+                    research_config.strategy_evaluation.maximum_positions
+                ),
+                "rebalance_schedule": (
+                    research_config.strategy_evaluation.rebalance_schedule
+                ),
+                "execution_protocol": (
+                    research_config.strategy_evaluation.engine_protocol
+                ),
+                "execution_data_mode": (
+                    research_config.strategy_evaluation.execution_data_mode
+                ),
+            },
+            "evaluation_layers": {
+                "alpha_diagnostic": {
+                    "portfolio_mode": "market_neutral_long_short",
+                    "purpose": "factor_information_screen_only",
+                    "investable": False,
+                },
+                "strategy_promotion": {
+                    "portfolio_mode": "long_only",
+                    "purpose": "portfolio_add_replace_governance",
+                    "investable": False,
+                    "protocol": research_config.strategy_evaluation.engine_protocol,
+                    "limitations": list(
+                        data_workspace.get("execution_basis", {}).get("proxy_blockers", [])
+                        if data_workspace
+                        else []
+                    ),
+                },
             },
         },
         "research_generation": generation,
@@ -912,15 +967,62 @@ async def preview_research_protocol(
             data_start=str(workspace.first_trade_date),
             data_end=str(workspace.last_trade_date),
         )
-        capacity = panel_validation_fold_capacity(
-            protocol, Path(workspace.panel_path)
-        )
-        blockers.extend(
-            protocol_data_blockers(protocol, Path(workspace.panel_path))
-        )
+        capacity = panel_validation_fold_capacity(protocol, Path(workspace.panel_path))
+        blockers.extend(protocol_data_blockers(protocol, Path(workspace.panel_path)))
     except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {
+        "valid": not blockers,
+        "blockers": blockers,
+        "walk_forward_capacity": capacity,
+        "data_fingerprint": workspace.fingerprint,
+    }
+
+
+@app.post("/api/research-protocol/preset", dependencies=[Depends(_authorized)])
+async def build_research_protocol_preset(
+    payload: ResearchProtocolPresetRequest,
+) -> dict[str, Any]:
+    try:
+        workspace = inspect_data_workspace(Path(payload.data_path).expanduser().resolve())
+        coverage_start = date.fromisoformat(str(workspace.first_trade_date))
+        coverage_end = date.fromisoformat(str(workspace.last_trade_date))
+        if payload.data_start < coverage_start or payload.data_end > coverage_end:
+            raise ValueError(
+                "任务区间必须位于数据覆盖 "
+                f"{coverage_start.isoformat()} 至 {coverage_end.isoformat()} 内"
+            )
+        if payload.design == RECENT_FIVE_YEAR_BACKWARD:
+            protocol = recent_five_year_task_protocol(
+                payload.data_start.isoformat(),
+                payload.data_end.isoformat(),
+                exploration_years=payload.exploration_years,
+                validation_years=payload.validation_years,
+                holdout_months=payload.holdout_months,
+            )
+        else:
+            protocol = default_task_protocol(
+                payload.data_start.isoformat(),
+                payload.data_end.isoformat(),
+                ResearchConfig.from_toml(CONFIG_PATH),
+            )
+            protocol["design"] = CUSTOM_PROTOCOL_DESIGN
+        panel_path = Path(workspace.panel_path)
+        capacity = panel_validation_fold_capacity(protocol, panel_path)
+        if int(capacity["maximum_folds"]) > 0:
+            protocol["minimum_folds"] = min(
+                int(protocol["minimum_folds"]), int(capacity["maximum_folds"])
+            )
+        blockers = protocol_blockers(
+            protocol,
+            data_start=payload.data_start.isoformat(),
+            data_end=payload.data_end.isoformat(),
+        )
+        blockers.extend(protocol_data_blockers(protocol, panel_path))
+    except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {
+        "protocol": protocol,
         "valid": not blockers,
         "blockers": blockers,
         "walk_forward_capacity": capacity,

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from autoalpha.config import ResearchConfig
+from autoalpha.data.execution_basis import inspect_execution_data_basis
 from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.service.research_protocol import (
     panel_validation_fold_capacity,
@@ -89,6 +90,13 @@ class ResearchTaskManager:
             blockers.extend(
                 protocol_data_blockers(protocol, Path(workspace.panel_path))
             )
+            if config.strategy_evaluation.enabled:
+                execution_basis = inspect_execution_data_basis(Path(workspace.panel_path))
+                if not execution_basis.capital_ledger_proxy_ready:
+                    blockers.append(
+                        "A股策略晋级需要非PIT交易代理数据："
+                        + "；".join(execution_basis.proxy_blockers)
+                    )
             fold_capacity = panel_validation_fold_capacity(
                 protocol, Path(workspace.panel_path)
             )

@@ -153,6 +153,10 @@ def test_manager_reports_protocol_and_market_readiness(tmp_path: Path, monkeypat
         "autoalpha.service.research_manager.inspect_data_workspace", lambda _: workspace
     )
     monkeypatch.setattr(
+        "autoalpha.service.research_manager.inspect_execution_data_basis",
+        lambda _: SimpleNamespace(capital_ledger_proxy_ready=True, proxy_blockers=()),
+    )
+    monkeypatch.setattr(
         "autoalpha.service.research_manager.protocol_data_blockers", lambda *_: []
     )
     monkeypatch.setattr(

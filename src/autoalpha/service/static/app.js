@@ -9,8 +9,8 @@ const state = {
 };
 
 const chartMetrics = {
-  sharpe_ratio: { label: "夏普", format: "number", prefer: "max" },
-  simple_annual_return: { label: "简单年化", format: "percent", prefer: "max" },
+  sharpe_ratio: { label: "单因子 Alpha 多空夏普", format: "number", prefer: "max" },
+  simple_annual_return: { label: "单因子 Alpha 多空年化", format: "percent", prefer: "max" },
   pearson_ic_mean: { label: "IC", format: "number4", prefer: "max" },
   rank_ic_mean: { label: "Rank IC", format: "number4", prefer: "max" },
   rank_ic_ir: { label: "Rank IC IR", format: "number", prefer: "max" },
@@ -30,15 +30,18 @@ const chartMetrics = {
   deflated_sharpe_probability: { label: "Deflated Sharpe 概率", format: "percent", prefer: "max" },
   probability_backtest_overfitting: { label: "PBO", format: "percent", prefer: "min" },
   parameter_stability_positive_fraction: { label: "参数邻域正向比例", format: "percent", prefer: "max" },
-  portfolio_sharpe_ratio: { label: "组合夏普", format: "number", prefer: "max" },
-  portfolio_simple_annual_return: { label: "组合简单年化", format: "percent", prefer: "max" },
-  portfolio_max_drawdown: { label: "组合最大回撤", format: "percent", prefer: "max" },
+  portfolio_sharpe_ratio: { label: "A股多头组合夏普", format: "number", prefer: "max" },
+  portfolio_simple_annual_return: { label: "A股多头组合年化", format: "percent", prefer: "max" },
+  portfolio_max_drawdown: { label: "A股多头组合回撤", format: "percent", prefer: "max" },
   portfolio_incremental_net_ir: { label: "组合边际净 IR", format: "number", prefer: "max" },
   portfolio_annual_turnover: { label: "组合年化换手", format: "number", prefer: "min" },
   portfolio_max_factor_correlation: { label: "最大因子相关性", format: "number4", prefer: "min" },
   portfolio_walk_forward_positive_fraction: { label: "组合滚动正折比例", format: "percent", prefer: "max" },
   portfolio_walk_forward_worst_sharpe: { label: "组合最差折夏普", format: "number", prefer: "max" },
   portfolio_deflated_sharpe_probability: { label: "组合 Deflated Sharpe", format: "percent", prefer: "max" },
+  alpha_diagnostic_sharpe_ratio: { label: "组合 Alpha 多空夏普", format: "number", prefer: "max" },
+  alpha_diagnostic_simple_annual_return: { label: "组合 Alpha 多空年化", format: "percent", prefer: "max" },
+  alpha_diagnostic_max_drawdown: { label: "组合 Alpha 多空回撤", format: "percent", prefer: "max" },
 };
 
 const flowPhases = ["CONFIGURE", "MEMORY", "DIRECTION", "PROPOSAL", "SEMANTICS", "EVALUATION", "PORTFOLIO", "HOLDOUT", "CAPITAL_SIMULATION", "EVIDENCE", "DELIVERY", "WAITING"];
@@ -48,7 +51,7 @@ const flowLabels = {
   DIRECTION: "正在自检公开证据并冻结本轮优化方向",
   PROPOSAL: "Researcher 正在生成候选",
   SEMANTICS: "正在校验 DSL、时序与重复表达式",
-  EVALUATION: "正在运行真实价量回测",
+  EVALUATION: "正在并行运行截面 Alpha 诊断与 A 股多头周频代理",
   PORTFOLIO: "正在枚举组合保留、加入、删除与替换动作",
   HOLDOUT: "冻结组合正在隔离边界内执行一次性盲测",
   CAPITAL_SIMULATION: "正在执行带交易限制的人民币资金仿真",
@@ -303,7 +306,7 @@ function formatMemory(content) {
     const best = portfolio.best_option;
     const parts = [
       `${memory.name || "候选"} · ${memory.family || "未分类"}`,
-      `夏普 ${number(single.sharpe)} · 年化 ${percent(single.annual_return)} · 换手 ${number(single.turnover)}`,
+      `Alpha多空夏普 ${number(single.sharpe)} · 年化 ${percent(single.annual_return)} · 换手 ${number(single.turnover)}`,
     ];
     if (single.exploratory_failures?.length) {
       parts.push(`单因子未过：${single.exploratory_failures.join(", ")}`);
@@ -342,7 +345,8 @@ function renderProtocol() {
   const generation = state.snapshot.research_generation || {};
   const walk = protocol.walk_forward || {};
   const portfolio = protocol.portfolio || {};
-  text("protocolSummary", `${protocol.version || "--"} · ${protocol.generation || "--"}`);
+  const strategy = protocol.evaluation_layers?.strategy_promotion || {};
+  text("protocolSummary", `${protocol.version || "--"} · Alpha筛选 → ${strategy.protocol || "A股策略门禁"}`);
   text("generationStatus", generation.status || "NOT STARTED");
   text("protocolExploration", protocol.exploration ? `${protocol.exploration.start} — ${protocol.exploration.end}` : "--");
   text("protocolWalkForward", walk.first_validation_year ? `${walk.train_years}Y → ${walk.validation_years}Y · ${walk.first_validation_year}—${walk.last_validation_year}` : "--");
@@ -434,13 +438,19 @@ function renderPortfolio() {
     text("portfolioSummary", "尚未建立组合，下一轮将从合格因子池初始化");
     text("portfolioVersion", "VERSION --");
     ["portfolioSharpe", "portfolioAnnual", "portfolioDrawdown", "portfolioTurnover", "portfolioCorrelation"].forEach(id => text(id, "--"));
+    ["alphaPortfolioSharpe", "alphaPortfolioAnnual", "alphaPortfolioDrawdown", "alphaPortfolioTurnover", "alphaPortfolioWorstFold"].forEach(id => text(id, "--"));
+    text("portfolioExecutionSummary", "等待新协议组合 · Alpha多空结果不会用于冠军晋级");
     text("portfolioFactorCount", "0");
     members.replaceChildren(emptyState("暂无活跃因子"));
   } else {
     const metrics = portfolio.metrics || {};
     const evaluationProtocol = metrics.portfolio_evaluation_protocol || metrics.evaluation_protocol;
     const protocolLabel = evaluationProtocol || "LEGACY / UNVERSIONED";
-    text("portfolioSummary", `第 ${portfolio.iteration} 轮 · ${portfolio.action} · ${protocolLabel} · ${portfolio.reason}`);
+    const strategyBasis = metrics.portfolio_strategy_gate_basis;
+    const legacy = strategyBasis !== "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY";
+    text("portfolioSummary", legacy
+      ? `第 ${portfolio.iteration} 轮 · 旧多空组合口径 · 待新协议重评 · ${portfolio.reason}`
+      : `第 ${portfolio.iteration} 轮 · ${portfolio.action} · A股多头策略门禁 · ${portfolio.reason}`);
     text("portfolioVersion", `VERSION ${portfolio.id}`);
     text("portfolioSharpe", number(metrics.portfolio_sharpe_ratio));
     text("portfolioAnnual", percent(metrics.portfolio_simple_annual_return));
@@ -448,6 +458,14 @@ function renderPortfolio() {
     text("portfolioTurnover", number(metrics.portfolio_annual_turnover));
     text("portfolioCorrelation", number4(metrics.portfolio_max_factor_correlation));
     text("portfolioFactorCount", String(portfolio.members.length));
+    text("portfolioExecutionSummary", legacy
+      ? `${protocolLabel} · 当前数值不可解释为A股可交易组合收益`
+      : `${metrics.portfolio_execution_protocol} · ${metrics.portfolio_rebalance_schedule} · ${percent(metrics.portfolio_target_gross_exposure)}仓位 · 目标${metrics.portfolio_maximum_positions}只 / 实际峰值${metrics.portfolio_maximum_observed_positions ?? "--"}只 · 非PIT研究代理`);
+    text("alphaPortfolioSharpe", number(metrics.alpha_diagnostic_sharpe_ratio));
+    text("alphaPortfolioAnnual", percent(metrics.alpha_diagnostic_simple_annual_return));
+    text("alphaPortfolioDrawdown", percent(metrics.alpha_diagnostic_max_drawdown));
+    text("alphaPortfolioTurnover", number(metrics.alpha_diagnostic_annual_turnover));
+    text("alphaPortfolioWorstFold", number(metrics.alpha_diagnostic_walk_forward_worst_sharpe));
     members.replaceChildren(...portfolio.members.map(member => {
       const row = element("article", "portfolio-member");
       const identity = element("div");
@@ -495,7 +513,7 @@ function renderExperimentCard(iteration) {
   const metrics = iteration.metrics;
   const proposal = iteration.proposal;
   const line = metrics
-    ? `sharpe ${number(metrics.sharpe_ratio)} · annual ${percent(metrics.simple_annual_return)} · rank_ic ${number4(metrics.rank_ic_mean)} · portfolio ${metrics.portfolio_action || "--"}`
+    ? `alpha L/S ${number(metrics.sharpe_ratio)} · annual ${percent(metrics.simple_annual_return)} · rank_ic ${number4(metrics.rank_ic_mean)} · A股组合 ${metrics.portfolio_action || "--"}`
     : iteration.error || proposal?.hypothesis || "候选正在处理";
   const tags = element("div", "tags");
   [

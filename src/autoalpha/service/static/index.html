@@ -127,8 +127,8 @@
           <div class="chart-controls">
             <label>图表指标
               <select id="chartMetric">
-                <option value="sharpe_ratio">夏普</option>
-                <option value="simple_annual_return">简单年化</option>
+                <option value="sharpe_ratio">单因子 Alpha 多空夏普</option>
+                <option value="simple_annual_return">单因子 Alpha 多空年化</option>
                 <option value="pearson_ic_mean">IC</option>
                 <option value="rank_ic_mean">Rank IC</option>
                 <option value="rank_ic_ir">Rank IC IR</option>
@@ -148,15 +148,18 @@
                 <option value="deflated_sharpe_probability">Deflated Sharpe 概率</option>
                 <option value="probability_backtest_overfitting">PBO</option>
                 <option value="parameter_stability_positive_fraction">参数邻域正向比例</option>
-                <option value="portfolio_sharpe_ratio">组合夏普</option>
-                <option value="portfolio_simple_annual_return">组合简单年化</option>
-                <option value="portfolio_max_drawdown">组合最大回撤</option>
+                <option value="portfolio_sharpe_ratio">A股多头组合夏普</option>
+                <option value="portfolio_simple_annual_return">A股多头组合年化</option>
+                <option value="portfolio_max_drawdown">A股多头组合回撤</option>
                 <option value="portfolio_incremental_net_ir">组合边际净 IR</option>
                 <option value="portfolio_annual_turnover">组合年化换手</option>
                 <option value="portfolio_max_factor_correlation">最大因子相关性</option>
                 <option value="portfolio_walk_forward_positive_fraction">组合滚动正折比例</option>
                 <option value="portfolio_walk_forward_worst_sharpe">组合最差折夏普</option>
                 <option value="portfolio_deflated_sharpe_probability">组合 Deflated Sharpe</option>
+                <option value="alpha_diagnostic_sharpe_ratio">组合 Alpha 多空夏普</option>
+                <option value="alpha_diagnostic_simple_annual_return">组合 Alpha 多空年化</option>
+                <option value="alpha_diagnostic_max_drawdown">组合 Alpha 多空回撤</option>
               </select>
             </label>
             <div class="summary-cells">
@@ -184,7 +187,7 @@
           <article class="flow-step" data-phase="DIRECTION"><span>03</span><strong>方向自检</strong><p>公开证据诊断与三次预算</p></article>
           <article class="flow-step" data-phase="PROPOSAL"><span>04</span><strong>生成候选</strong><p>模型输出 canonical DSL</p></article>
           <article class="flow-step" data-phase="SEMANTICS"><span>05</span><strong>语义校验</strong><p>时序、单位与表达式去重</p></article>
-          <article class="flow-step" data-phase="EVALUATION"><span>06</span><strong>运行回测</strong><p>真实价量、成本与压力</p></article>
+          <article class="flow-step" data-phase="EVALUATION"><span>06</span><strong>双层评价</strong><p>Alpha诊断与A股多头代理</p></article>
           <article class="flow-step" data-phase="PORTFOLIO"><span>07</span><strong>组合增删</strong><p>保留、加入、删除或替换</p></article>
           <article class="flow-step" data-phase="HOLDOUT"><span>08</span><strong>隔离盲测</strong><p>一次性访问与分级反馈</p></article>
           <article class="flow-step" data-phase="CAPITAL_SIMULATION"><span>09</span><strong>资金仿真</strong><p>成交、费用、残仓与敞口</p></article>
@@ -200,12 +203,22 @@
           <span class="state-pill small" id="portfolioVersion">VERSION --</span>
         </div>
         <div class="portfolio-kpis">
-          <div><span>组合夏普</span><strong id="portfolioSharpe">--</strong></div>
-          <div><span>简单年化</span><strong id="portfolioAnnual">--</strong></div>
-          <div><span>最大回撤</span><strong id="portfolioDrawdown">--</strong></div>
-          <div><span>年化换手</span><strong id="portfolioTurnover">--</strong></div>
+          <div><span>A股多头夏普</span><strong id="portfolioSharpe">--</strong></div>
+          <div><span>A股多头年化</span><strong id="portfolioAnnual">--</strong></div>
+          <div><span>A股多头回撤</span><strong id="portfolioDrawdown">--</strong></div>
+          <div><span>A股多头换手</span><strong id="portfolioTurnover">--</strong></div>
           <div><span>最大相关性</span><strong id="portfolioCorrelation">--</strong></div>
           <div><span>活跃因子</span><strong id="portfolioFactorCount">0</strong></div>
+        </div>
+        <p class="portfolio-execution-summary" id="portfolioExecutionSummary">等待新协议组合</p>
+        <div class="portfolio-diagnostic-heading"><span>非投资性诊断</span><strong>截面多空 Alpha</strong></div>
+        <div class="portfolio-kpis alpha-diagnostic-kpis">
+          <div><span>Alpha夏普</span><strong id="alphaPortfolioSharpe">--</strong></div>
+          <div><span>Alpha年化</span><strong id="alphaPortfolioAnnual">--</strong></div>
+          <div><span>Alpha回撤</span><strong id="alphaPortfolioDrawdown">--</strong></div>
+          <div><span>Alpha换手</span><strong id="alphaPortfolioTurnover">--</strong></div>
+          <div><span>最差折夏普</span><strong id="alphaPortfolioWorstFold">--</strong></div>
+          <div><span>用途</span><strong>信息筛选</strong></div>
         </div>
         <div class="portfolio-body">
           <div><h3>当前构成</h3><div id="portfolioMembers" class="portfolio-members"></div></div>

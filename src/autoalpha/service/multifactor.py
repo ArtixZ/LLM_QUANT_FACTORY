@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from autoalpha.backtest.ashare_vector import ASHARE_PROXY_RETURN_CONVENTION
 from autoalpha.backtest.timing import EOD_NEXT_OPEN_RETURN_CONVENTION
 from autoalpha.config import ResearchConfig
 from autoalpha.dsl.expression import Expression, FactorDefinition
@@ -323,7 +325,9 @@ class MultiFactorResearchEngine:
                 **decision.evaluation.metrics,
                 "portfolio_action_gate_failures": list(decision.failed_gates),
                 "portfolio_utility_change": decision.utility_change,
-                "portfolio_selection_policy": "hard_gates_then_lexicographic_robustness",
+                "portfolio_selection_policy": (
+                    "alpha_screen_then_ashare_strategy_hard_gates_then_lexicographic_robustness"
+                ),
                 "factor_correlations": decision.evaluation.factor_correlations,
                 "portfolio_option_diagnostics": list(decision.option_diagnostics),
             },
@@ -497,17 +501,38 @@ def _option_diagnostic(option: PortfolioDecision) -> dict[str, Any]:
 
 def _absolute_portfolio_gate_failures(metrics: dict[str, Any], config: ResearchConfig) -> list[str]:
     policy = config.evaluation
+    strategy_basis = metrics.get("portfolio_strategy_gate_basis")
+    expected_return_convention = (
+        ASHARE_PROXY_RETURN_CONVENTION
+        if strategy_basis == "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
+        else EOD_NEXT_OPEN_RETURN_CONVENTION
+    )
     checks = {
         "stale_evaluation_protocol": (
             metrics.get("portfolio_evaluation_protocol") == config.governance.protocol_version
         ),
         "invalid_return_convention": (
-            metrics.get("portfolio_return_convention") == EOD_NEXT_OPEN_RETURN_CONVENTION
+            metrics.get("portfolio_return_convention") == expected_return_convention
+        ),
+        "strategy_execution_proxy": (
+            strategy_basis == "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
+            if strategy_basis is not None
+            else True
         ),
         "coverage": metrics["portfolio_coverage"] >= policy.minimum_coverage,
         "cost_stress": metrics["portfolio_cost_stress_net_ir"] >= policy.minimum_cost_stress_net_ir,
         "turnover": metrics["portfolio_annual_turnover"] <= policy.maximum_annual_turnover,
         "capacity": metrics["portfolio_capacity_cny"] >= policy.minimum_capacity_cny,
+        "residual_positions": int(
+            metrics.get(
+                "portfolio_maximum_observed_positions",
+                config.strategy_evaluation.maximum_positions,
+            )
+        )
+        <= math.ceil(
+            config.strategy_evaluation.maximum_positions
+            * config.portfolio.maximum_residual_position_multiplier
+        ),
         "annual_dispersion": (
             metrics["portfolio_annual_return_dispersion"] <= policy.maximum_annual_return_dispersion
         ),
@@ -623,6 +648,22 @@ def _absolute_gate_measurements(
             policy.minimum_capacity_cny,
             "min",
             0.05 * policy.minimum_capacity_cny,
+        ),
+        "residual_positions": (
+            float(
+                metrics.get(
+                    "portfolio_maximum_observed_positions",
+                    config.strategy_evaluation.maximum_positions,
+                )
+            ),
+            float(
+                math.ceil(
+                    config.strategy_evaluation.maximum_positions
+                    * config.portfolio.maximum_residual_position_multiplier
+                )
+            ),
+            "max",
+            1.0,
         ),
         "annual_dispersion": (
             metrics["portfolio_annual_return_dispersion"],

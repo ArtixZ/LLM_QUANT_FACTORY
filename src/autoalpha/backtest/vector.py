@@ -51,12 +51,15 @@ class VectorBacktestConfig:
             raise ValueError("selection_fraction must be in (0, 0.5]")
         if self.maximum_positions_per_side is not None and self.maximum_positions_per_side <= 0:
             raise ValueError("maximum_positions_per_side must be positive when provided")
-        if min(
-            self.commission_bps_each_side,
-            self.stamp_duty_bps_sell,
-            self.transfer_fee_bps_each_side,
-            self.slippage_bps_each_side,
-        ) < 0:
+        if (
+            min(
+                self.commission_bps_each_side,
+                self.stamp_duty_bps_sell,
+                self.transfer_fee_bps_each_side,
+                self.slippage_bps_each_side,
+            )
+            < 0
+        ):
             raise ValueError("execution costs cannot be negative")
         if self.cost_stress_multiplier < 1:
             raise ValueError("cost_stress_multiplier must be at least one")
@@ -109,6 +112,7 @@ class VectorBacktester:
         *,
         start: object | None = None,
         end: object | None = None,
+        precomputed_entry_returns: pd.DataFrame | None = None,
     ) -> VectorBacktestResult:
         signal, open_prices = _aligned_panels(signal, open_prices)
         positions = select_positions(
@@ -119,28 +123,32 @@ class VectorBacktester:
             method=self.config.selection_method,
         )
         gross = positions.abs().sum(axis=1).replace(0, np.nan)
-        target_weights = (
-            positions.div(gross, axis=0).fillna(0.0) * self.config.gross_exposure
-        )
+        target_weights = positions.div(gross, axis=0).fillna(0.0) * self.config.gross_exposure
         formed_weights = target_weights.rolling(
             self.config.holding_period_days, min_periods=1
         ).mean()
 
         if self.config.path_index == "entry_session":
             held_weights = formed_weights.shift(1)
-            realized_return = entry_aligned_open_return(open_prices)
+            realized_return = (
+                precomputed_entry_returns.reindex(
+                    index=open_prices.index, columns=open_prices.columns
+                )
+                if precomputed_entry_returns is not None
+                else entry_aligned_open_return(open_prices)
+            )
             if end is not None:
-                exit_session = pd.Series(
-                    realized_return.index, index=realized_return.index
-                ).shift(-1)
+                exit_session = pd.Series(realized_return.index, index=realized_return.index).shift(
+                    -1
+                )
                 realized_return = realized_return.where(exit_session.le(pd.Timestamp(end)), axis=0)
         else:
             held_weights = formed_weights
             realized_return = next_open_return_for_eod_signal(open_prices)
             if end is not None:
-                exit_session = pd.Series(
-                    realized_return.index, index=realized_return.index
-                ).shift(-2)
+                exit_session = pd.Series(realized_return.index, index=realized_return.index).shift(
+                    -2
+                )
                 realized_return = realized_return.where(exit_session.le(pd.Timestamp(end)), axis=0)
 
         gross_return = (held_weights * realized_return).sum(axis=1, min_count=1).dropna()
@@ -215,10 +223,13 @@ class VectorBacktester:
             + self.config.slippage_bps_each_side
         )
         return (
-            buy_turnover * both_side_bps + sell_turnover * (
-                both_side_bps + self.config.stamp_duty_bps_sell
+            (
+                buy_turnover * both_side_bps
+                + sell_turnover * (both_side_bps + self.config.stamp_duty_bps_sell)
             )
-        ) * multiplier / 10_000
+            * multiplier
+            / 10_000
+        )
 
 
 def select_positions(
@@ -239,8 +250,7 @@ def select_positions(
         ordinal_long = signal.rank(axis=1, ascending=False, method="first")
         ordinal_short = signal.rank(axis=1, ascending=True, method="first")
         long_positions = (
-            (ranks >= 1.0 - selection_fraction)
-            & (ordinal_long <= maximum_positions_per_side)
+            (ranks >= 1.0 - selection_fraction) & (ordinal_long <= maximum_positions_per_side)
         ).astype(float)
         short_positions = (
             (ranks <= selection_fraction) & (ordinal_short <= maximum_positions_per_side)
@@ -272,9 +282,7 @@ def reconcile_vector_paths(
     metric_difference = {
         "simple_annual_return": float((candidate_net.mean() - reference_net.mean()) * 245),
         "sharpe_ratio": float(_annualized_ratio(candidate_net) - _annualized_ratio(reference_net)),
-        "total_return": float(
-            (1.0 + candidate_net).prod() - (1.0 + reference_net).prod()
-        ),
+        "total_return": float((1.0 + candidate_net).prod() - (1.0 + reference_net).prod()),
     }
     return VectorReconciliation(
         passed=len(common) == len(reference) == len(candidate)
@@ -330,9 +338,7 @@ def _metrics(
         "total_return": float(total_growth - 1.0),
         "final_equity_cny": float(equity.iloc[-1]),
         "sharpe_ratio": _annualized_ratio(net, config.trading_days_per_year),
-        "annual_volatility": float(
-            net.std(ddof=1) * math.sqrt(config.trading_days_per_year)
-        ),
+        "annual_volatility": float(net.std(ddof=1) * math.sqrt(config.trading_days_per_year)),
         "max_drawdown": float(drawdown.min()),
         "annual_turnover": float(path["turnover"].mean() * config.trading_days_per_year),
         "total_transaction_cost_return": float(path["transaction_cost"].sum()),

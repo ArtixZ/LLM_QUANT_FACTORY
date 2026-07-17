@@ -181,11 +181,16 @@ async function loadFactors() {
   endInput.value = data.last_trade_date;
   text("dataRange", `${data.first_trade_date} — ${data.last_trade_date}`);
   text("backtestSummary", `${backtestState.library.summary.factor_count} 个因子 · ${data.fingerprint.slice(0, 12)} · MANUAL / NON-GOVERNANCE`);
-  const queryFactors = new URLSearchParams(window.location.search).get("factors");
+  const queryParameters = new URLSearchParams(window.location.search);
+  const queryFactors = queryParameters.get("factors");
   if (queryFactors) {
     const available = new Set(backtestState.library.factors.map(factor => factor.factor_id));
-    queryFactors.split(",").filter(factorId => available.has(factorId)).slice(0, 12)
-      .forEach(factorId => backtestState.selected.set(factorId, 1));
+    const queryWeights = (queryParameters.get("weights") || "").split(",").map(Number);
+    queryFactors.split(",").slice(0, 12).forEach((factorId, index) => {
+      if (!available.has(factorId)) return;
+      const weight = queryWeights[index];
+      backtestState.selected.set(factorId, Number.isFinite(weight) && weight > 0 ? weight : 1);
+    });
   }
   renderPicker();
   renderSelectedEditor();
