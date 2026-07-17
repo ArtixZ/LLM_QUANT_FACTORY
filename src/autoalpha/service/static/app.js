@@ -278,7 +278,8 @@ function renderTaskIdentity(task) {
   identity.textContent = `${market} · ${task.task_id || state.taskId}`;
   identity.href = `/research-tasks/${encodeURIComponent(task.task_id || state.taskId)}`;
   identity.title = task.data_path || "查看任务配置";
-  document.getElementById("autoResearchNav").href = `/research/${encodeURIComponent(task.task_id || state.taskId)}`;
+  const autoResearchNav = document.getElementById("autoResearchNav");
+  if (autoResearchNav) autoResearchNav.href = `/research/${encodeURIComponent(task.task_id || state.taskId)}`;
   document.title = `${name} · AutoAlpha`;
 }
 
