@@ -258,7 +258,22 @@ function fillTaskDefaults() {
     return `<option value="${esc(task.task_id)}" selected>${esc(task.name)} · ${esc(statusLabel(task.status))} · ${Number(counts.total || 0)} 因子</option>`;
   }).join("");
   $("formObjectiveProfile").innerHTML = state.bootstrap.objective_presets.map((preset) => `<option value="${esc(preset.profile)}">${esc(preset.label)}</option>`).join("");
-  $("formObjectiveProfile").value = "DRAWDOWN_FIRST";
+  const construction = defaults.construction || {};
+  const budget = defaults.budget || {};
+  const constructionFields = {
+    formMinFactors: "min_factors", formMaxFactors: "max_factors",
+    formMinWeight: "minimum_weight", formMaxWeight: "maximum_weight",
+    formWeightStep: "weight_step", formPoolLimit: "candidate_pool_limit",
+    formFamilyLimit: "maximum_same_family",
+  };
+  Object.entries(constructionFields).forEach(([id, key]) => { if (construction[key] != null) $(id).value = construction[key]; });
+  const budgetFields = {
+    formExperiments: "maximum_experiments", formLlmProposals: "maximum_llm_proposals",
+    formRuntime: "maximum_runtime_minutes", formWeightEvaluations: "weight_evaluations_per_subset",
+    formInterval: "iteration_interval_seconds",
+  };
+  Object.entries(budgetFields).forEach(([id, key]) => { if (budget[key] != null) $(id).value = budget[key]; });
+  $("formObjectiveProfile").value = defaults.objective?.profile || "DRAWDOWN_FIRST";
   applyObjectivePreset();
   renderFactorPicker();
 }

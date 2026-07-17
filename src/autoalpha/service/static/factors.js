@@ -80,7 +80,7 @@ function bindLibraryControls() {
       const result = await api("/api/autocombine/quick-task", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ factor_ids: factors, objective_profile: document.getElementById("quickObjectiveProfile").value, maximum_factors: 5, start_immediately: true }),
+        body: JSON.stringify({ factor_ids: factors, objective_profile: document.getElementById("quickObjectiveProfile").value, maximum_factors: libraryState.data?.autocombine_defaults?.maximum_factors || 5, start_immediately: true }),
       });
       toast(result.started ? "组合优化任务已创建并启动" : "任务已创建，等待在 AutoCombine 启动");
       window.location.href = result.task_url;
@@ -112,6 +112,10 @@ async function loadLibrary({ announce = true } = {}) {
   refreshButton.disabled = true;
   try {
     libraryState.data = await api("/api/factors");
+    const objective = libraryState.data.autocombine_defaults?.objective_profile;
+    if (objective && [...document.getElementById("quickObjectiveProfile").options].some(option => option.value === objective)) {
+      document.getElementById("quickObjectiveProfile").value = objective;
+    }
     libraryState.refreshedAt = new Date();
     hydrateFilters();
     renderSummary();

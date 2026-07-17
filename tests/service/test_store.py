@@ -38,6 +38,31 @@ def test_store_persists_memory_metrics_and_hash_chained_logs(tmp_path: Path) -> 
     assert store.verify_events() == 1
 
 
+def test_store_versions_settings_atomically_without_duplicate_revisions(tmp_path: Path) -> None:
+    store = ServiceStore(tmp_path / "service.sqlite3")
+    store.save_settings({"model": "baseline", "data_path": "/data"})
+
+    revision = store.save_settings_revision(
+        {"model": "next", "data_path": "/data"},
+        change_note="switch model",
+        metadata={"api_key_replaced": True},
+    )
+
+    assert revision is not None
+    assert revision["changed_keys"] == ["model"]
+    assert revision["previous_values"]["model"] == "baseline"
+    assert revision["values"]["model"] == "next"
+    assert revision["metadata"] == {"api_key_replaced": True}
+    assert "api_key" not in revision["values"]
+    assert store.settings_revision(revision["id"])["fingerprint"] == revision["fingerprint"]
+    assert store.save_settings_revision(
+        {"model": "next"}, change_note="no change"
+    ) is None
+    assert len(store.settings_revisions()) == 1
+    with pytest.raises(ValueError, match="Secrets cannot be stored"):
+        store.save_settings_revision({"api_key": "secret"}, change_note="invalid")
+
+
 def test_store_supplements_existing_metrics_without_losing_evidence(tmp_path: Path) -> None:
     store = ServiceStore(tmp_path / "service.sqlite3")
     store.begin_iteration("run-1", 1)

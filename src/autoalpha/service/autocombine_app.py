@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -17,7 +17,6 @@ from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.service.autocombine import (
     DEFAULT_BUDGET,
     DEFAULT_CONSTRUCTION,
-    DEFAULT_OBJECTIVE,
     OBJECTIVE_PRESETS,
     AutoCombineManager,
     canonical_hash,
@@ -157,7 +156,15 @@ manager = AutoCombineManager(
     combine_store,
     vault,
     config_path=CONFIG_PATH,
-    maximum_concurrent_tasks=max(1, int(os.getenv("AUTOCOMBINE_CONCURRENCY", "2"))),
+    maximum_concurrent_tasks=max(
+        1,
+        int(
+            os.getenv(
+                "AUTOCOMBINE_CONCURRENCY",
+                base_store.settings().get("autocombine_concurrency", "2"),
+            )
+        ),
+    ),
 )
 
 
@@ -197,6 +204,11 @@ async def strategies_page() -> FileResponse:
     return FileResponse(PACKAGE_ROOT / "static/autocombine.html")
 
 
+@app.get("/settings", include_in_schema=False)
+async def settings_page() -> RedirectResponse:
+    return RedirectResponse("http://127.0.0.1:8788/settings")
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {
@@ -208,6 +220,8 @@ async def health() -> dict[str, Any]:
         "runtime_root": str(RUNTIME_ROOT.resolve()),
         "research_task_count": len(base_store.research_tasks()),
         "factor_count": len(base_store.factor_pool(limit=5000)),
+        "maximum_concurrent_tasks": manager.maximum_concurrent_tasks,
+        "active_tasks": manager.active_count,
     }
 
 
@@ -286,6 +300,61 @@ async def bootstrap() -> dict[str, Any]:
             "factors": [(item["factor_id"], item["status"]) for item in factors],
         }
     )
+    construction_defaults = {
+        **DEFAULT_CONSTRUCTION,
+        "min_factors": int(
+            settings.get("autocombine_default_min_factors", DEFAULT_CONSTRUCTION["min_factors"])
+        ),
+        "max_factors": int(
+            settings.get("autocombine_default_max_factors", DEFAULT_CONSTRUCTION["max_factors"])
+        ),
+        "minimum_weight": float(
+            settings.get(
+                "autocombine_default_minimum_weight", DEFAULT_CONSTRUCTION["minimum_weight"]
+            )
+        ),
+        "maximum_weight": float(
+            settings.get(
+                "autocombine_default_maximum_weight", DEFAULT_CONSTRUCTION["maximum_weight"]
+            )
+        ),
+        "weight_step": float(
+            settings.get("autocombine_default_weight_step", DEFAULT_CONSTRUCTION["weight_step"])
+        ),
+        "candidate_pool_limit": int(
+            settings.get(
+                "autocombine_default_pool_limit", DEFAULT_CONSTRUCTION["candidate_pool_limit"]
+            )
+        ),
+    }
+    objective_profile = settings.get("autocombine_default_objective", "DRAWDOWN_FIRST")
+    objective_defaults = {
+        key: value
+        for key, value in OBJECTIVE_PRESETS.get(
+            objective_profile, OBJECTIVE_PRESETS["DRAWDOWN_FIRST"]
+        ).items()
+        if key not in {"label", "description"}
+    }
+    budget_defaults = {
+        **DEFAULT_BUDGET,
+        "maximum_experiments": int(
+            settings.get(
+                "autocombine_default_maximum_experiments",
+                DEFAULT_BUDGET["maximum_experiments"],
+            )
+        ),
+        "maximum_llm_proposals": int(
+            settings.get(
+                "autocombine_default_llm_proposals", DEFAULT_BUDGET["maximum_llm_proposals"]
+            )
+        ),
+        "iteration_interval_seconds": float(
+            settings.get(
+                "autocombine_default_iteration_interval_seconds",
+                DEFAULT_BUDGET["iteration_interval_seconds"],
+            )
+        ),
+    }
     return {
         "tasks": [_task_view(task) for task in combine_store.tasks()],
         "strategies": combine_store.strategies(),
@@ -302,9 +371,9 @@ async def bootstrap() -> dict[str, Any]:
             "data_path": data_path,
             "data_range": data_range,
             "protocol": default_protocol,
-            "construction": DEFAULT_CONSTRUCTION,
-            "objective": DEFAULT_OBJECTIVE,
-            "budget": DEFAULT_BUDGET,
+            "construction": construction_defaults,
+            "objective": objective_defaults,
+            "budget": budget_defaults,
         },
         "provider_configured": vault.configured(),
         "maximum_concurrent_tasks": manager.maximum_concurrent_tasks,

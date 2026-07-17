@@ -53,6 +53,17 @@ class ServiceStore:
                     value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS settings_revisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    change_note TEXT NOT NULL,
+                    changed_by TEXT NOT NULL,
+                    changed_keys_json TEXT NOT NULL,
+                    previous_values_json TEXT NOT NULL,
+                    values_json TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL UNIQUE
+                );
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp_utc TEXT NOT NULL,
@@ -545,6 +556,92 @@ class ServiceStore:
                 value=excluded.value, updated_at=excluded.updated_at""",
                 [(key, value, now) for key, value in values.items()],
             )
+
+    def save_settings_revision(
+        self,
+        values: dict[str, str],
+        *,
+        change_note: str,
+        changed_by: str = "local-operator",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically persist changed settings and an immutable, secret-free snapshot."""
+        if not values:
+            return None
+        secret_keys = {"api_key", "openai_api_key", "tushare_token"}
+        forbidden = secret_keys.intersection(key.casefold() for key in values)
+        if forbidden:
+            raise ValueError(f"Secrets cannot be stored in settings revisions: {sorted(forbidden)}")
+        now = _now()
+        with self.connection() as connection:
+            rows = connection.execute("SELECT key, value FROM settings").fetchall()
+            previous = {str(row["key"]): str(row["value"]) for row in rows}
+            changed = {
+                str(key): str(value)
+                for key, value in values.items()
+                if previous.get(str(key)) != str(value)
+            }
+            if not changed:
+                return None
+            current = {**previous, **changed}
+            fingerprint = hashlib.sha256(
+                _canonical(
+                    {
+                        "created_at": now,
+                        "changed_keys": sorted(changed),
+                        "values": current,
+                        "metadata": metadata or {},
+                    }
+                ).encode()
+            ).hexdigest()
+            connection.executemany(
+                """INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                value=excluded.value, updated_at=excluded.updated_at""",
+                [(key, value, now) for key, value in changed.items()],
+            )
+            cursor = connection.execute(
+                """INSERT INTO settings_revisions
+                (created_at, change_note, changed_by, changed_keys_json,
+                 previous_values_json, values_json, metadata_json, fingerprint)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    now,
+                    change_note.strip() or "更新全局设置",
+                    changed_by.strip() or "local-operator",
+                    _canonical(sorted(changed)),
+                    _canonical(previous),
+                    _canonical(current),
+                    _canonical(metadata or {}),
+                    fingerprint,
+                ),
+            )
+            revision_id = int(cursor.lastrowid)
+        return self.settings_revision(revision_id)
+
+    def settings_revisions(self, *, limit: int = 30) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM settings_revisions ORDER BY id DESC LIMIT ?",
+                (min(max(limit, 1), 200),),
+            ).fetchall()
+        return [self._settings_revision_record(row) for row in rows]
+
+    def settings_revision(self, revision_id: int) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM settings_revisions WHERE id=?", (revision_id,)
+            ).fetchone()
+        return self._settings_revision_record(row) if row else None
+
+    @staticmethod
+    def _settings_revision_record(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["changed_keys"] = json.loads(item.pop("changed_keys_json"))
+        item["previous_values"] = json.loads(item.pop("previous_values_json"))
+        item["values"] = json.loads(item.pop("values_json"))
+        item["metadata"] = json.loads(item.pop("metadata_json"))
+        return item
 
     def create_research_task(
         self,

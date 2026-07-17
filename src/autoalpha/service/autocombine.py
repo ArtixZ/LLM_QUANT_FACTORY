@@ -826,6 +826,10 @@ class AutoCombineManager:
     def alive(self, task_id: str) -> bool:
         return task_id in self._workers and self._workers[task_id].alive
 
+    @property
+    def active_count(self) -> int:
+        return sum(worker.alive for worker in self._workers.values())
+
     async def shutdown(self) -> None:
         await asyncio.gather(
             *(worker.shutdown() for worker in self._workers.values()),

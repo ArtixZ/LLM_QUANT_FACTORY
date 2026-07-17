@@ -64,6 +64,15 @@ from autoalpha.service.research_protocol import (
     task_research_config,
 )
 from autoalpha.service.screener import CrossSectionalScreener, ScreenerSpec
+from autoalpha.service.settings_center import (
+    RESTART_KEYS,
+    GlobalSettingsUpdate,
+    GlobalSettingsValues,
+    default_settings,
+    runtime_snapshot,
+    settings_catalog,
+    validate_operational_paths,
+)
 from autoalpha.service.store import ServiceStore
 from autoalpha.service.worker import SecretVault
 
@@ -93,6 +102,10 @@ TRADE_STATEMENT_FIELDS = (
 
 class SessionRequest(BaseModel):
     token: str
+
+
+class SettingsRestoreRequest(BaseModel):
+    change_note: str = Field(default="恢复历史设置版本", max_length=300)
 
 
 class SettingsRequest(BaseModel):
@@ -398,6 +411,12 @@ research_manager = ResearchTaskManager(
     vault,
     config_path=CONFIG_PATH,
     artifact_root=RUNTIME_ROOT / "artifacts",
+    maximum_concurrent_iterations=int(
+        os.getenv(
+            "AUTOALPHA_MAX_CONCURRENT_RESEARCH",
+            store.settings().get("research_concurrency", "2"),
+        )
+    ),
 )
 manual_backtest_lock = asyncio.Lock()
 # Research and manual backtests only read the immutable panel and may overlap.
@@ -599,6 +618,15 @@ def _start_autocombine_task(task_id: str) -> tuple[bool, str | None]:
         return False, f"{type(error).__name__}: {error}"
 
 
+def _autocombine_health() -> dict[str, Any] | None:
+    base_url = os.getenv("AUTOCOMBINE_URL", "http://127.0.0.1:8888").rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/health", timeout=2) as response:  # noqa: S310
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _backfill_task_protocols() -> None:
     base = ResearchConfig.from_toml(CONFIG_PATH)
     for task in store.research_tasks():
@@ -621,40 +649,14 @@ def _backfill_task_protocols() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings = store.settings()
-    if not settings:
-        store.save_settings(
-            {
-                "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-                "model": os.getenv("AUTOALPHA_MODEL", "gpt-5.2"),
-                "data_path": os.getenv("AUTOALPHA_DATA_PATH", str(PROJECT_ROOT.parent / "data")),
-                "iteration_interval_seconds": "5",
-                "temperature": "0.7",
-                "maximum_active_factors": "5",
-                "full_llm_enabled": "true",
-                "market_data_root": str(Path.home() / "MarketData" / "Ashare"),
-                "data_auto_update_enabled": "true",
-                "data_update_hour": "18",
-                "data_product_ids": json.dumps(DEFAULT_PRODUCT_IDS),
-            }
-        )
-    else:
-        missing_defaults = {}
-        if "temperature" not in settings:
-            missing_defaults["temperature"] = "0.7"
-        if "maximum_active_factors" not in settings:
-            missing_defaults["maximum_active_factors"] = "5"
-        if "full_llm_enabled" not in settings:
-            missing_defaults["full_llm_enabled"] = "true"
-        if "market_data_root" not in settings:
-            missing_defaults["market_data_root"] = str(Path.home() / "MarketData" / "Ashare")
-        if "data_auto_update_enabled" not in settings:
-            missing_defaults["data_auto_update_enabled"] = "true"
-        if "data_update_hour" not in settings:
-            missing_defaults["data_update_hour"] = "18"
-        if "data_product_ids" not in settings:
-            missing_defaults["data_product_ids"] = json.dumps(DEFAULT_PRODUCT_IDS)
-        if missing_defaults:
-            store.save_settings(missing_defaults)
+    managed_defaults = GlobalSettingsValues.model_validate(
+        default_settings(PROJECT_ROOT)
+    ).to_store()
+    missing_defaults = {
+        key: value for key, value in managed_defaults.items() if key not in settings
+    }
+    if missing_defaults:
+        store.save_settings(missing_defaults)
     _ensure_legacy_research_task()
     _backfill_task_protocols()
     state = store.state()
@@ -788,6 +790,11 @@ async def research_task_detail_page(task_id: str) -> FileResponse:
 @app.get("/llm-team", include_in_schema=False)
 async def llm_team_page() -> FileResponse:
     return FileResponse(PACKAGE_ROOT / "static/llm_team.html")
+
+
+@app.get("/settings", include_in_schema=False)
+async def settings_page() -> FileResponse:
+    return FileResponse(PACKAGE_ROOT / "static/settings.html")
 
 
 @app.post("/api/session")
@@ -1292,6 +1299,10 @@ async def factor_library(response: Response) -> dict[str, Any]:
         "manual_holdout_exposure_blocks_all_generations_using_same_holdout": True,
         "generation_ids": generation_ids,
         "contaminated_factor_count": len(contamination),
+    }
+    library["autocombine_defaults"] = {
+        "objective_profile": settings.get("autocombine_default_objective", "DRAWDOWN_FIRST"),
+        "maximum_factors": int(settings.get("autocombine_default_max_factors", "5")),
     }
     return library
 
@@ -1902,6 +1913,166 @@ async def run_manual_backtest(payload: ManualBacktestRequest) -> dict[str, Any]:
     }
 
 
+async def _settings_center_snapshot() -> dict[str, Any]:
+    stored = store.settings()
+    values = GlobalSettingsValues.from_store(stored, project_root=PROJECT_ROOT)
+    combine_health = await asyncio.to_thread(_autocombine_health)
+    operational: dict[str, Any]
+    try:
+        operational = {"valid": True, **validate_operational_paths(values)}
+    except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError) as error:
+        operational = {"valid": False, "error": f"{type(error).__name__}: {error}"}
+    runtime = runtime_snapshot(
+        runtime_root=RUNTIME_ROOT,
+        config_path=CONFIG_PATH,
+        research_concurrency=research_manager.maximum_concurrent_iterations,
+        autocombine_health=combine_health,
+    )
+    requested_concurrency = {
+        "research_concurrency": values.research_concurrency,
+        "autocombine_concurrency": values.autocombine_concurrency,
+    }
+    effective_concurrency = {
+        "research_concurrency": research_manager.maximum_concurrent_iterations,
+        "autocombine_concurrency": (
+            combine_health.get("maximum_concurrent_tasks") if combine_health else None
+        ),
+    }
+    pending_restart = [
+        key
+        for key in RESTART_KEYS
+        if effective_concurrency.get(key) is not None
+        and requested_concurrency[key] != effective_concurrency[key]
+    ]
+    tasks = store.research_tasks()
+    combine_tasks = combine_store.tasks()
+    return {
+        "values": values.model_dump(mode="json"),
+        "catalog": settings_catalog(),
+        "credentials": {
+            "api_key_configured": vault.configured(),
+            "api_key_source": (
+                "environment" if os.getenv("AUTOALPHA_API_KEY") else "system_keychain"
+            ),
+            "tushare_token_configured": data_sync_worker.token_configured(),
+            "tushare_token_source": (
+                "environment" if os.getenv("TUSHARE_TOKEN") else "system_keychain"
+            ),
+            "secret_material_returned": False,
+        },
+        "operational": operational,
+        "runtime": runtime,
+        "services": {
+            "autoalpha": {
+                "status": "ok",
+                "active_tasks": len(research_manager.active_task_ids()),
+                "task_count": len(tasks),
+            },
+            "autocombine": {
+                "status": "ok" if combine_health else "unreachable",
+                "active_tasks": sum(
+                    1 for task in combine_tasks if task["status"] in {"RUNNING", "STOPPING"}
+                ),
+                "task_count": len(combine_tasks),
+                "health": combine_health,
+            },
+        },
+        "activation": {
+            "pending_restart_keys": sorted(pending_restart),
+            "requested_concurrency": requested_concurrency,
+            "effective_concurrency": effective_concurrency,
+            "running_tasks_keep_frozen_protocols": True,
+        },
+        "revisions": store.settings_revisions(limit=40),
+    }
+
+
+async def _save_global_settings(
+    payload: GlobalSettingsUpdate,
+    *,
+    changed_by: str = "settings-center",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        operational = validate_operational_paths(payload.values)
+    except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    values = payload.values.model_copy(
+        update={
+            "data_path": operational["data_path"],
+            "market_data_root": operational["market_data_root"],
+        }
+    )
+    if payload.api_key:
+        try:
+            vault.set(payload.api_key)
+        except (RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+    if payload.tushare_token:
+        try:
+            data_sync_worker.set_token(payload.tushare_token)
+        except (RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+    revision = store.save_settings_revision(
+        values.to_store(),
+        change_note=payload.change_note,
+        changed_by=changed_by,
+        metadata={
+            **(metadata or {}),
+            "api_key_replaced": bool(payload.api_key),
+            "tushare_token_replaced": bool(payload.tushare_token),
+            "credential_backend": "system_keyring",
+            "data_fingerprint": operational["data_fingerprint"],
+        },
+    )
+    changed_keys = revision["changed_keys"] if revision else []
+    store.append_event(
+        "audit",
+        "GLOBAL_SETTINGS_REVISION_CREATED",
+        "全局设置版本已保存",
+        payload.change_note,
+        payload={
+            "revision_id": revision["id"] if revision else None,
+            "changed_keys": changed_keys,
+            "pending_restart_keys": sorted(set(changed_keys) & RESTART_KEYS),
+            "api_key_replaced": bool(payload.api_key),
+            "tushare_token_replaced": bool(payload.tushare_token),
+            "data_fingerprint": operational["data_fingerprint"],
+        },
+    )
+    if store.state()["state"] == "WAITING_CONFIGURATION" and vault.configured():
+        store.update_state(state="READY", phase="CONFIGURE", last_error=None)
+    return await _settings_center_snapshot()
+
+
+@app.get("/api/control-settings", dependencies=[Depends(_authorized)])
+async def control_settings() -> dict[str, Any]:
+    return await _settings_center_snapshot()
+
+
+@app.put("/api/control-settings", dependencies=[Depends(_authorized)])
+async def update_control_settings(payload: GlobalSettingsUpdate) -> dict[str, Any]:
+    return await _save_global_settings(payload)
+
+
+@app.post(
+    "/api/control-settings/revisions/{revision_id}/restore",
+    dependencies=[Depends(_authorized)],
+)
+async def restore_control_settings(
+    revision_id: int, payload: SettingsRestoreRequest
+) -> dict[str, Any]:
+    revision = store.settings_revision(revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Settings revision not found")
+    values = GlobalSettingsValues.from_store(revision["values"], project_root=PROJECT_ROOT)
+    return await _save_global_settings(
+        GlobalSettingsUpdate(values=values, change_note=payload.change_note),
+        changed_by="settings-center-restore",
+        metadata={"restored_from_revision": revision_id},
+    )
+
+
 @app.put("/api/settings", dependencies=[Depends(_authorized)])
 async def update_settings(payload: SettingsRequest) -> dict[str, Any]:
     data_path = Path(payload.data_path).expanduser().resolve()
@@ -1927,7 +2098,7 @@ async def update_settings(payload: SettingsRequest) -> dict[str, Any]:
             data_sync_worker.set_token(payload.tushare_token)
         except (RuntimeError, ValueError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
-    store.save_settings(
+    store.save_settings_revision(
         {
             "base_url": payload.base_url.rstrip("/"),
             "model": payload.model,
@@ -1939,7 +2110,13 @@ async def update_settings(payload: SettingsRequest) -> dict[str, Any]:
             "market_data_root": str(market_data_root),
             "data_auto_update_enabled": str(payload.data_auto_update_enabled).lower(),
             "data_update_hour": str(payload.data_update_hour),
-        }
+        },
+        change_note="通过自动研究侧栏更新兼容配置",
+        changed_by="legacy-settings-form",
+        metadata={
+            "api_key_replaced": bool(payload.api_key),
+            "tushare_token_replaced": bool(payload.tushare_token),
+        },
     )
     store.append_event(
         "audit",
@@ -1988,14 +2165,17 @@ async def update_data_center_settings(payload: DataCenterSettingsRequest) -> dic
             data_sync_worker.set_token(payload.tushare_token)
         except (RuntimeError, ValueError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
-    store.save_settings(
+    store.save_settings_revision(
         {
             "data_path": workspace.root_path,
             "market_data_root": str(market_data_root),
             "data_auto_update_enabled": str(payload.data_auto_update_enabled).lower(),
             "data_update_hour": str(payload.data_update_hour),
             "data_product_ids": json.dumps(payload.data_product_ids),
-        }
+        },
+        change_note="通过数据中心更新数据配置",
+        changed_by="data-center",
+        metadata={"tushare_token_replaced": bool(payload.tushare_token)},
     )
     store.append_event(
         "audit",
