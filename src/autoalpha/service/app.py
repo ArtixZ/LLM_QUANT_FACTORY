@@ -797,6 +797,11 @@ async def settings_page() -> FileResponse:
     return FileResponse(PACKAGE_ROOT / "static/settings.html")
 
 
+@app.get("/guide", include_in_schema=False)
+async def system_guide_page() -> FileResponse:
+    return FileResponse(PACKAGE_ROOT / "static/system_guide.html")
+
+
 @app.post("/api/session")
 async def create_session(payload: SessionRequest, response: Response) -> dict[str, bool]:
     required = os.getenv("AUTOALPHA_SERVICE_TOKEN")

@@ -16,6 +16,7 @@ PLATFORM_PAGES = (
     "batch_backtest.html",
     "data_center.html",
     "settings.html",
+    "system_guide.html",
 )
 
 
@@ -39,6 +40,7 @@ def test_shared_header_is_the_single_canonical_navigation_source() -> None:
         "paper",
         "backtest",
         "data",
+        "guide",
         "settings",
     )
 
@@ -55,3 +57,30 @@ def test_shared_header_uses_stable_centered_grid_tracks() -> None:
     assert "grid-template-areas: \"identity navigation tools\"" in stylesheet
     assert "grid-template-columns: minmax(190px, 1fr) auto minmax(190px, 1fr)" in stylesheet
     assert "grid-area: navigation" in stylesheet
+
+
+def test_system_guide_covers_the_full_research_control_plane() -> None:
+    markup = (STATIC / "system_guide.html").read_text(encoding="utf-8")
+    application = (STATIC.parent / "app.py").read_text(encoding="utf-8")
+    expected_sections = (
+        "position",
+        "architecture",
+        "lifecycle",
+        "autoalpha",
+        "llm-team",
+        "evaluation",
+        "data",
+        "factor-assets",
+        "autocombine",
+        "execution",
+        "surfaces",
+        "governance",
+        "boundaries",
+    )
+
+    assert markup.count('data-stage="') == 12
+    assert "DETERMINISTIC" in markup
+    assert "EOD_T__OPEN_T1_TO_OPEN_T2" in markup
+    assert "@app.get(\"/guide\"" in application
+    for section in expected_sections:
+        assert f'id="{section}"' in markup

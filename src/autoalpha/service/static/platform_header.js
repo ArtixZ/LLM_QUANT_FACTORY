@@ -15,6 +15,7 @@
     ["paper", `${alphaOrigin}/paper-trading`, "wallet-cards", "模拟交易"],
     ["backtest", `${alphaOrigin}/backtest`, "chart-no-axes-combined", "手动回测"],
     ["data", `${alphaOrigin}/data`, "database-zap", "数据中心"],
+    ["guide", `${alphaOrigin}/guide`, "map", "系统导览"],
     ["settings", `${alphaOrigin}/settings`, "settings-2", "系统设置"],
   ];
 
@@ -72,6 +73,7 @@
     if (path.startsWith("/paper-trading")) return "paper";
     if (path.startsWith("/backtest")) return "backtest";
     if (path.startsWith("/data")) return "data";
+    if (path.startsWith("/guide")) return "guide";
     if (path.startsWith("/settings")) return "settings";
     return "research";
   }
