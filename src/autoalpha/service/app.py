@@ -215,9 +215,15 @@ class ResearchProtocolPresetRequest(BaseModel):
         RECENT_FIVE_YEAR_BACKWARD
     )
     exploration_years: int = Field(default=5, ge=2, le=10)
-    validation_years: int = Field(default=2, ge=1, le=5)
+    validation_years: int | None = Field(default=None, ge=1, le=5)
     holdout_months: int = Field(default=6, ge=3, le=24)
     embargo_days: int = Field(default=30, ge=0, le=90)
+
+    @property
+    def resolved_validation_years(self) -> int:
+        if self.validation_years is not None:
+            return self.validation_years
+        return 3 if self.design == REGIME_COVERAGE_BACKWARD else 2
 
     @model_validator(mode="after")
     def validate_coverage(self) -> ResearchProtocolPresetRequest:
@@ -1163,14 +1169,14 @@ async def build_research_protocol_preset(
                 payload.data_start.isoformat(),
                 payload.data_end.isoformat(),
                 exploration_years=payload.exploration_years,
-                validation_years=payload.validation_years,
+                validation_years=payload.resolved_validation_years,
                 holdout_months=payload.holdout_months,
             )
         elif payload.design == REGIME_COVERAGE_BACKWARD:
             protocol = regime_coverage_task_protocol(
                 payload.data_start.isoformat(),
                 payload.data_end.isoformat(),
-                validation_years=payload.validation_years,
+                validation_years=payload.resolved_validation_years,
                 holdout_months=payload.holdout_months,
                 embargo_days=payload.embargo_days,
             )

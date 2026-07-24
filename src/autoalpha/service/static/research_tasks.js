@@ -26,7 +26,15 @@ function bindControls() {
   document.getElementById("stopTaskBtn").onclick = () => commandTask("stop");
   document.getElementById("refreshActivity").onclick = loadActivity;
   document.getElementById("autoSplitBtn").onclick = autoSplitProtocol;
-  document.getElementById("protocolDesign").addEventListener("change", updateProtocolDesign);
+  document.getElementById("protocolDesign").addEventListener("change", () => {
+    const design = value("protocolDesign");
+    if (design === "REGIME_COVERAGE_BACKWARD") {
+      document.getElementById("protocolValidationYears").value = 3;
+    } else if (design === "RECENT_FIVE_YEAR_BACKWARD") {
+      document.getElementById("protocolValidationYears").value = 2;
+    }
+    updateProtocolDesign();
+  });
   ["protocolExplorationYears", "protocolValidationYears", "protocolHoldoutMonths", "protocolEmbargoDays", "taskDataEnd"].forEach(id => {
     document.getElementById(id).addEventListener("input", updateProtocolDesign);
   });
