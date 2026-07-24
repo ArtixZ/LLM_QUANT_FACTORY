@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoAlpha 全因子批量回测</title>
+  <link rel="stylesheet" href="/static/batch_backtest.css?v=20260717-v1">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
+</head>
+<body>
+  <header class="batch-header">
+    <div class="identity"><h1 id="pageHeading">全因子批量回测</h1><p id="headerSummary">正在读取独立计算队列</p></div>
+    <div class="header-actions">
+      <a class="button" href="http://127.0.0.1:8788/research-tasks"><i data-lucide="arrow-left"></i>自动研究</a>
+      <button class="button" id="newJobBtn"><i data-lucide="plus"></i>新建任务</button>
+      <button class="button primary" id="startJobBtn"><i data-lucide="play"></i>启动</button>
+      <button class="button danger" id="pauseJobBtn"><i data-lucide="pause"></i>暂停</button>
+      <button class="icon-button" id="refreshBtn" title="刷新"><i data-lucide="refresh-cw"></i></button>
+    </div>
+  </header>
+  <script src="/static/platform_header.js?v=20260718-quant-v1"></script>
+
+  <main class="batch-shell">
+    <section class="job-strip">
+      <label>批量任务<select id="jobSelect"></select></label>
+      <div><span>任务状态</span><strong id="jobStatus">--</strong></div>
+      <div><span>当前阶段</span><strong id="jobPhase">--</strong></div>
+      <div class="job-path"><span>结果数据库</span><code id="batchDatabase">--</code></div>
+    </section>
+
+    <section class="summary-band">
+      <div><span>因子进度</span><strong id="factorProgress">0 / 0</strong><small id="failedCount">失败 0</small></div>
+      <div><span>完成比例</span><strong id="progressPercent">0.00%</strong><small id="etaText">尚未开始</small></div>
+      <div><span>计算吞吐</span><strong id="throughput">0.00</strong><small>因子 / 小时</small></div>
+      <div><span>蒙特卡洛</span><strong id="monteCarloScale">--</strong><small>每因子移动块模拟</small></div>
+      <div><span>大步进窗口</span><strong id="windowScale">--</strong><small>滚动窗口 / 步长</small></div>
+      <div><span>数据截止</span><strong id="dataEnd">--</strong><small id="dataFingerprint">--</small></div>
+    </section>
+
+    <section class="progress-band">
+      <div class="progress-heading"><div><span id="progressLabel">等待任务</span><strong id="activeFactorHint">独立计算服务</strong></div><code id="jobId">--</code></div>
+      <div class="progress-track" aria-label="批量回测进度"><div id="progressBar"></div></div>
+      <div class="assumption-grid" id="assumptionGrid"></div>
+      <div class="error-banner" id="jobError" hidden></div>
+    </section>
+
+    <section class="workspace-grid">
+      <section class="panel leaderboard-panel">
+        <div class="panel-header">
+          <div><h2 id="leaderboardTitle">因子稳健性排行榜</h2><p id="leaderboardSummary">等待结果</p></div>
+          <div class="table-tools"><input id="factorSearch" type="search" placeholder="搜索因子、ID、类型"><select id="resultFilter"><option value="ALL">全部</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="PENDING">待运行</option></select></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>排名</th><th>因子</th><th>状态</th><th>全期夏普</th><th>简单年化</th><th>最大回撤</th><th>最差窗口夏普</th><th>稳健通过</th><th>MC正收益</th><th>耗时</th></tr></thead>
+            <tbody id="factorRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="panel factor-detail" id="factorDetail">
+        <div class="panel-header"><div><span id="detailRank">FACTOR</span><h2 id="detailName">选择一个已完成因子</h2><p id="detailIdentity">查看曲线、滚动窗口和蒙特卡洛分布</p></div></div>
+        <div class="detail-metrics" id="detailMetrics"></div>
+        <section class="chart-section"><div class="chart-head"><strong>累计净值</strong><span id="curveCaption">--</span></div><canvas id="equityChart" width="760" height="240"></canvas></section>
+        <section class="chart-section"><div class="chart-head"><strong>蒙特卡洛夏普分布</strong><span id="mcCaption">--</span></div><canvas id="mcChart" width="760" height="180"></canvas></section>
+        <section class="detail-table-section"><div class="chart-head"><strong>3年大步进窗口</strong><span>逐年步进</span></div><div class="mini-table" id="windowTable"></div></section>
+        <section class="detail-table-section"><div class="chart-head"><strong>宽参数压力测试</strong><span>持有期与表达式窗口</span></div><div class="mini-table" id="robustnessTable"></div></section>
+      </aside>
+    </section>
+
+    <section class="panel event-panel">
+      <div class="panel-header"><div><h2>执行日志</h2><p>任务、因子与断点提交记录</p></div></div>
+      <div class="event-list" id="eventList"></div>
+    </section>
+  </main>
+
+  <dialog id="jobDialog">
+    <form id="jobForm">
+      <div class="dialog-header"><div><span>NEW MASSIVE JOB</span><h2>新建全因子批量回测</h2></div><button class="icon-button" id="closeDialog" type="button" title="关闭"><i data-lucide="x"></i></button></div>
+      <div class="form-grid">
+        <label class="wide">任务名称<input id="jobName" required value="2020-2026 全因子大规模稳健性回测"></label>
+        <label class="wide">数据目录<input id="jobDataPath" required></label>
+        <label>起始日<input id="jobStart" type="date" required value="2020-01-01"></label>
+        <label>结束日<input id="jobEnd" type="date" required></label>
+        <label>并发线程<input id="jobWorkers" type="number" min="1" max="8" value="4"></label>
+        <label>基准持有期<input id="jobHolding" type="number" min="1" max="60" value="5"></label>
+        <label>滚动窗口（月）<input id="jobWindow" type="number" min="12" max="84" value="36"></label>
+        <label>步长（月）<input id="jobStep" type="number" min="3" max="36" value="12"></label>
+        <label>蒙特卡洛次数<input id="jobMcSamples" type="number" min="1000" max="100000" step="1000" value="10000"></label>
+        <label>移动块（日）<input id="jobMcBlock" type="number" min="5" max="120" value="20"></label>
+      </div>
+      <div class="dialog-note">全因子定义会在建任务时冻结。结果仅用于人类可见诊断，不写回自动研究冠军、LLM记忆或隐藏测试门禁。</div>
+      <div class="dialog-actions"><button class="button" id="cancelDialog" type="button">取消</button><button class="button primary" type="submit"><i data-lucide="database"></i>冻结因子并创建</button></div>
+    </form>
+  </dialog>
+  <div id="toast" role="status"></div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/static/batch_backtest.js?v=20260717-v1"></script>
+</body>
+</html>

@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>系统导览 · AutoAlpha / AutoCombine / QuantCombine</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/system_guide.css?v=20260718-v1">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity">
+      <h1>AutoAlpha / AutoCombine / QuantCombine 系统导览</h1>
+      <p>从数据进入到因子证据、组合策略、模拟执行与审计交付的完整研究控制面</p>
+    </div>
+    <div class="header-actions">
+      <nav class="app-nav" aria-label="主导航"></nav>
+      <span class="state-pill">GUIDE V1</span>
+      <button class="icon-button" id="printGuide" title="打印系统导览"><i data-lucide="printer"></i></button>
+    </div>
+  </header>
+  <script src="/static/platform_header.js?v=20260718-quant-v1"></script>
+
+  <main class="guide-page">
+    <section class="guide-summary" aria-label="系统摘要">
+      <div><span>研究引擎</span><strong>3</strong><small>因子发现 + LLM组合 + 统计组合</small></div>
+      <div><span>LLM 专业角色</span><strong>6</strong><small>全程建议，不越权裁决</small></div>
+      <div><span>评价边界</span><strong>4</strong><small>探索、滚动、盲测、仿真</small></div>
+      <div><span>核心资产</span><strong>3</strong><small>因子、策略、证据制品</small></div>
+      <div><span>执行原则</span><strong>T+1</strong><small>收盘信号，下一开盘成交</small></div>
+      <div><span>决策权威</span><strong>RULES</strong><small>确定性门禁最终裁决</small></div>
+    </section>
+
+    <div class="guide-layout">
+      <aside class="guide-rail" aria-label="系统导览目录">
+        <div class="guide-rail-title"><span>SYSTEM MAP</span><strong>全景目录</strong></div>
+        <nav id="guideNavigation">
+          <a class="active" href="#position"><span>01</span>系统定位</a>
+          <a href="#architecture"><span>02</span>总体架构</a>
+          <a href="#lifecycle"><span>03</span>完整研究链</a>
+          <a href="#autoalpha"><span>04</span>AutoAlpha</a>
+          <a href="#llm-team"><span>05</span>LLM 研究团队</a>
+          <a href="#evaluation"><span>06</span>评价与抗过拟合</a>
+          <a href="#data"><span>07</span>数据工程</a>
+          <a href="#factor-assets"><span>08</span>因子资产</a>
+          <a href="#autocombine"><span>09</span>AutoCombine</a>
+          <a href="#quantcombine"><span>09B</span>QuantCombine</a>
+          <a href="#execution"><span>10</span>回测与交易</a>
+          <a href="#surfaces"><span>11</span>工作台地图</a>
+          <a href="#governance"><span>12</span>治理与运维</a>
+          <a href="#boundaries"><span>13</span>生产边界</a>
+        </nav>
+        <div class="guide-rail-note">
+          <i data-lucide="shield-check"></i>
+          <p>研究结果是证据，不是自动下单授权。生产发布始终保留独立风险审批。</p>
+        </div>
+      </aside>
+
+      <article class="guide-document">
+        <section class="guide-section guide-opening" id="position">
+          <div class="section-kicker">01 · SYSTEM POSITION</div>
+          <div class="opening-grid">
+            <div>
+              <h2>一个把 LLM 研究能力关进制度边界的量化研发系统</h2>
+              <p class="lead">系统接收可版本化的市场数据，让 LLM 负责提出假设、解释机制、设计证伪和诊断失败；公式执行、回测、统计检验、交易约束、盲测与发布结论由确定性组件完成。</p>
+            </div>
+            <div class="authority-seal">
+              <i data-lucide="landmark"></i>
+              <span>最终裁决</span>
+              <strong>DETERMINISTIC</strong>
+              <small>LLM ADVISORY ONLY</small>
+            </div>
+          </div>
+          <div class="system-contract-grid">
+            <div><i data-lucide="flask-conical"></i><span>AUTOALPHA</span><strong>发现与评价因子</strong><p>产生可追溯的单因子研究证据、机制分类和候选资产。</p></div>
+            <div><i data-lucide="network"></i><span>AUTOCOMBINE</span><strong>搜索因子组合</strong><p>在冻结范围和约束内寻找因子子集、非负权重与稳健组合。</p></div>
+            <div><i data-lucide="shield-check"></i><span>CONTROL PLANE</span><strong>守住研究边界</strong><p>统一数据契约、评价协议、凭证、审计、任务与发布生命周期。</p></div>
+            <div><i data-lucide="user-check"></i><span>HUMAN AUTHORITY</span><strong>保留生产审批</strong><p>模拟盘、风险签核、资金规模和生产发布不由模型自行决定。</p></div>
+          </div>
+          <div class="boundary-strip">
+            <span><i data-lucide="check"></i>是：可审计的研究与策略研发平台</span>
+            <span><i data-lucide="x"></i>不是：看到高夏普就自动交易的黑箱</span>
+            <span><i data-lucide="x"></i>不是：允许 LLM 修改门槛的自治资金系统</span>
+          </div>
+        </section>
+
+        <section class="guide-section" id="architecture">
+          <div class="section-kicker">02 · ARCHITECTURE</div>
+          <div class="section-heading"><div><h2>总体架构</h2><p>数据、研究、资产、组合、应用和治理六层协同，但职责彼此隔离。</p></div><span class="section-tag">SHARED RUNTIME</span></div>
+          <div class="architecture-map">
+            <div class="architecture-layer data-layer">
+              <header><span>01</span><strong>数据底座</strong><small>DATA FOUNDATION</small></header>
+              <div><b>数据中心</b><b>源表与增量更新</b><b>研究面板</b><b>质量报告</b><b>数据指纹</b></div>
+            </div>
+            <i class="architecture-arrow" data-lucide="arrow-down"></i>
+            <div class="architecture-split">
+              <div class="architecture-layer research-layer">
+                <header><span>02A</span><strong>AutoAlpha 因子研究</strong><small>DISCOVERY</small></header>
+                <div><b>任务协议</b><b>类型化表达式</b><b>六角色 LLM</b><b>向量评价器</b><b>连续记忆</b></div>
+              </div>
+              <div class="architecture-layer authority-layer">
+                <header><span>02B</span><strong>确定性评价权威</strong><small>AUTHORITY</small></header>
+                <div><b>时间语义</b><b>Walk-forward</b><b>FDR / DSR / PBO</b><b>成本与容量</b><b>隔离盲测</b></div>
+              </div>
+            </div>
+            <i class="architecture-arrow" data-lucide="arrow-down"></i>
+            <div class="architecture-split asset-split">
+              <div class="architecture-layer asset-layer">
+                <header><span>03A</span><strong>因子资产层</strong><small>FACTOR ASSETS</small></header>
+                <div><b>因子库</b><b>机制分类</b><b>相似簇</b><b>生命周期</b><b>来源标签</b></div>
+              </div>
+              <div class="architecture-layer combine-layer">
+                <header><span>03B</span><strong>AutoCombine</strong><small>PORTFOLIO SEARCH</small></header>
+                <div><b>冻结快照</b><b>因子子集</b><b>权重邻域</b><b>Pareto 前沿</b><b>StrategySpec</b></div>
+              </div>
+            </div>
+            <i class="architecture-arrow" data-lucide="arrow-down"></i>
+            <div class="architecture-layer application-layer">
+              <header><span>04</span><strong>研究应用与交付</strong><small>APPLICATIONS</small></header>
+              <div><b>选股器</b><b>手动回测</b><b>批量回测</b><b>模拟交易</b><b>策略库</b><b>研究报告</b></div>
+            </div>
+            <div class="governance-spine"><i data-lucide="fingerprint"></i><strong>治理纵轴</strong><span>统一设置 · Keychain 凭证 · 哈希审计链 · 不可变制品 · 故障降级 · 人类审批</span></div>
+          </div>
+        </section>
+
+        <section class="guide-section" id="lifecycle">
+          <div class="section-kicker">03 · END-TO-END LIFECYCLE</div>
+          <div class="section-heading"><div><h2>从一条数据到一份策略交付</h2><p>每一步都有明确输入、责任主体、确定性边界和可追踪输出。</p></div><span class="section-tag" id="flowStageTag">01 / 12</span></div>
+          <div class="research-flow" id="researchFlow">
+            <button class="active" data-stage="0"><span>01</span><i data-lucide="database"></i><strong>数据准入</strong></button>
+            <button data-stage="1"><span>02</span><i data-lucide="file-lock-2"></i><strong>冻结任务</strong></button>
+            <button data-stage="2"><span>03</span><i data-lucide="lightbulb"></i><strong>提出假设</strong></button>
+            <button data-stage="3"><span>04</span><i data-lucide="shield-question"></i><strong>预注册证伪</strong></button>
+            <button data-stage="4"><span>05</span><i data-lucide="calculator"></i><strong>公开评价</strong></button>
+            <button data-stage="5"><span>06</span><i data-lucide="library"></i><strong>因子入库</strong></button>
+            <button data-stage="6"><span>07</span><i data-lucide="git-compare-arrows"></i><strong>边际实验</strong></button>
+            <button data-stage="7"><span>08</span><i data-lucide="scan-search"></i><strong>稳健门禁</strong></button>
+            <button data-stage="8"><span>09</span><i data-lucide="eye-off"></i><strong>隔离盲测</strong></button>
+            <button data-stage="9"><span>10</span><i data-lucide="network"></i><strong>组合搜索</strong></button>
+            <button data-stage="10"><span>11</span><i data-lucide="receipt-text"></i><strong>资金仿真</strong></button>
+            <button data-stage="11"><span>12</span><i data-lucide="package-check"></i><strong>策略交付</strong></button>
+          </div>
+          <div class="flow-detail" id="flowDetail">
+            <div class="flow-detail-index"><span id="flowDetailIndex">01</span><i id="flowDetailIcon" data-lucide="database"></i></div>
+            <div><span id="flowDetailOwner">DATA CONTROL</span><h3 id="flowDetailTitle">数据准入与快照</h3><p id="flowDetailDescription"></p></div>
+            <dl><div><dt>输入</dt><dd id="flowDetailInput"></dd></div><div><dt>确定性裁决</dt><dd id="flowDetailGate"></dd></div><div><dt>输出制品</dt><dd id="flowDetailOutput"></dd></div></dl>
+          </div>
+        </section>
+
+        <section class="guide-section" id="autoalpha">
+          <div class="section-kicker">04 · AUTOALPHA</div>
+          <div class="section-heading"><div><h2>AutoAlpha：任务化的自动因子研究</h2><p>每个任务拥有独立市场、数据路径、可见时间、研究世代、预算、连续记忆与来源标签。</p></div><a class="button" href="/research-tasks"><i data-lucide="arrow-up-right"></i>任务总表</a></div>
+          <div class="capability-columns">
+            <div><span>任务协议</span><h3>冻结“研究看得见什么”</h3><ul><li>市场与数据工作区</li><li>探索、公开验证和隐藏测试区</li><li>因子数、轮次与研究世代预算</li><li>协议指纹和数据快照指纹</li></ul></div>
+            <div><span>候选生成</span><h3>从经济机制到类型化表达式</h3><ul><li>只使用数据契约允许的字段</li><li>表达式经过算子、复杂度和时间语义校验</li><li>方向微战役最多有限次尝试</li><li>同方向失败后冷却并切换机制</li></ul></div>
+            <div><span>评价循环</span><h3>候选不是只和自己比较</h3><ul><li>单因子预测和纯多表现诊断</li><li>相对当前 control 的 ADD / REMOVE / REPLACE</li><li>收益改善与风险改善双通道</li><li>公开失败进入结构化根因记忆</li></ul></div>
+            <div><span>资产沉淀</span><h3>不当冠军也不被一票删除</h3><ul><li>完成评价的唯一候选进入因子库</li><li>保留公式、来源任务与迭代轮次</li><li>记录相似簇、机制标签和生命周期</li><li>后续可重评、组合研究或退役</li></ul></div>
+          </div>
+          <div class="state-machine">
+            <span>WAITING</span><i data-lucide="chevron-right"></i><span>GENERATING</span><i data-lucide="chevron-right"></i><span>EVALUATING</span><i data-lucide="chevron-right"></i><span>PORTFOLIO</span><i data-lucide="chevron-right"></i><span>EVIDENCE</span><i data-lucide="chevron-right"></i><span>MEMORY</span>
+          </div>
+        </section>
+
+        <section class="guide-section" id="llm-team">
+          <div class="section-kicker">05 · FULL LLM TEAM</div>
+          <div class="section-heading"><div><h2>六角色研究团队</h2><p>角色各自生成结构化、可审计的咨询制品；任何角色都不能批准因子、修改门禁或读取隐藏指标。</p></div><a class="button" href="/llm-team"><i data-lucide="arrow-up-right"></i>LLM 团队</a></div>
+          <div class="role-table">
+            <div class="role-row role-head"><span>阶段</span><span>角色</span><span>责任</span><span>明确禁止</span></div>
+            <div class="role-row"><span>评价前</span><strong>独立审查员</strong><p>检查假设与公式一致性、泄漏风险、执行歧义和必要检查。</p><small>不预测收益，不做最终批准。</small></div>
+            <div class="role-row"><span>评价前</span><strong>证伪设计师</strong><p>预注册参数邻域、延迟、成本、滚动稳定性和相关冗余测试。</p><small>不根据结果临时改阈值。</small></div>
+            <div class="role-row"><span>评价前</span><strong>因子图书管理员</strong><p>规范机制分类、标签、相关因子和候选的区分特征。</p><small>不按绩效替候选包装机制。</small></div>
+            <div class="role-row"><span>组合咨询</span><strong>组合机制研究员</strong><p>研究互补性、冗余、状态错配、换手净额和集中风险。</p><small>不直接指定权重或组合动作。</small></div>
+            <div class="role-row"><span>评价后</span><strong>根因分析师</strong><p>把失败归因于候选、数据、协议、统计、组合、执行、模型或系统。</p><small>不索取隐藏期精确指标。</small></div>
+            <div class="role-row"><span>评价后</span><strong>TCA / 模拟盘观察员</strong><p>解释成本、容量、换手来源并提出监控项目与告警。</p><small>不发订单，不扩大风险预算。</small></div>
+          </div>
+          <div class="authority-line"><span>LLM 产出</span><i data-lucide="arrow-right"></i><b>结构化建议与证据</b><i data-lucide="arrow-right"></i><strong>确定性引擎裁决</strong><i data-lucide="arrow-right"></i><b>人类发布审批</b></div>
+        </section>
+
+        <section class="guide-section" id="evaluation">
+          <div class="section-kicker">06 · EVALUATION & GENERALIZATION</div>
+          <div class="section-heading"><div><h2>评价协议与抗过拟合设计</h2><p>固定窗口的高夏普不是目标；系统评价候选对现有组合的成本后、跨期、可交易边际价值。</p></div><span class="section-tag">IC = DIAGNOSTIC</span></div>
+          <div class="evaluation-zones">
+            <div><span>01 · OPEN</span><strong>探索训练区</strong><p>LLM 可反复看到公开结果，用于构造、证伪和淘汰机制。</p></div>
+            <div><span>02 · OPEN</span><strong>滚动验证区</strong><p>年度 walk-forward 汇总中位数、最差折、正贡献比例和退化。</p></div>
+            <div class="blind"><span>03 · BLIND</span><strong>隔离隐藏区</strong><p>冻结候选一次性访问；仅返回分类结论和证据哈希。</p></div>
+            <div class="simulation"><span>04 · CAPITAL</span><strong>资金仿真区</strong><p>交易限制、费用、冲击、容量与现金账本下的最终回放。</p></div>
+          </div>
+          <div class="gate-sequence">
+            <span>数据与语义</span><i data-lucide="arrow-right"></i><span>统计可信度</span><i data-lucide="arrow-right"></i><span>跨期稳健性</span><i data-lucide="arrow-right"></i><span>组合边际价值</span><i data-lucide="arrow-right"></i><span>风险独立性</span><i data-lucide="arrow-right"></i><span>交易与容量</span><i data-lucide="arrow-right"></i><span>盲测与模拟</span>
+          </div>
+          <div class="metric-priority">
+            <div><span>一级</span><strong>组合边际价值</strong><p>增量净 IR、增量年化、回撤改善、尾部风险、容量与成本后贡献。</p></div>
+            <div><span>二级</span><strong>统计与稳健性</strong><p>Walk-forward、HAC / Bootstrap、DSR、FDR、PBO、参数邻域和状态稳定。</p></div>
+            <div><span>三级</span><strong>交易、容量与风险</strong><p>换手、ADV 参与率、不可成交、成本压力、暴露、集中度和 TCA。</p></div>
+            <div><span>四级</span><strong>预测诊断</strong><p>Rank IC、Pearson IC、衰减、分组单调性与覆盖率，用于解释而非补偿硬失败。</p></div>
+          </div>
+          <div class="anti-overfit-grid">
+            <div><i data-lucide="calendar-range"></i><strong>滚动样本外</strong><p>避免把单个固定验证期逐轮训练成新的样本内。</p></div>
+            <div><i data-lucide="eye-off"></i><strong>隐藏评价器</strong><p>不向 LLM 暴露隐藏夏普、收益、回撤或逐期路径。</p></div>
+            <div><i data-lucide="sigma"></i><strong>多重检验修正</strong><p>按候选族和尝试次数计入 FDR、DSR 与 PBO。</p></div>
+            <div><i data-lucide="route-off"></i><strong>方向预算与冷却</strong><p>同一优化方向只允许有限试探，连续失败强制换机制。</p></div>
+            <div><i data-lucide="fingerprint"></i><strong>人工暴露台账</strong><p>手动查看隐藏区会污染该世代证据并阻断盲测。</p></div>
+            <div><i data-lucide="git-branch"></i><strong>参数邻域检验</strong><p>要求邻近参数仍有稳定表现，不接受孤立尖峰最优。</p></div>
+          </div>
+        </section>
+
+        <section class="guide-section" id="data">
+          <div class="section-kicker">07 · DATA ENGINEERING</div>
+          <div class="section-heading"><div><h2>数据中心与研究数据契约</h2><p>数据能被下载，不等于能被用于生产研究；系统区分目录可见、已落盘、研究可用和 PIT 合格。</p></div><a class="button" href="/data"><i data-lucide="arrow-up-right"></i>数据中心</a></div>
+          <div class="data-pipeline">
+            <div><span>SOURCE</span><strong>Tushare / 本地源表</strong><small>凭证、接口目录、批次</small></div><i data-lucide="chevron-right"></i>
+            <div><span>RAW</span><strong>原始不可变分区</strong><small>断点续传、增量更新</small></div><i data-lucide="chevron-right"></i>
+            <div><span>STANDARD</span><strong>标准化数据产品</strong><small>字段、单位、主键、版本</small></div><i data-lucide="chevron-right"></i>
+            <div><span>PANEL</span><strong>研究面板</strong><small>截面计算、质量校验</small></div><i data-lucide="chevron-right"></i>
+            <div><span>SNAPSHOT</span><strong>任务数据指纹</strong><small>范围、字段、校验和</small></div>
+          </div>
+          <div class="data-contract-table">
+            <div class="data-contract-row head"><span>数据口径</span><span>允许用途</span><span>禁止误用</span></div>
+            <div class="data-contract-row"><strong>前复权 OHLC</strong><p>因子构造、收益形态和公开研究诊断。</p><small>不能用于现金、股数、费用、ADV 或交割单。</small></div>
+            <div class="data-contract-row"><strong>未复权开盘价</strong><p>下一开盘成交、现金账本和实际股数估算。</p><small>缺失时不得假装完成真实成交回放。</small></div>
+            <div class="data-contract-row"><strong>成交量与成交额</strong><p>流动性、换手、参与率、容量和价格冲击。</p><small>必须明确股/手与元/千元等单位。</small></div>
+            <div class="data-contract-row"><strong>市场状态历史</strong><p>停牌、涨跌停、ST、上市退市和侧向可交易性。</p><small>不能用当前状态倒填历史。</small></div>
+            <div class="data-contract-row"><strong>财务与分类数据</strong><p>公告日可见的基本面、行业和指数成分研究。</p><small>无 knowledge_time 与修订版本时不得宣称 PIT。</small></div>
+          </div>
+          <div class="warning-band"><i data-lucide="triangle-alert"></i><div><strong>当前能力边界</strong><p>本地面板足以支持延迟到下一交易日的量价探索研究；正式生产准入仍要求来源可见时间、修订历史、动态股票池、市场状态、行业/指数历史及自由流通市值等 PIT 数据。实时状态以数据中心质量报告为准。</p></div></div>
+        </section>
+
+        <section class="guide-section" id="factor-assets">
+          <div class="section-kicker">08 · FACTOR ASSETS</div>
+          <div class="section-heading"><div><h2>因子库不是冠军名单，而是研究资产账本</h2><p>候选的价值可能来自收益、分散、尾部保护、容量或替代性，因此落选冠军不等于永久无价值。</p></div><a class="button" href="/factors"><i data-lucide="arrow-up-right"></i>因子库</a></div>
+          <div class="factor-record">
+            <div><span>IDENTITY</span><strong>因子 ID 与版本</strong><p>名称、来源任务、迭代轮次、表达式哈希与数据协议。</p></div>
+            <div><span>MECHANISM</span><strong>经济机制</strong><p>公式源码、LaTeX、方向、字段依赖、机制分类与稳定标签。</p></div>
+            <div><span>EVIDENCE</span><strong>统一评价证据</strong><p>纯多、Walk-forward、IC 诊断、换手、回撤、成本和边际贡献。</p></div>
+            <div><span>RELATION</span><strong>相似性与独立性</strong><p>表达式簇、机制簇、相关因子、簇领导者与冗余解释。</p></div>
+            <div><span>GOVERNANCE</span><strong>状态与污染</strong><p>重评状态、隐藏期暴露、审计原因、观察和退役记录。</p></div>
+          </div>
+          <div class="lifecycle-line">
+            <span>RESEARCH</span><i data-lucide="chevron-right"></i><span>QUALIFIED</span><i data-lucide="chevron-right"></i><span>SHADOW</span><i data-lucide="chevron-right"></i><span>PAPER</span><i data-lucide="chevron-right"></i><span>PRODUCTION</span>
+            <b>旁路：WATCH · SUSPENDED · DECAYED · REJECTED · RETIRED</b>
+          </div>
+        </section>
+
+        <section class="guide-section" id="autocombine">
+          <div class="section-kicker">09 · AUTOCOMBINE</div>
+          <div class="section-heading"><div><h2>AutoCombine：受约束的多因子组合与权重研究</h2><p>从 AutoAlpha 因子库冻结可见快照，在明确因子数量、权重、目标和时间协议内搜索组合。</p></div><a class="button" href="/" data-service-link="combine"><i data-lucide="arrow-up-right"></i>组合任务</a></div>
+          <div class="combine-contract">
+            <div class="combine-input"><span>任务输入</span><ul><li>可见因子或手动指定因子</li><li>必选因子、机制与语义簇上限</li><li>最小/最大非负权重与步长</li><li>探索、验证和隐藏区间</li><li>目标预设、独立性门槛与实验预算</li></ul></div>
+            <i data-lucide="arrow-right"></i>
+            <div class="combine-engine"><i data-lucide="network"></i><span>搜索与评价</span><strong>机制指纹与语义去重</strong><strong>多样化子集与权重搜索</strong><strong>Leave-one-out 边际检验</strong><strong>收益来源 Pareto 前沿</strong></div>
+            <i data-lucide="arrow-right"></i>
+            <div class="combine-output"><span>任务输出</span><ul><li>研究领先、合格冠军与生产候选三级资格</li><li>有效下注、机制集中度与门禁距离</li><li>逐日净收益、主动收益和跨任务收益簇</li><li>盲测分类与证据哈希</li><li>不可变 StrategySpec 版本</li></ul></div>
+          </div>
+          <div class="preset-grid">
+            <div><span>默认</span><strong>降低回撤优先</strong><p>在基本收益约束下优先改善最大回撤、尾部风险和最差折。</p></div>
+            <div><span>可选</span><strong>组合夏普优先</strong><p>强调成本后风险调整收益，同时保留回撤、换手和稳健硬门禁。</p></div>
+            <div><span>可选</span><strong>年化收益优先</strong><p>提高净年化，但不允许用收益补偿不可交易、过度集中或盲测失败。</p></div>
+            <div><span>可选</span><strong>均衡稳健</strong><p>在增量收益、回撤、最差折、换手和机制分散之间做 Pareto 选择。</p></div>
+          </div>
+          <div class="combine-rule"><i data-lucide="lock-keyhole"></i><p><strong>任务运行中因子快照不漂移，失败门禁不能被高收益补偿。</strong>LLM 只接收分级公开反馈，不能引用快照外因子、翻转方向、查看隐藏精确指标或把同一收益簇包装成多个独立策略。</p></div>
+        </section>
+
+        <section class="guide-section" id="quantcombine">
+          <div class="section-kicker">09B · QUANTCOMBINE</div>
+          <div class="section-heading"><div><h2>QuantCombine：不依赖 LLM 的统计组合优化</h2><p>直接联通共享因子库，以可复现算法完成稳定性筛选、收益聚类、子集搜索、权重求解和多目标晋级。</p></div><a class="button" href="/" data-service-link="quantcombine"><i data-lucide="arrow-up-right"></i>统计组合</a></div>
+          <div class="combine-contract">
+            <div class="combine-input"><span>筛选与去重</span><ul><li>逐因子按同一公开协议重评</li><li>稳定性、最差折、DSR与成本评分</li><li>验证期收益相关性与语义指纹聚类</li><li>每个同源簇保留代表因子</li></ul></div>
+            <i data-lucide="arrow-right"></i>
+            <div class="combine-engine"><i data-lucide="binary"></i><span>混合算法</span><strong>SFFS 前进加入与浮动删除</strong><strong>NSGA-II Pareto进化</strong><strong>贝叶斯式因子纳入后验</strong><strong>收缩协方差与约束权重</strong></div>
+            <i data-lucide="arrow-right"></i>
+            <div class="combine-output"><span>资格与交付</span><ul><li>研究领先、合格冠军与生产候选</li><li>收益、回撤、换手和独立性Pareto前沿</li><li>逐候选父代、动作、权重和收益制品</li><li>Leave-one-out边际贡献</li><li>隔离盲测与版本化策略</li></ul></div>
+          </div>
+          <div class="combine-rule"><i data-lucide="shield-check"></i><p><strong>QuantCombine 不读取 AI Provider 凭证，也不使用自然语言生成权重。</strong>固定随机种子、冻结快照和完整候选账本保证同一数据与配置可复算；LLM可以解释结果，但不能改变该引擎的评价和晋级裁决。</p></div>
+        </section>
+
+        <section class="guide-section" id="execution">
+          <div class="section-kicker">10 · BACKTEST & EXECUTION</div>
+          <div class="section-heading"><div><h2>回测、选股和模拟交易</h2><p>快速研究引擎与现金账本各有职责；结果必须连同成交时点、调仓、费用和限制一起解释。</p></div><a class="button" href="/backtest"><i data-lucide="arrow-up-right"></i>手动回测</a></div>
+          <div class="timing-contract">
+            <div><span>T 日收盘后</span><strong>形成截面信号</strong><small>当日 OHLCV 此时才可知</small></div><i data-lucide="arrow-right"></i>
+            <div><span>T+1 日开盘</span><strong>执行目标交易</strong><small>检查停牌、涨跌停和成交约束</small></div><i data-lucide="arrow-right"></i>
+            <div><span>T+1 → T+2</span><strong>获得持仓收益</strong><small>EOD_T__OPEN_T1_TO_OPEN_T2</small></div><i data-lucide="arrow-right"></i>
+            <div><span>下一调仓日</span><strong>再平衡或退出</strong><small>不可卖出头寸继续保留</small></div>
+          </div>
+          <div class="engine-comparison">
+            <div class="engine-column"><header><i data-lucide="blocks"></i><span>VECTOR</span><strong>向量化研究引擎</strong></header><ul><li>矩阵化截面排序与权重回放</li><li>适合大批量因子、Walk-forward 和蒙特卡洛</li><li>支持 side-aware 成本和历史兼容模式</li><li>速度快，便于研究结果对账</li></ul><footer>不能精确表达整数手数、最低佣金、现金不足、部分成交和残余持仓。</footer></div>
+            <div class="engine-column capital"><header><i data-lucide="landmark"></i><span>CAPITAL</span><strong>A 股现金账本</strong></header><ul><li>未复权价格、整数手数与现金余额</li><li>佣金、最低佣金、印花税、过户费</li><li>T+1、停牌、开盘涨跌停与成交量约束</li><li>未成交、部分成交和交割单制品</li></ul><footer>用于更真实的资金仿真；仍是模拟记录，不是券商交割凭证。</footer></div>
+          </div>
+          <div class="execution-products">
+            <a href="/screener"><i data-lucide="list-filter"></i><strong>选股器</strong><span>指定日期、因子与权重，生成截面候选。</span></a>
+            <a href="/backtest"><i data-lucide="chart-no-axes-combined"></i><strong>手动回测</strong><span>自由组合、参数、时间、收藏、对比与损益曲线。</span></a>
+            <a href="/paper-trading"><i data-lucide="wallet-cards"></i><strong>模拟交易</strong><span>多策略组合、持仓、订单、权益与持续观察。</span></a>
+            <a href="/" data-service-link="batch"><i data-lucide="server-cog"></i><strong>批量回测</strong><span>并行全因子、步进窗口、压力和蒙特卡洛评价。</span></a>
+          </div>
+        </section>
+
+        <section class="guide-section" id="surfaces">
+          <div class="section-kicker">11 · WORKBENCH MAP</div>
+          <div class="section-heading"><div><h2>工作台地图</h2><p>每个页面对应一类清晰的工作对象，避免把自动研究、人工试验和生产证据混在一起。</p></div><span class="section-tag">13 SURFACES</span></div>
+          <div class="surface-table">
+            <a href="/"><i data-lucide="activity"></i><strong>自动研究</strong><p>查看单个 AutoAlpha 任务的实时阶段、指标、流程和日志。</p><span>对象：研究运行</span></a>
+            <a href="/research-tasks"><i data-lucide="list-tree"></i><strong>任务总表</strong><p>创建、启动、停止和编辑多个隔离的自动研究实例。</p><span>对象：任务协议</span></a>
+            <a href="/" data-service-link="combine"><i data-lucide="network"></i><strong>组合任务</strong><p>限定范围内搜索因子子集、非负权重和稳健组合。</p><span>对象：组合实验</span></a>
+            <a href="/" data-service-link="quantcombine"><i data-lucide="binary"></i><strong>统计组合</strong><p>不调用LLM，以SFFS、NSGA-II和自适应采样优化组合。</p><span>对象：算法搜索任务</span></a>
+            <a href="/strategies" data-service-link="strategies"><i data-lucide="archive"></i><strong>策略库</strong><p>保存通过组合研究边界的不可变 StrategySpec 版本。</p><span>对象：策略资产</span></a>
+            <a href="/llm-team"><i data-lucide="brain-circuit"></i><strong>LLM 团队</strong><p>审阅六角色制品、机制知识与模型调用状态。</p><span>对象：咨询证据</span></a>
+            <a href="/factors"><i data-lucide="library"></i><strong>因子库</strong><p>检索公式、分类、相似簇、统一评价和生命周期。</p><span>对象：因子资产</span></a>
+            <a href="/screener"><i data-lucide="list-filter"></i><strong>选股器</strong><p>在某一交易日按自选因子与权重快速形成股票列表。</p><span>对象：截面信号</span></a>
+            <a href="/paper-trading"><i data-lucide="wallet-cards"></i><strong>模拟交易</strong><p>用策略规范驱动模拟持仓、订单、资金和绩效观察。</p><span>对象：模拟组合</span></a>
+            <a href="/backtest"><i data-lucide="chart-no-axes-combined"></i><strong>手动回测</strong><p>开展与自动记忆隔离的人工组合试验并保存制品。</p><span>对象：人工实验</span></a>
+            <a href="/data"><i data-lucide="database-zap"></i><strong>数据中心</strong><p>管理凭证、数据产品、增量更新、断点续传和质量。</p><span>对象：数据产品</span></a>
+            <a href="/settings"><i data-lucide="settings-2"></i><strong>系统设置</strong><p>统一管理研究、组合、执行、服务和凭证配置。</p><span>对象：控制参数</span></a>
+            <a class="current" href="/guide"><i data-lucide="map"></i><strong>系统导览</strong><p>理解模块职责、数据流、权限边界与推荐工作路径。</p><span>对象：系统知识</span></a>
+          </div>
+        </section>
+
+        <section class="guide-section" id="governance">
+          <div class="section-kicker">12 · GOVERNANCE & OPERATIONS</div>
+          <div class="section-heading"><div><h2>连续记忆、审计、配置与故障治理</h2><p>系统可以长期迭代，但每一次模型输入、状态变化、评价和交付都必须能回答“谁、何时、基于什么做了什么”。</p></div><a class="button" href="/settings"><i data-lucide="arrow-up-right"></i>系统设置</a></div>
+          <div class="log-ledgers">
+            <div><i data-lucide="fingerprint"></i><span>AUDIT</span><strong>审计日志</strong><p>配置、权限、模型调用、门禁、状态变化和哈希链完整性。</p></div>
+            <div><i data-lucide="mouse-pointer-click"></i><span>ACTION</span><strong>行动日志</strong><p>启动、停止、创建、重评、晋级和人工控制动作。</p></div>
+            <div><i data-lucide="microscope"></i><span>RESEARCH</span><strong>研究日志</strong><p>假设、候选、公开评价、失败根因、战役和组合动作。</p></div>
+            <div><i data-lucide="package-check"></i><span>DELIVERY</span><strong>交付日志</strong><p>冻结候选、盲测结论、策略版本、制品地址和发布状态。</p></div>
+          </div>
+          <div class="governance-grid">
+            <div><span>连续记忆</span><strong>记住证据，不背诵验证期</strong><p>保存机制、失败分类、已尝试方向和下一步建议；隐藏指标不进入记忆。</p></div>
+            <div><span>配置版本</span><strong>每次修改都可追踪</strong><p>统一设置标注即时、下一轮或重启生效，并形成版本与变更说明。</p></div>
+            <div><span>凭证安全</span><strong>密钥与研究制品分离</strong><p>API Key 和 Tushare Token 进入系统 Keychain，不写入数据库、日志或页面回显。</p></div>
+            <div><span>并发治理</span><strong>读任务并行，写数据独占</strong><p>自动研究、组合研究和人工回测可并行读取稳定面板；数据发布避免半成品读取。</p></div>
+            <div><span>故障策略</span><strong>失败开放诊断，失败关闭风险</strong><p>模型错误可降级确定性搜索；数据、交易或发布边界失败则 no-trade、暂停或回滚。</p></div>
+            <div><span>不可变制品</span><strong>结果可复算、可对账</strong><p>配置、数据、表达式、指标、净值、交割单和策略均绑定哈希或版本。</p></div>
+          </div>
+          <div class="storage-map">
+            <div><span>SQLite</span><code>runtime/autoalpha.sqlite3</code><p>任务、记忆、因子、组合、指标和日志状态。</p></div>
+            <div><span>Artifacts</span><code>runtime/artifacts/</code><p>回测净值、交割单、研究证据和交付制品。</p></div>
+            <div><span>Config</span><code>config/research.toml</code><p>版本化评价协议、阈值与研究不变量。</p></div>
+            <div><span>Keychain</span><code>system credential store</code><p>模型与数据服务密钥引用。</p></div>
+          </div>
+        </section>
+
+        <section class="guide-section" id="boundaries">
+          <div class="section-kicker">13 · PRODUCTION BOUNDARIES</div>
+          <div class="section-heading"><div><h2>当前已经具备什么，还缺什么</h2><p>专业系统不仅展示能力，也明确证据强度、当前阻断和进入真实资金前必须完成的工作。</p></div><span class="section-tag warning">FAIL CLOSED</span></div>
+          <div class="readiness-table">
+            <div class="readiness-row head"><span>领域</span><span>当前状态</span><span>可做</span><span>尚不可宣称</span></div>
+            <div class="readiness-row"><strong>量价因子研究</strong><span class="status ready">可用</span><p>下一开盘因果评价、统一纯多榜、滚动验证和批量重评。</p><small>不能把公开窗口高绩效直接解释为未来实盘收益。</small></div>
+            <div class="readiness-row"><strong>多因子组合研究</strong><span class="status ready">可用</span><p>冻结因子快照、权重约束、目标预设、稳健搜索和策略版本。</p><small>污染因子组合不能被包装成新鲜隐藏样本证据。</small></div>
+            <div class="readiness-row"><strong>A 股交易仿真</strong><span class="status conditional">条件可用</span><p>在未复权价格和市场状态具备时运行现金账本与交割单。</p><small>数据字段不足时不能声称精确复现真实成交。</small></div>
+            <div class="readiness-row"><strong>PIT 生产准入</strong><span class="status blocked">阻断</span><p>数据中心持续补齐来源、版本、公告日和动态可交易状态。</p><small>当前非 PIT 面板不能通过机构级生产数据门禁。</small></div>
+            <div class="readiness-row"><strong>模拟盘</strong><span class="status conditional">研究级</span><p>观察策略信号、持仓、权益、订单和 TCA 偏差。</p><small>模拟成交不等于券商回报，不构成生产授权。</small></div>
+            <div class="readiness-row"><strong>真实资金发布</strong><span class="status blocked">人类审批</span><p>准备风险评审、容量、告警、回滚与小资金灰度方案。</p><small>LLM 和自动门禁都不能自行连接资金并放大风险。</small></div>
+          </div>
+          <div class="production-path">
+            <div><span>01</span><strong>补齐 PIT 数据</strong><p>可见时间、修订、动态股票池、市场状态、行业与指数历史。</p></div>
+            <div><span>02</span><strong>冻结生产协议</strong><p>产品模板、基准、风险预算、容量、执行和评价阈值。</p></div>
+            <div><span>03</span><strong>独立盲测</strong><p>一次性、低频、不可反馈精确结果，失败后开启新世代。</p></div>
+            <div><span>04</span><strong>足期模拟盘</strong><p>监控信号漂移、成交偏差、容量、暴露、故障和恢复。</p></div>
+            <div><span>05</span><strong>人类风险签核</strong><p>审查证据、限制资金、建立告警、回滚与退役责任。</p></div>
+          </div>
+          <div class="closing-statement"><i data-lucide="scale"></i><div><span>系统的核心判断</span><strong>好的研究系统不是更容易找到漂亮回测，而是更难把偶然、泄漏和不可交易结果误认为真实能力。</strong></div></div>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/static/system_guide.js?v=20260718-v1"></script>
+</body>
+</html>

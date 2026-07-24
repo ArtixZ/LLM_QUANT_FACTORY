@@ -1,14 +1,14 @@
-# Data and generated research artifacts
-data/
-datasets/
-raw/
-processed/
-interim/
-outputs/
-reports/
-results/
-artifacts/
-cache/
+# Data and generated research artifacts (root-anchored so AutoAlpha source paths stay tracked)
+/data/
+/datasets/
+/raw/
+/processed/
+/interim/
+/outputs/
+/reports/
+/results/
+/artifacts/
+/cache/
 
 # Python
 __pycache__/
@@ -44,5 +44,5 @@ env/
 .env.*
 !.env.example
 
-# Nested AutoAlpha repository (manages its own history)
-AutoAlpha/
+# Backup of the pre-merge nested AutoAlpha git directory
+/.git-autoalpha-backup/

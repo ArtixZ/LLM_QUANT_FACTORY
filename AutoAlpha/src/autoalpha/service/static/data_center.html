@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoAlpha 数据中心</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity"><h1>AutoAlpha 数据中心</h1><p id="dataCenterSummary">正在读取数据工作区与同步状态</p></div>
+    <div class="header-actions">
+      <nav class="app-nav" aria-label="研究工作台">
+        <a href="/"><i data-lucide="activity"></i>自动研究</a>
+        <a href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a>
+        <a href="/llm-team"><i data-lucide="brain-circuit"></i>LLM 团队</a>
+        <a href="/factors"><i data-lucide="library"></i>因子库</a>
+        <a href="/screener"><i data-lucide="list-filter"></i>选股器</a>
+        <a href="/paper-trading"><i data-lucide="wallet-cards"></i>模拟交易</a>
+        <a href="/backtest"><i data-lucide="chart-no-axes-combined"></i>手动回测</a>
+        <a class="active" href="/data"><i data-lucide="database-zap"></i>数据中心</a>
+        <a href="/settings"><i data-lucide="settings-2"></i>系统设置</a>
+      </nav>
+      <span class="state-pill small" id="dataState">CHECKING</span>
+    </div>
+  </header>
+  <script src="/static/platform_header.js?v=20260718-quant-v1"></script>
+
+  <main class="data-center-shell">
+    <section class="data-health-band" id="dataHealthBand">
+      <div><span>研究面板</span><strong id="researchReadiness">--</strong><small id="researchReadinessNote">--</small></div>
+      <div><span>非 PIT 代理成交</span><strong id="proxyReadiness">--</strong><small id="proxyReadinessNote">--</small></div>
+      <div><span>严格 PIT 账本</span><strong id="pitReadiness">--</strong><small id="pitReadinessNote">--</small></div>
+      <div><span>数据截至</span><strong id="dataEnd">--</strong><small id="dataRange">--</small></div>
+      <div><span>面板规模</span><strong id="dataRows">--</strong><small id="dataFiles">--</small></div>
+      <div><span>同步状态</span><strong id="syncState">--</strong><small id="syncUpdatedAt">--</small></div>
+    </section>
+
+    <div class="data-center-grid">
+      <aside class="panel data-settings-panel">
+        <div class="panel-header"><div><h2>数据连接</h2><p>凭证仅保存到本机系统钥匙串</p></div><button class="icon-button" id="refreshDataCenter" title="重新检查数据状态"><i data-lucide="refresh-cw"></i></button></div>
+        <form id="dataSettingsForm" class="data-settings-form">
+          <label>研究数据目录<input id="dataPath" type="text" required autocomplete="off"></label>
+          <label>市场下载器目录<input id="marketDataRoot" type="text" required autocomplete="off"></label>
+          <label>Tushare Token<input id="tushareToken" type="password" autocomplete="new-password" placeholder="仅在新增或更换时填写"></label>
+          <p class="credential-state" id="tokenState"><i data-lucide="key-round"></i><span>检查凭证状态</span></p>
+          <label class="schedule-toggle"><input id="autoUpdateEnabled" type="checkbox"><span>每个交易日自动增量更新</span></label>
+          <label>计划执行时点（北京时间）<select id="dataUpdateHour"></select></label>
+          <button class="button primary" id="saveDataSettings" type="submit"><i data-lucide="save"></i>保存数据配置</button>
+        </form>
+        <div class="data-sync-actions">
+          <div class="data-sync-range">
+            <label>扩展数据起始日<input id="featureStartDate" type="date"></label>
+            <label>同步截至日<input id="featureEndDate" type="date"></label>
+          </div>
+          <button class="button" id="startDataSync" type="button"><i data-lucide="download"></i>立即增量更新</button>
+          <p id="syncActionNote">增量下载不复权截面与复权因子；历史覆盖完整后原子重建研究面板。</p>
+          <div class="sync-progress-panel" id="syncProgressPanel" hidden>
+            <div class="sync-progress-heading"><strong id="syncProgressTitle">可恢复同步进度</strong><span id="syncProgressPercent">--</span></div>
+            <div class="sync-progress-track"><i id="syncProgressBar"></i></div>
+            <p id="syncProgressDetail">--</p>
+            <div class="sync-phase-list" id="syncPhaseList"></div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="data-center-main">
+        <section class="panel data-products-panel">
+          <div class="panel-header"><div><h2>Tushare 数据产品</h2><p id="dataProductSummary">按研究用途管理接口、权限、时点风险与面板接入</p></div><span class="state-pill small" id="selectedProductCount">0 ENABLED</span></div>
+          <div class="data-product-toolbar">
+            <label>类别<select id="dataProductCategory"><option value="ALL">全部类别</option></select></label>
+            <label>状态<select id="dataProductState"><option value="ALL">全部状态</option><option value="READY">已落盘</option><option value="NOT_DOWNLOADED">待下载</option><option value="CATALOG">待接入</option><option value="PARTIAL">部分失败</option></select></label>
+            <label class="data-product-search">检索<input id="dataProductSearch" type="search" placeholder="接口、用途或因子族"></label>
+            <button class="button" id="selectRecommendedProducts" type="button"><i data-lucide="badge-check"></i>生产推荐</button>
+          </div>
+          <div class="data-product-table-wrap">
+            <table class="data-product-table">
+              <thead><tr><th>启用</th><th>数据产品</th><th>类别</th><th>研究特征</th><th>粒度 / 更新</th><th>可见时点</th><th>时点治理</th><th>落盘覆盖</th><th>面板</th><th>文档</th></tr></thead>
+              <tbody id="dataProductRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel data-workspace-panel">
+          <div class="panel-header"><div><h2>数据工作区</h2><p id="workspacePath">--</p></div><span class="state-pill small" id="qualityState">--</span></div>
+          <div class="data-workspace-body">
+            <div class="data-stat-grid" id="workspaceStats"></div>
+            <div class="data-readiness-grid">
+              <section><h3>研究口径</h3><p id="researchBasis">--</p><ul id="researchWarnings"></ul></section>
+              <section><h3>成交口径</h3><p id="executionBasis">--</p><ul id="executionWarnings"></ul></section>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel data-downloader-panel">
+          <div class="panel-header"><div><h2>下载器与数据血缘</h2><p id="downloaderPath">--</p></div><span class="state-pill small" id="downloaderState">--</span></div>
+          <div class="download-task-list" id="downloadTasks"></div>
+        </section>
+
+        <section class="panel data-events-panel">
+          <div class="panel-header"><div><h2>数据交付日志</h2><p>同步、配置与异常均写入可审计事件流</p></div><span id="eventCount" class="state-pill small">0</span></div>
+          <div class="data-event-list" id="dataEvents"></div>
+        </section>
+      </section>
+    </div>
+  </main>
+  <div id="toast" role="status"></div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/static/data_center.js?v=20260717-data-products-v2"></script>
+</body>
+</html>

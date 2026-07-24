@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoAlpha 因子库</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity">
+      <h1>AutoAlpha 因子库</h1>
+      <p id="librarySummary">正在加载研究资产</p>
+    </div>
+    <div class="header-actions">
+      <nav class="app-nav" aria-label="研究工作台">
+        <a href="/"><i data-lucide="activity"></i>自动研究</a>
+        <a href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a>
+        <a href="/llm-team"><i data-lucide="brain-circuit"></i>LLM 团队</a>
+        <a class="active" href="/factors"><i data-lucide="library"></i>因子库</a>
+        <a href="/screener"><i data-lucide="list-filter"></i>选股器</a>
+        <a href="/paper-trading"><i data-lucide="wallet-cards"></i>模拟交易</a>
+        <a href="/backtest"><i data-lucide="chart-no-axes-combined"></i>手动回测</a>
+        <a href="/data"><i data-lucide="database-zap"></i>数据中心</a>
+        <a href="/settings"><i data-lucide="settings-2"></i>系统设置</a>
+      </nav>
+      <span class="state-pill small">RESEARCH ASSETS</span>
+    </div>
+  </header>
+  <script src="/static/platform_header.js?v=20260718-quant-v1"></script>
+
+  <main class="research-page">
+    <section class="library-summary-band">
+      <div><span>全部因子</span><strong id="factorCount">--</strong></div>
+      <div><span>冠军构成</span><strong id="activeCount">--</strong></div>
+      <div><span>当前协议合格</span><strong id="qualifiedCount">--</strong></div>
+      <div><span>观察因子</span><strong id="observedCount">--</strong></div>
+      <div><span>机制分类</span><strong id="categoryCount">--</strong></div>
+      <div><span>结构簇</span><strong id="clusterCount">--</strong></div>
+      <div><span>行为簇</span><strong id="behaviorClusterCount">--</strong></div>
+      <div><span>影子观察</span><strong id="shadowCount">--</strong></div>
+      <div><span>盲测污染</span><strong id="contaminatedCount">--</strong></div>
+      <div><span>数据截至</span><strong id="dataEnd">--</strong></div>
+    </section>
+
+    <section class="panel library-panel">
+      <div class="library-toolbar">
+        <div class="leaderboard-switch" aria-label="因子排行榜时间口径">
+          <button class="leaderboard-option active" id="canonicalLeaderboard" type="button">统一主榜 <small>2015–2024</small></button>
+          <button class="leaderboard-option" id="recentLeaderboard" type="button">近期榜 <small>2020–2024</small></button>
+        </div>
+        <label class="search-field">检索
+          <span><i data-lucide="search"></i><input id="factorSearch" type="search" placeholder="名称、ID、家族或假设"></span>
+        </label>
+        <label>机制分类<select id="categoryFilter"><option value="all">全部分类</option></select></label>
+        <label>来源任务<select id="taskFilter"><option value="all">全部任务</option></select></label>
+        <label>研究状态
+          <select id="statusFilter">
+            <option value="all">全部状态</option>
+            <option value="ACTIVE">冠军构成</option>
+            <option value="QUALIFIED">合格候选</option>
+            <option value="STALE_PROTOCOL">待当前协议重评</option>
+            <option value="HOLDOUT_CONTAMINATED">隐藏期已污染</option>
+            <option value="OBSERVE">观察因子</option>
+          </select>
+        </label>
+        <label>生命周期
+          <select id="lifecycleFilter">
+            <option value="all">全部阶段</option>
+            <option value="RESEARCH">研究</option>
+            <option value="QUALIFIED">已合格</option>
+            <option value="SHADOW">影子观察</option>
+            <option value="PAPER">仿真</option>
+            <option value="PRODUCTION">生产</option>
+          </select>
+        </label>
+        <label>行为分类
+          <select id="behaviorFilter">
+            <option value="all">全部行为分类</option>
+            <option value="LEADER">行为簇首</option>
+            <option value="NEAR_DUPLICATE">近重复</option>
+            <option value="SUBSTITUTE">可替代</option>
+            <option value="RELATED">相关成员</option>
+            <option value="DISTINCT">独立因子</option>
+            <option value="PENDING">待计算</option>
+          </select>
+        </label>
+        <label>排行榜
+          <select id="rankingMetric">
+            <option value="long_only_overall">纯多综合分</option>
+          </select>
+        </label>
+        <label class="favorite-toggle"><input id="favoriteFactorFilter" type="checkbox">仅收藏</label>
+        <button class="icon-button" id="rankingDirection" title="切换排序方向" aria-label="切换排序方向"><i data-lucide="arrow-down-wide-narrow"></i></button>
+        <button class="icon-button" id="libraryRefresh" title="刷新因子库"><i data-lucide="refresh-cw"></i></button>
+      </div>
+
+      <div class="category-strip" id="categoryStrip"></div>
+
+      <div class="factor-table-wrap">
+        <table class="factor-table">
+          <thead>
+            <tr>
+              <th class="select-column"><input id="selectVisible" type="checkbox" title="选择当前结果"></th>
+              <th>排名</th>
+              <th>因子</th>
+              <th>来源任务</th>
+              <th>机制类型</th>
+              <th>结构簇</th>
+              <th>行为簇</th>
+              <th>状态</th>
+              <th>生命周期</th>
+              <th id="rankingValueHeader">纯多综合分</th>
+              <th>边际 IR</th>
+              <th id="boardSharpeHeader">主榜纯多夏普</th>
+              <th id="boardAnnualHeader">主榜纯多年化</th>
+              <th id="boardDrawdownHeader">主榜纯多回撤</th>
+              <th id="boardWorstHeader">主榜纯多最差折</th>
+              <th>Alpha多空夏普</th>
+              <th>Alpha多空年化</th>
+              <th>回撤</th>
+              <th>最差折夏普</th>
+              <th>Rank IC</th>
+              <th>换手</th>
+            </tr>
+          </thead>
+          <tbody id="factorTableBody"></tbody>
+        </table>
+        <p class="table-empty" id="factorEmpty" hidden>没有匹配的因子</p>
+      </div>
+    </section>
+  </main>
+
+  <div class="selection-dock" id="selectionDock" hidden>
+    <div><strong id="selectedCount">0</strong><span>个因子已选</span></div>
+    <div id="selectedNames"></div>
+    <button class="button" id="clearSelection"><i data-lucide="x"></i>清空</button>
+    <select id="quickObjectiveProfile" aria-label="快速组合优化目标" title="快速组合优化目标"><option value="DRAWDOWN_FIRST" selected>降低回撤优先</option><option value="PORTFOLIO_SHARPE_FIRST">组合夏普优先</option><option value="ROBUST_ACTIVE_LONG_ONLY">稳健均衡</option><option value="ABSOLUTE_LONG_ONLY">年化收益优先</option><option value="LOW_TURNOVER">低换手优先</option><option value="DIVERSIFICATION_FIRST">分散化优先</option></select>
+    <button class="button" id="openAutoCombine" title="按当前目标立即创建并启动 AutoCombine 任务"><i data-lucide="network"></i>快速优化</button>
+    <button class="button" id="openQuantCombine" title="带入 QuantCombine 进行非 LLM 统计组合优化"><i data-lucide="binary"></i>统计优化</button>
+    <button class="button primary" id="openBacktest"><i data-lucide="play"></i>组合回测</button>
+  </div>
+  <dialog class="factor-detail-dialog" id="factorDetailDialog" aria-labelledby="factorDetailTitle">
+    <article class="factor-detail-sheet">
+      <header class="factor-detail-header"><div><span class="detail-eyebrow" id="factorDetailCategory">因子详情</span><h2 id="factorDetailTitle">--</h2><code id="factorDetailId">--</code></div><button class="icon-button" id="closeFactorDetail" title="关闭因子详情" aria-label="关闭因子详情"><i data-lucide="x"></i></button></header>
+      <div class="factor-detail-actions"><button class="favorite-button" id="favoriteFactorBtn" type="button" title="收藏因子" aria-label="收藏因子"><i data-lucide="star"></i></button><button class="button" id="copyDsl" title="复制原始 DSL"><i data-lucide="copy"></i>复制 DSL</button><button class="button" id="copyLatex" title="复制 LaTex 数学表达式"><i data-lucide="braces"></i>复制 LaTex</button><a class="button" id="openFactorScreener" href="/screener"><i data-lucide="list-filter"></i>带入选股器</a><a class="button primary" id="openFactorBacktest" href="/backtest"><i data-lucide="chart-no-axes-combined"></i>带入回测</a></div>
+      <section class="factor-detail-intro"><div><span>经济假设</span><p id="factorDetailHypothesis">--</p></div><div class="detail-tags" id="factorDetailTags"></div></section>
+      <section class="formula-section"><div class="detail-section-heading"><div><span>数学表达式</span><h3>可读公式</h3></div><small id="formulaSummary">--</small></div><div class="formula-render" id="factorLatex" aria-label="因子 LaTex 数学表达式"></div><details class="formula-source"><summary>查看 LaTex 源码</summary><pre id="factorLatexSource"></pre></details></section>
+      <section class="factor-detail-grid"><div class="detail-block"><div class="detail-section-heading"><div><span>表达式审计</span><h3>输入与复杂度</h3></div></div><dl class="definition-list" id="expressionAudit"></dl></div><div class="detail-block"><div class="detail-section-heading"><div><span>当前评估</span><h3>指标快照</h3></div></div><dl class="definition-list metrics-list" id="factorMetrics"></dl></div></section>
+      <section class="detail-block lifecycle-block"><div class="detail-section-heading"><div><span>治理轨迹</span><h3>生命周期</h3></div><small id="lifecycleCount">--</small></div><ol class="lifecycle-list" id="factorLifecycle"></ol></section>
+      <section class="detail-block lifecycle-block"><div class="detail-section-heading"><div><span>FULL LLM</span><h3>机制、复核与证伪档案</h3></div><small id="factorIntelligenceCount">--</small></div><div class="factor-intelligence" id="factorIntelligence"><p class="table-empty">正在读取结构化研究档案</p></div></section>
+      <section class="detail-block raw-expression-block"><div class="detail-section-heading"><div><span>可复现定义</span><h3>原始 DSL 代码</h3></div><small>Canonical JSON</small></div><pre class="raw-expression" id="factorRawExpression"></pre></section>
+    </article>
+  </dialog>
+  <div id="toast" role="status"></div>
+  <script>window.MathJax = { tex: { displayMath: [["\\[", "\\]"]] }, startup: { typeset: false } };</script>
+  <script src="/static/factors.js?v=20260719-behavior-v2"></script>
+  <script async src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" onload="window.lucide&&window.lucide.createIcons()"></script>
+  <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" onload="window.dispatchEvent(new Event('mathjax-ready'))"></script>
+</body>
+</html>

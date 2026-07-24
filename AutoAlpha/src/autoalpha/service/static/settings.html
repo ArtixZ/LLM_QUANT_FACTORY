@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>系统设置 · AutoAlpha</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/settings.css?v=20260718-v2">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
+</head>
+<body>
+  <header class="app-header settings-header">
+    <div class="identity"><h1>系统设置</h1><p>AutoAlpha 与 AutoCombine 的统一配置、凭证、治理和版本控制</p></div>
+    <nav class="app-nav" aria-label="主导航">
+      <a href="/"><i data-lucide="activity"></i>自动研究</a>
+      <a href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a>
+      <a href="http://127.0.0.1:8888/"><i data-lucide="network"></i>AutoCombine</a>
+      <a href="/factors"><i data-lucide="library"></i>因子库</a>
+      <a href="/backtest"><i data-lucide="chart-no-axes-combined"></i>回测</a>
+      <a href="/data"><i data-lucide="database-zap"></i>数据</a>
+      <a class="active" href="/settings"><i data-lucide="settings-2"></i>设置</a>
+    </nav>
+  </header>
+  <script src="/static/platform_header.js?v=20260718-quant-v1"></script>
+
+  <main class="settings-shell">
+    <section class="settings-status-band" id="statusBand" aria-label="运行状态"></section>
+
+    <div class="settings-layout">
+      <aside class="settings-rail">
+        <div class="rail-title"><span>CONTROL PLANE</span><strong>配置目录</strong></div>
+        <nav id="settingsNavigation" aria-label="设置目录"></nav>
+        <div class="rail-boundary">
+          <i data-lucide="shield-check"></i>
+          <p>密钥只进入系统 Keychain。页面、数据库、日志和版本记录均不返回密钥正文。</p>
+        </div>
+      </aside>
+
+      <div class="settings-workspace">
+        <section class="activation-banner" id="activationBanner"></section>
+        <form id="settingsForm" autocomplete="off">
+          <div id="settingsGroups"></div>
+        </form>
+
+        <section class="settings-section" id="runtime-section">
+          <div class="settings-section-head"><div><span>RUNTIME</span><h2>运行环境</h2><p>启动期参数只读展示，修改环境变量后需重启相应服务。</p></div><i data-lucide="server-cog"></i></div>
+          <div class="runtime-table" id="runtimeTable"></div>
+        </section>
+
+        <section class="settings-section" id="governance-section">
+          <div class="settings-section-head"><div><span>GOVERNANCE</span><h2>研究与交易边界</h2><p>来自生产研究协议的只读事实，防止界面设置越过确定性门禁。</p></div><i data-lucide="landmark"></i></div>
+          <div class="governance-grid" id="governanceGrid"></div>
+        </section>
+
+        <section class="settings-section" id="revisions-section">
+          <div class="settings-section-head"><div><span>AUDIT HISTORY</span><h2>配置版本</h2><p>每次有效变更形成不可变快照，并进入统一哈希审计日志。</p></div><button class="icon-button" type="button" id="refreshSettings" title="刷新"><i data-lucide="refresh-cw"></i></button></div>
+          <div class="revision-list" id="revisionList"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <div class="settings-savebar" id="saveBar">
+    <div class="save-state"><i data-lucide="circle-dot"></i><span id="dirtyState">没有待保存变更</span></div>
+    <label>变更说明<input id="changeNote" maxlength="300" placeholder="例如：提高组合搜索预算并切换为低回撤优先"></label>
+    <button class="button" type="button" id="discardSettings" disabled><i data-lucide="rotate-ccw"></i>放弃</button>
+    <button class="button primary" type="button" id="saveSettings" disabled><i data-lucide="save"></i>验证并保存</button>
+  </div>
+
+  <dialog class="settings-dialog" id="revisionDialog">
+    <div class="dialog-title"><div><span>CONFIGURATION REVISION</span><h2 id="revisionTitle">配置版本</h2></div><button class="icon-button" type="button" id="closeRevision" title="关闭"><i data-lucide="x"></i></button></div>
+    <div class="revision-detail" id="revisionDetail"></div>
+    <div class="dialog-actions"><button class="button" type="button" id="cancelRevision">取消</button><button class="button primary" type="button" id="restoreRevision"><i data-lucide="history"></i>恢复此版本</button></div>
+  </dialog>
+
+  <div id="toast" role="status"></div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/static/settings.js?v=20260718-v1"></script>
+</body>
+</html>
