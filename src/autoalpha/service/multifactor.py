@@ -516,6 +516,14 @@ def _library_admission_failures(metrics: dict[str, Any], config: ResearchConfig)
             metrics.get("long_only_walk_forward_fold_count", 0)
         )
         >= config.walk_forward.minimum_folds,
+        # Behavioral redundancy: near-duplicate signals stay out of the eligible
+        # pool unless the candidate is strong enough to justify coexistence.
+        "signal_redundancy": (
+            float(metrics.get("library_signal_correlation_max", 0.0))
+            <= config.evaluation.maximum_library_correlation
+            or float(metrics.get("long_only_sharpe_ratio", -100.0))
+            >= config.evaluation.redundancy_override_net_ir
+        ),
     }
     return [name for name, passed in checks.items() if not passed]
 

@@ -20,7 +20,7 @@ from autoalpha.data.research_fields import (
     expression_fields,
     products_for_fields,
 )
-from autoalpha.dsl.expression import FactorDefinition, field, operation
+from autoalpha.dsl.expression import Expression, FactorDefinition, field, operation
 from autoalpha.operations.artifacts import ArtifactRegistry
 from autoalpha.research.multiple_testing import probability_of_backtest_overfitting
 from autoalpha.research.statistics import benjamini_hochberg
@@ -822,6 +822,12 @@ class ContinuousResearchWorker:
                 alpha=config.evaluation.maximum_net_return_p_value,
             )
         )
+        redundancy_metrics = await asyncio.to_thread(
+            evaluator.library_signal_correlation,
+            factor,
+            _redundancy_references(pool_snapshot, exclude_id=factor.factor_id),
+        )
+        result.metrics.update(redundancy_metrics)
         library_metrics = await asyncio.to_thread(
             self._canonical_library_metrics,
             Path(settings["data_path"]),
@@ -829,6 +835,7 @@ class ContinuousResearchWorker:
             result.metrics,
             pool_snapshot,
         )
+        library_metrics.update(redundancy_metrics)
         self._update_state(phase="PORTFOLIO")
         engine = MultiFactorResearchEngine(
             self.store,
@@ -2033,6 +2040,13 @@ def _memory_summary(
             "parameter_stability_positive_fraction": metrics.get(
                 "parameter_stability_positive_fraction"
             ),
+            "library_redundancy": {
+                "max_signal_correlation": metrics.get("library_signal_correlation_max"),
+                "peer": (
+                    metrics.get("library_signal_correlation_peer_name")
+                    or metrics.get("library_signal_correlation_peer")
+                ),
+            },
             "exploratory_failures": [
                 failure
                 for failure in metrics.get("exploratory_gate_failures", [])
@@ -2314,6 +2328,45 @@ def _validate_mechanism_direction_alignment(
             f"Frozen mechanism campaign requires {target}; proposal classified as "
             f"{candidate_mechanism}. Change the economic mechanism, not only its parameters."
         )
+
+
+def _redundancy_references(
+    pool_snapshot: list[dict[str, Any]],
+    *,
+    exclude_id: str,
+    limit: int = 20,
+) -> list[FactorDefinition]:
+    """Reconstruct library reference factors for behavioral redundancy checks.
+
+    Active portfolio members are checked first, then the most recent eligible
+    pool factors (``pool_snapshot`` is ordered by recency). Records whose stored
+    proposals cannot be reconstructed are skipped.
+    """
+    ordered = [record for record in pool_snapshot if record.get("status") == "ACTIVE"]
+    ordered.extend(record for record in pool_snapshot if record.get("status") == "ELIGIBLE")
+    references: list[FactorDefinition] = []
+    for record in ordered:
+        if len(references) >= limit:
+            break
+        if str(record.get("factor_id")) == exclude_id:
+            continue
+        proposal = record.get("proposal") or {}
+        expression = proposal.get("expression")
+        if not expression:
+            continue
+        try:
+            references.append(
+                FactorDefinition(
+                    name=str(proposal.get("name") or record.get("name") or record["factor_id"]),
+                    family=str(proposal.get("family") or record.get("family") or "unknown"),
+                    hypothesis=str(proposal.get("hypothesis") or "library reference factor"),
+                    expression=Expression.from_dict(expression),
+                    expected_direction=int(proposal.get("expected_direction", 1)),
+                )
+            )
+        except Exception:
+            continue
+    return references
 
 
 def _matching_structure(

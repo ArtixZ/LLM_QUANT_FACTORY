@@ -165,3 +165,37 @@ def test_portfolio_evaluation_separates_alpha_diagnostic_from_ashare_strategy() 
         metrics["portfolio_simple_annual_return"]
     )
     assert standalone["long_only_walk_forward_fold_count"] == 2
+
+
+def test_library_signal_correlation_flags_behavioral_duplicate() -> None:
+    dates = pd.bdate_range("2021-01-04", periods=40)
+    columns = ["A", "B", "C", "D"]
+    candidate_signal = pd.DataFrame(
+        np.tile([1.0, 2.0, 3.0, 4.0], (len(dates), 1)), index=dates, columns=columns
+    )
+    duplicate_signal = candidate_signal * 2.0
+    weak_signal = pd.DataFrame(
+        np.tile([2.0, 1.0, 4.0, 3.0], (len(dates), 1)), index=dates, columns=columns
+    )
+
+    candidate = FactorDefinition("candidate", "test", "test", field("amount"))
+    duplicate = FactorDefinition("duplicate", "test", "test", field("close"))
+    weak_overlap = FactorDefinition("weak_overlap", "test", "test", field("vol"))
+    broken = FactorDefinition("broken", "test", "test", field("nonexistent"))
+
+    evaluator = object.__new__(PriceVolumeEvaluator)
+    evaluator._signal_cache = {
+        candidate.factor_id: candidate_signal,
+        duplicate.factor_id: duplicate_signal,
+        weak_overlap.factor_id: weak_signal,
+    }
+
+    metrics = evaluator.library_signal_correlation(
+        candidate, [broken, weak_overlap, duplicate, candidate]
+    )
+
+    assert metrics["library_signal_correlation_max"] == pytest.approx(1.0)
+    assert metrics["library_signal_correlation_peer"] == duplicate.factor_id
+    assert metrics["library_signal_correlation_peer_name"] == "duplicate"
+    # broken reference is skipped without failing; candidate itself is excluded
+    assert metrics["library_signal_reference_count"] == 2

@@ -422,6 +422,12 @@ Explicitly avoid mechanisms and expression signatures that dominate recent failu
 only variation of a prior tree is not novel. Prefer slower signals when recent candidates exceed the
 turnover gate. The candidate may enter at a small weight, so a modest standalone factor is useful
 when it is genuinely orthogonal to the active members.
+Candidates are also screened for behavioral redundancy: a deterministic gate rejects any signal
+whose realized cross-sectional correlation with an existing library factor is too high, even when
+the expression tree differs. Memory entries expose this as single_factor.library_redundancy and a
+signal_redundancy admission failure. When a redundancy failure or a high max_signal_correlation
+appears in memory, do not reshape the same signal with different operators; switch to a different
+economic mechanism, horizon class, or data product instead.
 
 Public walk-forward feedback is adaptive research evidence, not untouched out-of-sample evidence.
 Prefer mechanisms that remain positive across folds and parameter neighborhoods instead of chasing

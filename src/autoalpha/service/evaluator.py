@@ -482,6 +482,53 @@ class PriceVolumeEvaluator:
         for factor in factors:
             self._factor_signal(factor)
 
+    def library_signal_correlation(
+        self,
+        factor: FactorDefinition,
+        references: list[FactorDefinition],
+        *,
+        sample_stride: int = 5,
+        max_references: int = 20,
+    ) -> dict[str, Any]:
+        """Peak median cross-sectional signal correlation against library references.
+
+        Deterministic behavioral-redundancy diagnostic: signals are compared on a
+        sampled date grid so up to ``max_references`` library factors stay cheap
+        relative to a full evaluation. Reference factors whose stored expressions
+        no longer compile are skipped rather than failing the iteration.
+        """
+        candidate = self._factor_signal(factor).iloc[:: max(int(sample_stride), 1)]
+        checked = 0
+        peak = 0.0
+        peer_id: str | None = None
+        peer_name: str | None = None
+        for reference in references:
+            if checked >= max_references:
+                break
+            if reference.factor_id == factor.factor_id:
+                continue
+            try:
+                signal = self._factor_signal(reference)
+            except Exception:
+                continue
+            checked += 1
+            aligned = signal.reindex(index=candidate.index, columns=candidate.columns)
+            daily = candidate.corrwith(aligned, axis=1).dropna()
+            if daily.empty:
+                continue
+            value = float(daily.median())
+            if abs(value) > abs(peak):
+                peak = value
+                peer_id = reference.factor_id
+                peer_name = reference.name
+        return {
+            "library_signal_correlation_max": abs(peak),
+            "library_signal_correlation_signed": peak,
+            "library_signal_correlation_peer": peer_id,
+            "library_signal_correlation_peer_name": peer_name,
+            "library_signal_reference_count": checked,
+        }
+
     def _alpha_portfolio_path(
         self,
         factors: list[FactorDefinition],

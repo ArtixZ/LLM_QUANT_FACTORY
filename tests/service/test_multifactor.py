@@ -369,6 +369,32 @@ def test_library_admission_retains_weak_signal_without_relaxing_promotion() -> N
     assert "deflated_sharpe" in _candidate_screen_failures(metrics, config)
 
 
+def test_library_admission_screens_behaviorally_redundant_weak_signal() -> None:
+    config = ResearchConfig.from_toml(Path("config/research.toml"))
+    metrics = {
+        "evaluation_protocol": CANONICAL_LIBRARY_PROTOCOL,
+        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_sharpe_ratio": 0.10,
+        "long_only_active_information_ratio": 0.05,
+        "long_only_coverage": 0.93,
+        "long_only_annual_turnover": 20.0,
+        "long_only_walk_forward_fold_count": config.walk_forward.minimum_folds,
+        "library_signal_correlation_max": 0.95,
+        "library_signal_correlation_peer": "F_existing",
+    }
+
+    assert "signal_redundancy" in _library_admission_failures(metrics, config)
+
+    strong = {
+        **metrics,
+        "long_only_sharpe_ratio": config.evaluation.redundancy_override_net_ir,
+    }
+    assert "signal_redundancy" not in _library_admission_failures(strong, config)
+
+    orthogonal = {**metrics, "library_signal_correlation_max": 0.30}
+    assert "signal_redundancy" not in _library_admission_failures(orthogonal, config)
+
+
 def test_stability_upgrade_can_repair_an_infeasible_incumbent() -> None:
     config = ResearchConfig.from_toml(Path("config/research.toml"))
     incumbent = {
