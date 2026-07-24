@@ -29,12 +29,12 @@ MultiFactorAshare/            ← 本仓库（外层）
 两个仓库各自维护独立历史，需分别推送到各自的**私有**远端：
 
 ```bash
-# 外层数据管线仓库
+# 外层数据管线仓库（分支 main）
 cd MultiFactorAshare
 git remote add origin <private-remote-url-1>
-git push -u origin master
+git push -u origin main
 
-# 内层 AutoAlpha 平台仓库
+# 内层 AutoAlpha 平台仓库（分支 master）
 cd MultiFactorAshare/AutoAlpha
 git remote add origin <private-remote-url-2>
 git push -u origin master
