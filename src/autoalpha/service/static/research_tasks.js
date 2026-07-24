@@ -27,7 +27,7 @@ function bindControls() {
   document.getElementById("refreshActivity").onclick = loadActivity;
   document.getElementById("autoSplitBtn").onclick = autoSplitProtocol;
   document.getElementById("protocolDesign").addEventListener("change", updateProtocolDesign);
-  ["protocolExplorationYears", "protocolValidationYears", "protocolHoldoutMonths", "taskDataEnd"].forEach(id => {
+  ["protocolExplorationYears", "protocolValidationYears", "protocolHoldoutMonths", "protocolEmbargoDays", "taskDataEnd"].forEach(id => {
     document.getElementById(id).addEventListener("input", updateProtocolDesign);
   });
   ["explorationStart", "explorationEnd", "validationStart", "validationEnd", "holdoutStart", "holdoutEnd"].forEach(id => {
@@ -210,8 +210,9 @@ function setProtocolFields(protocol) {
   document.getElementById("minimumFolds").value = protocol?.minimum_folds || 1;
   document.getElementById("protocolDesign").value = protocol?.design || "CUSTOM";
   document.getElementById("protocolExplorationYears").value = protocol?.exploration_years || 5;
-  document.getElementById("protocolValidationYears").value = protocol?.validation_years || 2;
+  document.getElementById("protocolValidationYears").value = protocol?.validation_years || (protocol?.design === "REGIME_COVERAGE_BACKWARD" ? 3 : 2);
   document.getElementById("protocolHoldoutMonths").value = protocol?.holdout_months || 6;
+  document.getElementById("protocolEmbargoDays").value = protocol?.embargo_days ?? 30;
 }
 
 function protocolFromForm() {
@@ -222,6 +223,11 @@ function protocolFromForm() {
     protocol.exploration_years = Number(value("protocolExplorationYears"));
     protocol.validation_years = Number(value("protocolValidationYears"));
     protocol.holdout_months = Number(value("protocolHoldoutMonths"));
+  } else if (design === "REGIME_COVERAGE_BACKWARD") {
+    protocol.anchor_date = value("taskDataEnd");
+    protocol.validation_years = Number(value("protocolValidationYears"));
+    protocol.holdout_months = Number(value("protocolHoldoutMonths"));
+    protocol.embargo_days = Number(value("protocolEmbargoDays"));
   }
   return protocol;
 }
@@ -232,7 +238,7 @@ async function autoSplitProtocol() {
   try {
     const preview = await api("/api/research-protocol/preset", {
       method: "POST",
-      body: JSON.stringify({ data_path: value("taskDataPath"), data_start: startText, data_end: endText, design: value("protocolDesign"), exploration_years: Number(value("protocolExplorationYears")), validation_years: Number(value("protocolValidationYears")), holdout_months: Number(value("protocolHoldoutMonths")) }),
+      body: JSON.stringify({ data_path: value("taskDataPath"), data_start: startText, data_end: endText, design: value("protocolDesign"), exploration_years: Number(value("protocolExplorationYears")), validation_years: Number(value("protocolValidationYears")), holdout_months: Number(value("protocolHoldoutMonths")), embargo_days: Number(value("protocolEmbargoDays")) }),
     });
     setProtocolFields(preview.protocol);
     updateProtocolDesign();
@@ -244,10 +250,21 @@ async function autoSplitProtocol() {
 }
 
 function updateProtocolDesign() {
-  const recent = value("protocolDesign") === "RECENT_FIVE_YEAR_BACKWARD";
-  ["protocolExplorationYears", "protocolValidationYears", "protocolHoldoutMonths"].forEach(id => { document.getElementById(id).disabled = !recent; });
+  const design = value("protocolDesign");
+  const recent = design === "RECENT_FIVE_YEAR_BACKWARD";
+  const regime = design === "REGIME_COVERAGE_BACKWARD";
+  document.getElementById("protocolExplorationYears").disabled = !recent;
+  document.getElementById("protocolValidationYears").disabled = !(recent || regime);
+  document.getElementById("protocolHoldoutMonths").disabled = !(recent || regime);
+  document.getElementById("protocolEmbargoDays").disabled = !regime;
   const summary = document.getElementById("protocolDesignSummary");
-  summary.textContent = recent ? `${value("protocolExplorationYears")} 年探索 · ${value("protocolValidationYears")} 年公开验证 · ${value("protocolHoldoutMonths")} 个月隐藏测试 · 锚定 ${value("taskDataEnd") || "最新日"}` : "按任务完整区间进行均衡自动划分；日期可继续手动调整";
+  if (recent) {
+    summary.textContent = `${value("protocolExplorationYears")} 年探索 · ${value("protocolValidationYears")} 年公开验证 · ${value("protocolHoldoutMonths")} 个月隐藏测试 · 锚定 ${value("taskDataEnd") || "最新日"}`;
+  } else if (regime) {
+    summary.textContent = `全历史探索（自数据起始日） · ${value("protocolValidationYears")} 年公开验证 · ${value("protocolEmbargoDays")} 天隔离带 · ${value("protocolHoldoutMonths")} 个月隐藏测试 · 锚定 ${value("taskDataEnd") || "最新日"}`;
+  } else {
+    summary.textContent = "按任务完整区间进行均衡自动划分；日期可继续手动调整";
+  }
 }
 
 function value(id) { return document.getElementById(id).value; }
@@ -255,7 +272,7 @@ function value(id) { return document.getElementById(id).value; }
 async function api(path, options = {}) { const response = await fetch(path, { ...options, credentials: "same-origin", headers: { "Content-Type": "application/json", ...(options.headers || {}) } }); if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || `HTTP ${response.status}`); } return response.json(); }
 function taskIdFromPath() { const parts = location.pathname.split("/").filter(Boolean); return parts.length === 2 ? decodeURIComponent(parts[1]) : null; }
 function taskRange(task) { const protocol = task.protocol || {}; return protocol.exploration_start && protocol.validation_end ? `${protocol.exploration_start} — ${protocol.validation_end}` : task.data_start && task.data_end ? `${task.data_start} — ${task.data_end}` : "等待数据"; }
-function protocolDesignLabel(value) { return value === "RECENT_FIVE_YEAR_BACKWARD" ? "近期五年倒推" : "均衡 / 自定义"; }
+function protocolDesignLabel(value) { return value === "RECENT_FIVE_YEAR_BACKWARD" ? "近期五年倒推" : value === "REGIME_COVERAGE_BACKWARD" ? "全历史制度覆盖·隔离带" : "均衡 / 自定义"; }
 function marketLabel(value) { return ({ CN_A: "A 股", HK: "港股", US: "美股" })[value] || value; }
 function pathBlock(value) { const node = element("code", "task-path", value || "--"); node.title = value || ""; return node; }
 function statusPill(value) { return element("span", `state-pill small ${value}`, value); }

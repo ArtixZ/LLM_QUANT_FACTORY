@@ -55,6 +55,7 @@ from autoalpha.service.research_manager import ResearchTaskManager
 from autoalpha.service.research_protocol import (
     CUSTOM_PROTOCOL_DESIGN,
     RECENT_FIVE_YEAR_BACKWARD,
+    REGIME_COVERAGE_BACKWARD,
     default_task_protocol,
     normalize_task_protocol,
     panel_validation_fold_capacity,
@@ -62,6 +63,7 @@ from autoalpha.service.research_protocol import (
     protocol_data_blockers,
     protocol_fingerprint,
     recent_five_year_task_protocol,
+    regime_coverage_task_protocol,
     task_research_config,
 )
 from autoalpha.service.screener import CrossSectionalScreener, ScreenerSpec
@@ -195,21 +197,27 @@ class ResearchProtocolRequest(BaseModel):
     holdout_start: date
     holdout_end: date
     minimum_folds: int = Field(default=1, ge=1, le=20)
-    design: Literal["CUSTOM", "RECENT_FIVE_YEAR_BACKWARD"] = CUSTOM_PROTOCOL_DESIGN
+    design: Literal["CUSTOM", "RECENT_FIVE_YEAR_BACKWARD", "REGIME_COVERAGE_BACKWARD"] = (
+        CUSTOM_PROTOCOL_DESIGN
+    )
     anchor_date: date | None = None
     exploration_years: int | None = Field(default=None, ge=2, le=10)
     validation_years: int | None = Field(default=None, ge=1, le=5)
     holdout_months: int | None = Field(default=None, ge=3, le=24)
+    embargo_days: int | None = Field(default=None, ge=0, le=90)
 
 
 class ResearchProtocolPresetRequest(BaseModel):
     data_path: str
     data_start: date
     data_end: date
-    design: Literal["CUSTOM", "RECENT_FIVE_YEAR_BACKWARD"] = RECENT_FIVE_YEAR_BACKWARD
+    design: Literal["CUSTOM", "RECENT_FIVE_YEAR_BACKWARD", "REGIME_COVERAGE_BACKWARD"] = (
+        RECENT_FIVE_YEAR_BACKWARD
+    )
     exploration_years: int = Field(default=5, ge=2, le=10)
     validation_years: int = Field(default=2, ge=1, le=5)
     holdout_months: int = Field(default=6, ge=3, le=24)
+    embargo_days: int = Field(default=30, ge=0, le=90)
 
     @model_validator(mode="after")
     def validate_coverage(self) -> ResearchProtocolPresetRequest:
@@ -1157,6 +1165,14 @@ async def build_research_protocol_preset(
                 exploration_years=payload.exploration_years,
                 validation_years=payload.validation_years,
                 holdout_months=payload.holdout_months,
+            )
+        elif payload.design == REGIME_COVERAGE_BACKWARD:
+            protocol = regime_coverage_task_protocol(
+                payload.data_start.isoformat(),
+                payload.data_end.isoformat(),
+                validation_years=payload.validation_years,
+                holdout_months=payload.holdout_months,
+                embargo_days=payload.embargo_days,
             )
         else:
             protocol = default_task_protocol(

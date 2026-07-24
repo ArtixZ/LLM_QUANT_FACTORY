@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -9,9 +10,11 @@ from autoalpha.config import ResearchConfig
 from autoalpha.service.evaluator import _walk_forward_dates
 from autoalpha.service.research_protocol import (
     RECENT_FIVE_YEAR_BACKWARD,
+    REGIME_COVERAGE_BACKWARD,
     default_task_protocol,
     protocol_blockers,
     recent_five_year_task_protocol,
+    regime_coverage_task_protocol,
     research_evidence_tier,
     task_research_config,
     validation_fold_capacity,
@@ -65,6 +68,47 @@ def test_recent_five_year_protocol_rejects_stale_anchor_and_short_history() -> N
     assert any("重新应用模板" in blocker for blocker in blockers)
     with pytest.raises(ValueError, match="至少需要"):
         recent_five_year_task_protocol("2022-01-01", "2026-07-16")
+
+
+def test_regime_coverage_protocol_uses_full_history_and_embargo_gap() -> None:
+    base = ResearchConfig.from_toml(Path("config/research.toml"))
+    protocol = regime_coverage_task_protocol("2010-01-04", "2026-07-16")
+
+    assert protocol == {
+        "exploration_start": "2010-01-04",
+        "exploration_end": "2022-12-17",
+        "validation_start": "2022-12-18",
+        "validation_end": "2025-12-17",
+        "holdout_start": "2026-01-17",
+        "holdout_end": "2026-07-16",
+        "minimum_folds": 3,
+        "design": REGIME_COVERAGE_BACKWARD,
+        "anchor_date": "2026-07-16",
+        "validation_years": 3,
+        "holdout_months": 6,
+        "embargo_days": 30,
+    }
+    gap = date.fromisoformat(protocol["holdout_start"]) - date.fromisoformat(
+        protocol["validation_end"]
+    )
+    assert gap.days == 31  # 30 天隔离带 + 1 天自然衍接
+    assert protocol_blockers(protocol, data_start="2010-01-04", data_end="2026-07-16") == []
+    assert (
+        research_evidence_tier(task_research_config(base, protocol, task_id="regime-coverage"))
+        == "PRIMARY_DISCOVERY"
+    )
+
+
+def test_regime_coverage_protocol_rejects_tampered_dates_and_short_history() -> None:
+    protocol = regime_coverage_task_protocol("2010-01-04", "2026-07-16")
+    protocol["validation_end"] = "2026-01-10"
+    protocol["holdout_start"] = "2026-01-11"
+
+    blockers = protocol_blockers(protocol, data_start="2010-01-04", data_end="2026-07-16")
+
+    assert any("重新应用模板" in blocker for blocker in blockers)
+    with pytest.raises(ValueError, match="至少 3 年"):
+        regime_coverage_task_protocol("2021-06-01", "2026-07-16")
 
 
 def test_public_evaluation_dates_do_not_expand_to_whole_calendar_year() -> None:

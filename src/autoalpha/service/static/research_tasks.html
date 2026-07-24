@@ -85,10 +85,11 @@
         <label>任务数据结束日<input id="taskDataEnd" type="date"></label>
         <div class="task-form-section wide"><div><span>研究协议切分</span><small>探索与公开验证对 LLM 可见；隐藏测试只返回分类结论</small></div><button class="button" id="autoSplitBtn" type="button"><i data-lucide="wand-sparkles"></i>应用模板</button></div>
         <div class="protocol-design-grid wide">
-          <label>切分模板<select id="protocolDesign"><option value="CUSTOM">均衡自动划分</option><option value="RECENT_FIVE_YEAR_BACKWARD">近期五年倒推</option></select></label>
+          <label>切分模板<select id="protocolDesign"><option value="CUSTOM">均衡自动划分</option><option value="RECENT_FIVE_YEAR_BACKWARD">近期五年倒推</option><option value="REGIME_COVERAGE_BACKWARD">全历史制度覆盖·隔离带</option></select></label>
           <label>探索年数<input id="protocolExplorationYears" type="number" min="2" max="10" value="5"></label>
           <label>公开验证年数<input id="protocolValidationYears" type="number" min="1" max="5" value="2"></label>
           <label>隐藏测试月数<input id="protocolHoldoutMonths" type="number" min="3" max="24" value="6"></label>
+          <label>隔离带天数<input id="protocolEmbargoDays" type="number" min="0" max="90" value="30"></label>
           <div class="protocol-design-summary" id="protocolDesignSummary">均衡自动划分</div>
         </div>
         <label>探索区起始<input id="explorationStart" type="date" required></label>
@@ -106,6 +107,6 @@
   </dialog>
   <div id="toast" role="status"></div>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="/static/research_tasks.js?v=20260718-favorites-v1"></script>
+  <script src="/static/research_tasks.js?v=20260719-regime-coverage-v1"></script>
 </body>
 </html>

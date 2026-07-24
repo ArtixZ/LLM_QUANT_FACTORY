@@ -23,8 +23,13 @@ PROTOCOL_DATE_FIELDS = (
 )
 MINIMUM_FOLD_TRADING_DAYS = 60
 RECENT_FIVE_YEAR_BACKWARD = "RECENT_FIVE_YEAR_BACKWARD"
+REGIME_COVERAGE_BACKWARD = "REGIME_COVERAGE_BACKWARD"
 CUSTOM_PROTOCOL_DESIGN = "CUSTOM"
-PROTOCOL_DESIGNS = {CUSTOM_PROTOCOL_DESIGN, RECENT_FIVE_YEAR_BACKWARD}
+PROTOCOL_DESIGNS = {
+    CUSTOM_PROTOCOL_DESIGN,
+    RECENT_FIVE_YEAR_BACKWARD,
+    REGIME_COVERAGE_BACKWARD,
+}
 PRIMARY_MINIMUM_EXPLORATION_DAYS = 3 * 365
 PRIMARY_MINIMUM_VALIDATION_DAYS = 2 * 365
 
@@ -118,6 +123,62 @@ def recent_five_year_task_protocol(
     }
 
 
+def regime_coverage_task_protocol(
+    data_start: str,
+    data_end: str,
+    *,
+    validation_years: int = 3,
+    holdout_months: int = 6,
+    embargo_days: int = 30,
+) -> dict[str, Any]:
+    """Build a causal protocol maximizing regime coverage with an embargoed holdout.
+
+    Compared with the recent-backward template this design (1) keeps every
+    available year in the exploration window so candidates are screened across
+    multiple market regimes instead of only the latest one, (2) defaults to a
+    longer public validation window for more walk-forward folds, and (3)
+    inserts a purge/embargo gap between public validation and the sealed
+    holdout so weekly holding-period returns and rolling lookbacks cannot leak
+    selection information across the boundary.
+    """
+    if not 1 <= validation_years <= 5:
+        raise ValueError("公开验证年数应在 1 至 5 年之间")
+    if not 3 <= holdout_months <= 24:
+        raise ValueError("隐藏测试月数应在 3 至 24 个月之间")
+    if not 0 <= embargo_days <= 90:
+        raise ValueError("隔离带天数应在 0 至 90 个自然日之间")
+    coverage_start = date.fromisoformat(data_start)
+    anchor = date.fromisoformat(data_end)
+    if coverage_start > anchor:
+        raise ValueError("任务数据起始日不能晚于结束日")
+
+    holdout_start = _shift_months(anchor + timedelta(days=1), -holdout_months)
+    validation_end = holdout_start - timedelta(days=embargo_days + 1)
+    validation_start = _shift_years(validation_end + timedelta(days=1), -validation_years)
+    exploration_end = validation_start - timedelta(days=1)
+    exploration_start = coverage_start
+    minimum_exploration_start = _shift_years(exploration_end + timedelta(days=1), -3)
+    if exploration_start > minimum_exploration_start:
+        raise ValueError(
+            f"全历史制度覆盖协议要求探索区至少 3 年；当前覆盖从 {coverage_start.isoformat()} "
+            f"开始，所需起点不晚于 {minimum_exploration_start.isoformat()}"
+        )
+    return {
+        "exploration_start": exploration_start.isoformat(),
+        "exploration_end": exploration_end.isoformat(),
+        "validation_start": validation_start.isoformat(),
+        "validation_end": validation_end.isoformat(),
+        "holdout_start": holdout_start.isoformat(),
+        "holdout_end": anchor.isoformat(),
+        "minimum_folds": _default_minimum_folds(validation_start, validation_end),
+        "design": REGIME_COVERAGE_BACKWARD,
+        "anchor_date": anchor.isoformat(),
+        "validation_years": validation_years,
+        "holdout_months": holdout_months,
+        "embargo_days": embargo_days,
+    }
+
+
 def normalize_task_protocol(value: dict[str, Any]) -> dict[str, Any]:
     result = {
         name: date.fromisoformat(str(value[name])).isoformat() for name in PROTOCOL_DATE_FIELDS
@@ -133,6 +194,11 @@ def normalize_task_protocol(value: dict[str, Any]) -> dict[str, Any]:
             result["exploration_years"] = int(value.get("exploration_years", 5))
             result["validation_years"] = int(value.get("validation_years", 2))
             result["holdout_months"] = int(value.get("holdout_months", 6))
+        elif design == REGIME_COVERAGE_BACKWARD:
+            result["anchor_date"] = date.fromisoformat(str(value["anchor_date"])).isoformat()
+            result["validation_years"] = int(value.get("validation_years", 3))
+            result["holdout_months"] = int(value.get("holdout_months", 6))
+            result["embargo_days"] = int(value.get("embargo_days", 30))
     return result
 
 
@@ -174,6 +240,25 @@ def protocol_blockers(protocol: dict[str, Any], *, data_start: str, data_end: st
             if normalized.get("anchor_date") != data_end or mismatched:
                 blockers.append(
                     "近期五年倒推模板必须锚定任务数据最新日；请重新应用模板，或切换为自定义协议"
+                )
+    if normalized.get("design") == REGIME_COVERAGE_BACKWARD:
+        try:
+            expected = regime_coverage_task_protocol(
+                data_start,
+                data_end,
+                validation_years=int(normalized["validation_years"]),
+                holdout_months=int(normalized["holdout_months"]),
+                embargo_days=int(normalized["embargo_days"]),
+            )
+        except ValueError as error:
+            blockers.append(str(error))
+        else:
+            mismatched = [
+                field for field in PROTOCOL_DATE_FIELDS if normalized[field] != expected[field]
+            ]
+            if normalized.get("anchor_date") != data_end or mismatched:
+                blockers.append(
+                    "全历史制度覆盖模板必须锚定任务数据最新日；请重新应用模板，或切换为自定义协议"
                 )
     durations = {
         "探索区": (dates["exploration_end"] - dates["exploration_start"]).days + 1,
