@@ -226,6 +226,10 @@ docker run --rm -p 8787:8787 \
 `mf-data all` 重建数据面板 → 启动服务后在设置中重新填入 Base URL / API Key / 数据目录。
 运行期 SQLite 属于本机研究状态，如需迁移请整体拷贝 `runtime*/` 目录（包含 `-wal`/`-shm`）。
 
+若使用现成数据包恢复，可从 Google Drive 下载并在外层仓库根目录解压：
+
+- https://drive.google.com/file/d/1rchy8L-dMXHfaqxd7fx0T7SrhgaZBvgP/view?usp=sharing
+
 ## License
 
 Proprietary — All rights reserved. 见 [LICENSE](LICENSE)。不构成任何投资建议。

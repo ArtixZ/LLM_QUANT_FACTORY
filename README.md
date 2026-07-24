@@ -50,6 +50,10 @@ Git 历史已审计：最大历史 blob < 400 KB（`uv.lock`），无泄露密�
 
 ## Dataset layout
 
+云端数据包（可直接下载并解压到本仓库根目录）：
+
+- Google Drive: https://drive.google.com/file/d/1rchy8L-dMXHfaqxd7fx0T7SrhgaZBvgP/view?usp=sharing
+
 ```text
 data/
   mainboard_non_st_qfq_20100101_20260715/  # immutable source snapshot
