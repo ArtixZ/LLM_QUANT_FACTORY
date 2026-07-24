@@ -31,6 +31,45 @@ REQUIRED_COLUMNS = (
     "amount",
 )
 
+DAILY_BASIC_FIELDS = (
+    "turnover_rate",
+    "turnover_rate_f",
+    "volume_ratio",
+    "pe",
+    "pe_ttm",
+    "pb",
+    "ps",
+    "ps_ttm",
+    "dv_ratio",
+    "dv_ttm",
+    "total_share",
+    "float_share",
+    "free_share",
+    "total_mv",
+    "circ_mv",
+)
+MONEYFLOW_FIELDS = (
+    "buy_sm_vol",
+    "buy_sm_amount",
+    "sell_sm_vol",
+    "sell_sm_amount",
+    "buy_md_vol",
+    "buy_md_amount",
+    "sell_md_vol",
+    "sell_md_amount",
+    "buy_lg_vol",
+    "buy_lg_amount",
+    "sell_lg_vol",
+    "sell_lg_amount",
+    "buy_elg_vol",
+    "buy_elg_amount",
+    "sell_elg_vol",
+    "sell_elg_amount",
+    "net_mf_vol",
+    "net_mf_amount",
+)
+STK_LIMIT_FIELDS = ("up_limit", "down_limit")
+
 
 def _parquet_glob(source: Path) -> str:
     parquet_dir = source.resolve() / "parquet"
@@ -379,12 +418,89 @@ def _cross_sectional_market_relation(source: Path) -> tuple[str, list[str]]:
     return f"read_parquet([{sources}], union_by_name = true)", globs
 
 
+def _cross_sectional_feature_sql(feature_store: Path | None) -> dict[str, Any]:
+    if feature_store is None:
+        return {
+            "ctes": "",
+            "select": ",\n"
+            + ",\n".join(
+                f"                        NULL::DOUBLE AS {field}"
+                for field in STK_LIMIT_FIELDS
+            ),
+            "joins": "",
+            "datasets": [],
+            "fields": [],
+            "coverage": {},
+        }
+    root = feature_store.expanduser().resolve()
+    definitions = (
+        ("daily_basic", "db", DAILY_BASIC_FIELDS),
+        ("moneyflow", "mf", MONEYFLOW_FIELDS),
+        ("stk_limit", "sl", STK_LIMIT_FIELDS),
+    )
+    ctes = []
+    selections = []
+    joins = []
+    datasets = []
+    fields = []
+    coverage = {}
+    for dataset_id, alias, dataset_fields in definitions:
+        dataset_root = root / dataset_id
+        files = sorted(dataset_root.glob("*.parquet")) if dataset_root.is_dir() else []
+        if not files:
+            continue
+        source = _sql_string(dataset_root / "*.parquet")
+        projected = ",\n".join(
+            f"                        CAST({field} AS DOUBLE) AS {field}"
+            for field in dataset_fields
+        )
+        ctes.append(
+            f"""
+                {dataset_id} AS (
+                    SELECT
+                        CAST(ts_code AS VARCHAR) AS ts_code,
+                        strptime(CAST(trade_date AS VARCHAR), '%Y%m%d')::DATE AS trade_date,
+{projected}
+                    FROM read_parquet('{source}', union_by_name = true)
+                    QUALIFY row_number() OVER (
+                        PARTITION BY ts_code, trade_date ORDER BY ingested_at DESC
+                    ) = 1
+                )"""
+        )
+        selections.extend(
+            f"                        CAST({alias}.{field} AS DOUBLE) AS {field}"
+            for field in dataset_fields
+        )
+        joins.append(f"LEFT JOIN {dataset_id} AS {alias} USING (ts_code, trade_date)")
+        datasets.append(dataset_id)
+        fields.extend(dataset_fields)
+        coverage[dataset_id] = {
+            "first_date": files[0].stem,
+            "last_date": files[-1].stem,
+            "files": len(files),
+            "fields": list(dataset_fields),
+        }
+    if "stk_limit" not in datasets:
+        selections.extend(
+            f"                        NULL::DOUBLE AS {field}" for field in STK_LIMIT_FIELDS
+        )
+    return {
+        "ctes": "" if not ctes else ",\n" + ",\n".join(ctes),
+        "select": "" if not selections else ",\n" + ",\n".join(selections),
+        "joins": "\n".join(joins),
+        "datasets": datasets,
+        "fields": fields,
+        "coverage": coverage,
+    }
+
+
 def build_cross_sectional_panel(
     source: Path,
     output: Path,
     *,
     catalog_path: Path,
     report_path: Path,
+    feature_store: Path | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
     """Build a PIT-safe research panel from raw daily bars and daily adj factors.
@@ -402,6 +518,8 @@ def build_cross_sectional_panel(
         raise FileNotFoundError(f"Cross-sectional stock master not found: {master_path}")
     if output.exists() and not overwrite:
         raise FileExistsError(f"Output already exists: {output}; pass --overwrite to replace it")
+
+    feature_sql = _cross_sectional_feature_sql(feature_store)
 
     staging = output.with_name(f".{output.name}.staging")
     if staging.exists():
@@ -439,7 +557,8 @@ def build_cross_sectional_panel(
                         {trade_date} AS trade_date,
                         CAST(adj_factor AS DOUBLE) AS adj_factor
                     FROM read_parquet('{_sql_string(factor_glob)}', union_by_name = true)
-                ),
+                )
+                {feature_sql["ctes"]},
                 adjusted AS (
                     SELECT
                         market.*,
@@ -454,8 +573,10 @@ def build_cross_sectional_panel(
                             ),
                             raw_pre_close * adj_factor
                         ) AS pre_close
+                        {feature_sql["select"]}
                     FROM market
                     INNER JOIN factors USING (ts_code, trade_date)
+                    {feature_sql["joins"]}
                     WHERE NOT (
                         market.ts_code LIKE '%.BJ'
                         OR split_part(market.ts_code, '.', 1) LIKE '4%'
@@ -498,8 +619,14 @@ def build_cross_sectional_panel(
                 SELECT
                     *,
                     (is_valid_ohlc AND has_activity) AS is_tradable_observation,
-                    (is_valid_ohlc AND has_activity AND raw_open < raw_pre_close * 1.095) AS can_buy_open_proxy,
-                    (is_valid_ohlc AND has_activity AND raw_open > raw_pre_close * 0.905) AS can_sell_open_proxy
+                    (
+                        is_valid_ohlc AND has_activity
+                        AND raw_open < coalesce(up_limit, raw_pre_close * 1.095)
+                    ) AS can_buy_open_proxy,
+                    (
+                        is_valid_ohlc AND has_activity
+                        AND raw_open > coalesce(down_limit, raw_pre_close * 0.905)
+                    ) AS can_sell_open_proxy
                 FROM enriched
                 ORDER BY trade_year, trade_date, ts_code
             ) TO '{_sql_string(staging)}' (
@@ -546,6 +673,14 @@ def build_cross_sectional_panel(
     finally:
         connection.close()
 
+    required_first = str(stats["first_trade_date"]).replace("-", "")
+    required_last = str(stats["last_trade_date"]).replace("-", "")
+    ready_feature_fields = [
+        field
+        for coverage in feature_sql["coverage"].values()
+        if coverage["first_date"] <= required_first and coverage["last_date"] >= required_last
+        for field in coverage["fields"]
+    ]
     metadata = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "source": os.path.relpath(source, output.parent),
@@ -554,6 +689,9 @@ def build_cross_sectional_panel(
             "market_legacy_bridge": market_sources[0] if len(market_sources) > 1 else None,
             "adj_factor_cross_section": str(source / "adj_factor_parquet"),
             "stock_master": str(master_path),
+            "feature_store": str(feature_store.resolve()) if feature_store else None,
+            "feature_datasets": feature_sql["datasets"],
+            "feature_coverage": feature_sql["coverage"],
         },
         "format": "parquet",
         "partitioning": ["trade_year"],
@@ -567,6 +705,8 @@ def build_cross_sectional_panel(
         "capital_ledger_ready": False,
         "capital_ledger_proxy_ready": True,
         "universe_mode": "CURRENT_NAME_MAINBOARD_NON_ST_PROXY",
+        "research_feature_fields": feature_sql["fields"],
+        "research_feature_ready_fields": ready_feature_fields,
         **{
             key: (value.isoformat() if hasattr(value, "isoformat") else value)
             for key, value in stats.items()
@@ -892,6 +1032,7 @@ def _parser() -> argparse.ArgumentParser:
     cross.add_argument("--catalog", type=_path, default=DEFAULT_CATALOG)
     cross.add_argument("--report", type=_path, default=DEFAULT_REPORT)
     cross.add_argument("--output", type=_path, default=DEFAULT_OUTPUT)
+    cross.add_argument("--feature-store", type=_path)
     cross.add_argument("--overwrite", action="store_true")
     return parser
 
@@ -926,6 +1067,7 @@ def main() -> None:
             args.output,
             catalog_path=args.catalog,
             report_path=args.report,
+            feature_store=args.feature_store,
             overwrite=args.overwrite,
         )
         print(json.dumps(metadata, ensure_ascii=False, indent=2))

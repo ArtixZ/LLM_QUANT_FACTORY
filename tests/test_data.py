@@ -6,6 +6,7 @@ from pathlib import Path
 import duckdb
 
 from multifactor_ashare.data import (
+    DAILY_BASIC_FIELDS,
     audit_dataset,
     build_cross_sectional_panel,
     build_hybrid_panel,
@@ -214,4 +215,86 @@ def test_cross_sectional_panel_preserves_adjusted_returns_without_future_anchor(
         ("2024-01-02", 10.0, 1.0, 10.0, 0.0),
         ("2024-01-03", 5.0, 2.0, 10.0, 0.0),
         ("2024-01-04", 5.5, 2.0, 11.0, 0.1),
+    ]
+
+
+def test_cross_sectional_panel_joins_after_close_feature_store(tmp_path: Path) -> None:
+    source = _cross_sectional_fixture(tmp_path)
+    feature_store = tmp_path / "features"
+    daily_basic = feature_store / "daily_basic"
+    daily_basic.mkdir(parents=True)
+    values = {
+        "turnover_rate": 1.25,
+        "turnover_rate_f": 1.5,
+        "volume_ratio": 0.8,
+        "pe": 10.0,
+        "pe_ttm": 11.0,
+        "pb": 1.2,
+        "ps": 2.0,
+        "ps_ttm": 2.1,
+        "dv_ratio": 1.0,
+        "dv_ttm": 1.1,
+        "total_share": 100.0,
+        "float_share": 80.0,
+        "free_share": 70.0,
+        "total_mv": 1000.0,
+        "circ_mv": 800.0,
+    }
+    connection = duckdb.connect()
+    try:
+        feature_columns = ", ".join(f"{field} DOUBLE" for field in DAILY_BASIC_FIELDS)
+        connection.execute(
+            f"CREATE TABLE daily_basic (ts_code VARCHAR, trade_date VARCHAR, "
+            f"{feature_columns}, ingested_at VARCHAR)"
+        )
+        row = [
+            "000001.SZ",
+            "20240102",
+            *(values[field] for field in DAILY_BASIC_FIELDS),
+            "2024-01-02T17:00:00+08:00",
+        ]
+        connection.execute(
+            f"INSERT INTO daily_basic VALUES ({', '.join('?' for _ in row)})", row
+        )
+        connection.execute(
+            f"COPY daily_basic TO '{daily_basic / '20240102.parquet'}' (FORMAT PARQUET)"
+        )
+    finally:
+        connection.close()
+    limits = feature_store / "stk_limit"
+    limits.mkdir()
+    connection = duckdb.connect()
+    try:
+        connection.execute(
+            "CREATE TABLE limits AS SELECT '000001.SZ' AS ts_code, '20240102' AS trade_date, "
+            "10.0::DOUBLE AS up_limit, 9.0::DOUBLE AS down_limit, "
+            "'2024-01-02T09:00:00+08:00' AS ingested_at"
+        )
+        connection.execute(
+            f"COPY limits TO '{limits / '20240102.parquet'}' (FORMAT PARQUET)"
+        )
+    finally:
+        connection.close()
+    output = tmp_path / "workspace/processed/daily_panel"
+    metadata = build_cross_sectional_panel(
+        source,
+        output,
+        catalog_path=tmp_path / "workspace/catalog/daily_catalog.csv",
+        report_path=tmp_path / "workspace/catalog/data_quality.json",
+        feature_store=feature_store,
+    )
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            f"SELECT turnover_rate, pe_ttm, total_mv, can_buy_open_proxy FROM read_parquet("
+            f"'{output / '**/*.parquet'}', hive_partitioning = true) "
+            "WHERE trade_date = DATE '2024-01-02'"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row == (1.25, 11.0, 1000.0, False)
+    assert metadata["research_feature_fields"][:3] == [
+        "turnover_rate",
+        "turnover_rate_f",
+        "volume_ratio",
     ]

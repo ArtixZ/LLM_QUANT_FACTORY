@@ -37,3 +37,6 @@ env/
 .env
 .env.*
 !.env.example
+
+# Nested AutoAlpha repository (manages its own history)
+AutoAlpha/
