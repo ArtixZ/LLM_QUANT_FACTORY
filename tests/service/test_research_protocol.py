@@ -12,6 +12,7 @@ from autoalpha.service.research_protocol import (
     RECENT_FIVE_YEAR_BACKWARD,
     REGIME_COVERAGE_BACKWARD,
     default_task_protocol,
+    normalize_task_protocol,
     protocol_blockers,
     recent_five_year_task_protocol,
     regime_coverage_task_protocol,
@@ -109,6 +110,25 @@ def test_regime_coverage_protocol_rejects_tampered_dates_and_short_history() -> 
     assert any("重新应用模板" in blocker for blocker in blockers)
     with pytest.raises(ValueError, match="至少 3 年"):
         regime_coverage_task_protocol("2021-06-01", "2026-07-16")
+
+
+def test_normalize_treats_null_template_parameters_as_defaults() -> None:
+    protocol = regime_coverage_task_protocol("2010-01-04", "2026-07-16")
+    payload = {
+        **protocol,
+        "minimum_folds": None,
+        "validation_years": None,
+        "holdout_months": None,
+        "embargo_days": None,
+        "exploration_years": None,
+    }
+
+    normalized = normalize_task_protocol(payload)
+
+    assert normalized["minimum_folds"] == 1
+    assert normalized["validation_years"] == 3
+    assert normalized["holdout_months"] == 6
+    assert normalized["embargo_days"] == 30
 
 
 def test_public_evaluation_dates_do_not_expand_to_whole_calendar_year() -> None:

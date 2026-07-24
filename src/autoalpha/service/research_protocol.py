@@ -183,7 +183,12 @@ def normalize_task_protocol(value: dict[str, Any]) -> dict[str, Any]:
     result = {
         name: date.fromisoformat(str(value[name])).isoformat() for name in PROTOCOL_DATE_FIELDS
     }
-    result["minimum_folds"] = int(value.get("minimum_folds", 1))
+
+    def _int_field(name: str, default: int) -> int:
+        raw = value.get(name)
+        return default if raw is None else int(raw)
+
+    result["minimum_folds"] = _int_field("minimum_folds", 1)
     if "design" in value:
         design = str(value.get("design") or CUSTOM_PROTOCOL_DESIGN).upper()
         if design not in PROTOCOL_DESIGNS:
@@ -191,14 +196,14 @@ def normalize_task_protocol(value: dict[str, Any]) -> dict[str, Any]:
         result["design"] = design
         if design == RECENT_FIVE_YEAR_BACKWARD:
             result["anchor_date"] = date.fromisoformat(str(value["anchor_date"])).isoformat()
-            result["exploration_years"] = int(value.get("exploration_years", 5))
-            result["validation_years"] = int(value.get("validation_years", 2))
-            result["holdout_months"] = int(value.get("holdout_months", 6))
+            result["exploration_years"] = _int_field("exploration_years", 5)
+            result["validation_years"] = _int_field("validation_years", 2)
+            result["holdout_months"] = _int_field("holdout_months", 6)
         elif design == REGIME_COVERAGE_BACKWARD:
             result["anchor_date"] = date.fromisoformat(str(value["anchor_date"])).isoformat()
-            result["validation_years"] = int(value.get("validation_years", 3))
-            result["holdout_months"] = int(value.get("holdout_months", 6))
-            result["embargo_days"] = int(value.get("embargo_days", 30))
+            result["validation_years"] = _int_field("validation_years", 3)
+            result["holdout_months"] = _int_field("holdout_months", 6)
+            result["embargo_days"] = _int_field("embargo_days", 30)
     return result
 
 
