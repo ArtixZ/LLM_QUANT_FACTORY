@@ -1,12 +1,38 @@
 # AutoAlpha
 
-Production research controls for product templates, executable capital ledgers, manual-test
-contamination, constrained index enhancement, and factor lifecycle governance are documented in
-[`docs/INSTITUTIONAL_RESEARCH_CONTROLS.md`](docs/INSTITUTIONAL_RESEARCH_CONTROLS.md).
+> **PRIVATE REPOSITORY — All rights reserved.** 仅用于私有云端备份与授权协作，不开源、
+> 不授予任何许可，见 [LICENSE](LICENSE)。仓库只包含源码与文档；行情数据、运行期 SQLite、
+> 日志、研究制品与密钥全部被 Git 隔离（见「仓库卫生与云端备份」）。
 
 AutoAlpha 是面向 A 股多因子截面研究的生产级、可审计 LLM 辅助因子挖掘平台。LLM
 只负责提出研究假设、生成受控因子表达式和解释证据；数据准入、回测、统计检验、风险、
 交易约束及发布结论全部由确定性组件执行。
+
+Production research controls for product templates, executable capital ledgers, manual-test
+contamination, constrained index enhancement, and factor lifecycle governance are documented in
+[`docs/INSTITUTIONAL_RESEARCH_CONTROLS.md`](docs/INSTITUTIONAL_RESEARCH_CONTROLS.md).
+
+## Quick start
+
+```bash
+uv sync --frozen --all-groups          # Python 3.12 + uv
+uv run pytest -q                        # 全量测试
+export AUTOALPHA_SERVICE_TOKEN='<strong-random-admin-token>'
+./start-services.sh                     # 启动三套控制台并恢复任务
+./stop-services.sh                      # 优雅停机（运行中任务落盘为检查点）
+```
+
+三套服务与默认端口（可用环境变量覆盖）：
+
+| 服务 | 入口 | 默认端口 | 端口变量 | 职责 |
+|---|---|---|---|---|
+| AutoAlpha | `autoalpha-service` | 8787 | `AUTOALPHA_PORT` | 单因子挖掘、因子库、自动研究任务、手工回测、选股器、模拟盘 |
+| AutoCombine | `autocombine-service` | 8888 | `AUTOCOMBINE_PORT` | LLM 辅助多因子组合搜索（读取统一因子库） |
+| QuantCombine | `quantcombine-service` | 8889 | `QUANTCOMBINE_PORT` | 确定性多因子组合枚举与排序 |
+
+所有服务共享同一个 `AUTOALPHA_RUNTIME` 持久化目录（起停脚本默认 `runtime-full-llm/`）。
+`start-services.sh` 幂等（端口存活则跳过），并自动恢复脚本头部声明的研究任务；
+`--no-resume` 只起服务不恢复任务。日志在 `<runtime>/logs/`，PID 在 `<runtime>/pids/`。
 
 ## Production invariants
 
@@ -120,6 +146,21 @@ LLM 只看到探索与公开验证范围，隐藏测试仍只返回分类结论�
 默认最多同时执行两个重型研究迭代，可通过 `AUTOALPHA_MAX_CONCURRENT_RESEARCH=1..8`
 调整。自动研究与人工回测可以并行读取不可变面板，数据增量更新仍保持独占，避免读取半成品。
 
+### 研究协议切分模板
+
+新建任务时可选三种确定性切分模板（均经 `protocol_blockers` 重算比对，篡改任一日期或
+锚点过期都会被拒绝）：
+
+| 模板 | 探索区 | 公开验证 | 隔离带 | 隐藏测试 | 适用场景 |
+|---|---|---|---|---|---|
+| `CUSTOM` 均衡自动划分 | 按比例 | 按比例（总天数 30%） | 无 | 按比例（总天数 20%） | 日期可手动微调的自定义研究 |
+| `RECENT_FIVE_YEAR_BACKWARD` 近期五年倒推 | 默认 5 年 | 默认 2 年 | 无 | 默认 6 个月，锚定数据最新日 | 只关心近期制度的快速研究 |
+| `REGIME_COVERAGE_BACKWARD` 全历史制度覆盖·隔离带 | 全部历史（强制 ≥3 年） | 默认 3 年 | 默认 30 天 embargo | 默认 6 个月，锚定数据最新日 | 需要多制度验证与防边界泄露的主研究 |
+
+全历史模板在公开验证与隐藏测试之间插入 purge/embargo 隔离带，避免周度持仓收益与滚动
+回看窗口跨边界泄露选择信息；隔离带对 LLM 同样不可见。三个模板都通过
+`POST /api/research-protocol/preset` 预览，返回切分、阻塞原因与 walk-forward 折容量。
+
 其他入口包括：`/` 自动研究控制面、`/factors` 分类因子库、`/backtest` 人工组合回测、
 `/screener` 截面选股器、`/paper-trading` 模拟交易和 `/data` 数据中心。人工回测净值制品存入
 `runtime/artifacts/manual-backtests/`，不会成为自动研究证据。
@@ -165,3 +206,30 @@ docker run --rm -p 8787:8787 \
 每轮研究会绑定数据工作区指纹，并把行数、证券数、日期范围、可用字段、质量报告状态和 PIT
 阻断项写入 Agent 上下文、审计日志及不可变研究制品。质量报告失败或价量字段不完整时，工作器
 不会执行回测。
+
+## 仓库卫生与云端备份
+
+本仓库设计为**只把源码与文档纳入版本控制**（约 240 个文件、~5 MB），其余全部隔离：
+
+| 类别 | 路径 | 说明 |
+|---|---|---|
+| 运行期状态 | `runtime/`、`runtime-*/` | SQLite 研究库（因子池、审计链、记忆、组合版本）、日志、PID、制品，可达 GB 级 |
+| 研究产出 | `output/`、`tmp/`、`cache/`、`dist/` | 回测报告、PDF、复评结果、打包产物 |
+| 行情数据 | `/data/`、`stock_data/` | 面板由外层仓库的 `mf-data` 管线重建，不入 Git |
+| 密钥 | Keychain / 环境变量 | API Key 经系统 Keychain 或 `AUTOALPHA_API_KEY` 注入；`.env*` 被忽略；密钥不写入 SQLite、日志、制品或 Git |
+
+`.gitignore` 另含兜底模式（`*.sqlite3*`、`*.bak`、`*.log`），防止任何位置的数据库或日志误入。
+Git 历史已审计：最大 blob < 400 KB，无泄露密钥，无需 Git LFS。推送到私有远端：
+
+```bash
+git remote add origin <private-remote-url>
+git push -u origin master
+```
+
+**换机恢复流程**：clone 本仓库 → `uv sync --frozen --all-groups` → 在外层工作区用
+`mf-data all` 重建数据面板 → 启动服务后在设置中重新填入 Base URL / API Key / 数据目录。
+运行期 SQLite 属于本机研究状态，如需迁移请整体拷贝 `runtime*/` 目录（包含 `-wal`/`-shm`）。
+
+## License
+
+Proprietary — All rights reserved. 见 [LICENSE](LICENSE)。不构成任何投资建议。
