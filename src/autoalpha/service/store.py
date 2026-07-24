@@ -1554,6 +1554,11 @@ class ServiceStore:
             result.append(item)
         return result
 
+    def factor_pool_count(self) -> int:
+        with self.connection() as connection:
+            row = connection.execute("SELECT COUNT(*) FROM factor_pool").fetchone()
+        return int(row[0])
+
     def factor_pool_record(self, factor_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:
             row = connection.execute(

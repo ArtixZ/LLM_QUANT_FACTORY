@@ -228,7 +228,7 @@ class ContinuousResearchWorker:
                 },
             )
             if register_in_factor_pool:
-                evaluator.set_trial_count(len(self.store.factor_pool(limit=5000)) + 1)
+                evaluator.set_trial_count(min(self.store.factor_pool_count(), 5000) + 1)
             result = await asyncio.to_thread(evaluator.evaluate, factor)
             decision = "BASELINE_ESTABLISHED_RESEARCH_ONLY"
             proposal = {
@@ -626,6 +626,10 @@ class ContinuousResearchWorker:
             )
             raise
         self._update_state(phase="SEMANTICS")
+        # One snapshot serves the structure dedup, trial count, LLM library context,
+        # and canonical library metrics below; the pool only mutates after
+        # register_candidate, so refetching it repeatedly per iteration is waste.
+        pool_snapshot = self.store.factor_pool(limit=5000)
         repair_count = 0
         while True:
             factor = proposal.factor
@@ -649,7 +653,7 @@ class ContinuousResearchWorker:
                 if self.store.candidate_exists(factor.factor_id):
                     raise ValueError(f"Duplicate candidate expression: {factor.factor_id}")
                 duplicate_structure = _matching_structure(
-                    factor.expression.to_dict(), self.store.factor_pool(limit=500)
+                    factor.expression.to_dict(), pool_snapshot[:500]
                 )
                 if duplicate_structure:
                     raise ValueError(
@@ -691,7 +695,7 @@ class ContinuousResearchWorker:
             iteration=iteration,
             maximum_family_candidates=config.budget.max_candidates_per_family,
         )
-        evaluator.set_trial_count(len(self.store.factor_pool(limit=5000)) + 1)
+        evaluator.set_trial_count(len(pool_snapshot) + 1)
         self.store.append_event(
             "audit",
             "MODEL_INVOCATION",
@@ -739,55 +743,8 @@ class ContinuousResearchWorker:
                     "next_session_timing_enforced": True,
                 },
             )
-        pre_role_outcomes: dict[str, RoleOutcome] = {}
-        if llm_team is not None:
-            self._update_state(phase="LLM_PRE_REVIEW")
-            pre_role_outcomes = await llm_team.pre_evaluation(
-                candidate=canonical_proposal,
-                library_context=[
-                    record
-                    for record in self.store.factor_pool(limit=5000)
-                    if record.get("source_task_id", "legacy-ashare") == self.task_id
-                ][:500],
-                data_context=data_context,
-            )
-            self._persist_role_outcomes(
-                pre_role_outcomes.values(),
-                run_id=run_id,
-                iteration=iteration,
-                candidate_id=factor.factor_id,
-            )
-            canonical_proposal["full_llm"] = {
-                role: {
-                    "status": outcome.status,
-                    "artifact": outcome.artifact,
-                }
-                for role, outcome in pre_role_outcomes.items()
-            }
-        self.store.stage_iteration_candidate(
-            run_id,
-            iteration,
-            candidate_id=factor.factor_id,
-            proposal=canonical_proposal,
-        )
-        self.store.append_event(
-            "research",
-            "PROPOSAL_CREATED",
-            factor.name,
-            factor.hypothesis,
-            run_id=run_id,
-            iteration=iteration,
-            payload={
-                "candidate_id": factor.factor_id,
-                "family": factor.family,
-                "change": proposal.change,
-                "expected": proposal.expected,
-                "expression": factor.expression.to_dict(),
-                "data_lineage": canonical_proposal["data_lineage"],
-                "usage": proposal.usage,
-            },
-        )
-        self._update_state(phase="EVALUATION")
+        # The deterministic evaluation does not depend on the advisory pre-review
+        # roles, so both run concurrently to cut iteration wall-clock time.
         self.store.append_event(
             "action",
             "EVALUATION_STARTED",
@@ -796,7 +753,64 @@ class ContinuousResearchWorker:
             run_id=run_id,
             iteration=iteration,
         )
-        result = await asyncio.to_thread(evaluator.evaluate, factor)
+        evaluation_task = asyncio.create_task(asyncio.to_thread(evaluator.evaluate, factor))
+        pre_role_outcomes: dict[str, RoleOutcome] = {}
+        try:
+            if llm_team is not None:
+                self._update_state(phase="LLM_PRE_REVIEW")
+                pre_role_outcomes = await llm_team.pre_evaluation(
+                    candidate=canonical_proposal,
+                    library_context=[
+                        record
+                        for record in pool_snapshot
+                        if record.get("source_task_id", "legacy-ashare") == self.task_id
+                    ][:500],
+                    data_context=data_context,
+                )
+                self._persist_role_outcomes(
+                    pre_role_outcomes.values(),
+                    run_id=run_id,
+                    iteration=iteration,
+                    candidate_id=factor.factor_id,
+                )
+                canonical_proposal["full_llm"] = {
+                    role: {
+                        "status": outcome.status,
+                        "artifact": outcome.artifact,
+                    }
+                    for role, outcome in pre_role_outcomes.items()
+                }
+            self.store.stage_iteration_candidate(
+                run_id,
+                iteration,
+                candidate_id=factor.factor_id,
+                proposal=canonical_proposal,
+            )
+            self.store.append_event(
+                "research",
+                "PROPOSAL_CREATED",
+                factor.name,
+                factor.hypothesis,
+                run_id=run_id,
+                iteration=iteration,
+                payload={
+                    "candidate_id": factor.factor_id,
+                    "family": factor.family,
+                    "change": proposal.change,
+                    "expected": proposal.expected,
+                    "expression": factor.expression.to_dict(),
+                    "data_lineage": canonical_proposal["data_lineage"],
+                    "usage": proposal.usage,
+                },
+            )
+            self._update_state(phase="EVALUATION")
+            result = await evaluation_task
+        except BaseException:
+            if not evaluation_task.done():
+                evaluation_task.cancel()
+                with suppress(BaseException):
+                    await evaluation_task
+            raise
         result.metrics["research_generation"] = generation_id
         result.metrics.update(
             _multiple_testing_adjustments(
@@ -813,6 +827,7 @@ class ContinuousResearchWorker:
             Path(settings["data_path"]),
             factor,
             result.metrics,
+            pool_snapshot,
         )
         self._update_state(phase="PORTFOLIO")
         engine = MultiFactorResearchEngine(
@@ -1417,9 +1432,10 @@ class ContinuousResearchWorker:
         data_path: Path,
         factor: FactorDefinition,
         source_task_metrics: dict[str, Any],
+        pool_records: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         evaluator = self._get_canonical_evaluator(data_path)
-        records = self.store.factor_pool(limit=5000)
+        records = pool_records if pool_records is not None else self.store.factor_pool(limit=5000)
         metrics = evaluate_canonical_library_factor(
             evaluator,
             factor,

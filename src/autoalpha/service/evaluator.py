@@ -91,7 +91,8 @@ class PriceVolumeEvaluator:
         self.validator = SemanticValidator(fields, maximum_nodes=30, maximum_lookback=252)
         self.compiler = FactorCompiler(self.validator)
         self._fields: dict[str, pd.DataFrame] | None = None
-        self._signal_cache: dict[str, pd.DataFrame] = {}
+        self._signal_cache: OrderedDict[str, pd.DataFrame] = OrderedDict()
+        self._signal_cache_lock = Lock()
         self._portfolio_path_cache: OrderedDict[
             tuple[tuple[str, float], ...], tuple[pd.DataFrame, pd.DataFrame]
         ] = OrderedDict()
@@ -448,9 +449,17 @@ class PriceVolumeEvaluator:
         return alpha_path, strategy_path
 
     def _factor_signal(self, factor: FactorDefinition) -> pd.DataFrame:
-        cached = self._signal_cache.get(factor.factor_id)
-        if cached is not None:
-            return cached
+        lock = getattr(self, "_signal_cache_lock", None)
+        if lock is None:
+            cached = self._signal_cache.get(factor.factor_id)
+            if cached is not None:
+                return cached
+        else:
+            with lock:
+                cached = self._signal_cache.get(factor.factor_id)
+                if cached is not None:
+                    self._signal_cache.move_to_end(factor.factor_id)
+                    return cached
         fields = self._load_fields(expression_fields(factor.expression))
         raw = self.compiler.evaluate(factor.expression, fields) * factor.expected_direction
         start = pd.Timestamp(self.config.splits.train.start)
@@ -458,7 +467,14 @@ class PriceVolumeEvaluator:
         raw = raw.loc[(raw.index >= start) & (raw.index <= end)]
         standard_deviation = raw.std(axis=1).replace(0, np.nan)
         signal = raw.sub(raw.mean(axis=1), axis=0).div(standard_deviation, axis=0)
-        self._signal_cache[factor.factor_id] = signal
+        if lock is None:
+            self._signal_cache[factor.factor_id] = signal
+        else:
+            with lock:
+                self._signal_cache[factor.factor_id] = signal
+                self._signal_cache.move_to_end(factor.factor_id)
+                while len(self._signal_cache) > 32:
+                    self._signal_cache.popitem(last=False)
         return signal
 
     def prime_factor_signals(self, factors: list[FactorDefinition]) -> None:
@@ -698,7 +714,13 @@ class PriceVolumeEvaluator:
             )
             try:
                 self.validator.validate(expression)
-                path = self._portfolio_paths([variant], (1.0,))[1]
+                if multiplier == 1.0:
+                    path = self._portfolio_paths([variant], (1.0,))[1]
+                else:
+                    # Perturbed variants are throwaway probes: compute the strategy
+                    # path directly to skip the unused alpha path and keep them out
+                    # of the shared portfolio-path LRU cache.
+                    path = self._strategy_portfolio_path([variant], (1.0,))
                 dates = _walk_forward_dates(path.index, self.config)
                 neighborhood[label] = _annualized_ir(path.loc[dates, "net"])
             except (TypeError, ValueError):
