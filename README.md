@@ -8,41 +8,35 @@ A 股截面多因子研究工作区，由两部分组成：
 
 | 组件 | 位置 | 职责 |
 |---|---|---|
-| **数据管线** `multifactor_ashare` | 本仓库 `src/multifactor_ashare/` | 把不可变的源行情快照审计、清洗并构建为按年分区的规范 Parquet 面板 |
-| **研究平台 AutoAlpha** | `AutoAlpha/`（**独立嵌套 Git 仓库**，被本仓库 ignore） | 生产级、可审计的 LLM 辅助因子挖掘、组合治理与三套研究控制台 |
+| **数据管线** `multifactor_ashare` | `src/multifactor_ashare/` | 把不可变的源行情快照审计、清洗并构建为按年分区的规范 Parquet 面板 |
+| **研究平台 AutoAlpha** | `AutoAlpha/`（本仓库子目录，历史已完整合并） | 生产级、可审计的 LLM 辅助因子挖掘、组合治理与三套研究控制台 |
 
 ## Repository layout
 
 ```text
-MultiFactorAshare/            ← 本仓库（外层）
+MultiFactorAshare/            ← 单一 Git 仓库（monorepo）
   src/multifactor_ashare/     数据审计与面板构建（mf-data CLI）
   tests/                      数据管线测试
   data/                       行情数据与生成面板（≈1.6 GB，被 ignore，不入 Git）
     mainboard_non_st_qfq_20100101_20260715/   不可变源快照
     catalog/                  生成的目录与质量报告
     processed/daily_panel/    规范面板（trade_year= 分区 Parquet）
-  AutoAlpha/                  ← 独立 Git 仓库（工作区 ≈2.2 GB，仅 ~5 MB 源码入 Git）
+  AutoAlpha/                  研究平台子目录（工作区 ≈2.2 GB，仅 ~5 MB 源码入 Git）
 ```
 
-## 双仓库云端推送
+## 云端推送
 
-两个仓库各自维护独立历史，需分别推送到各自的**私有**远端：
+单仓库包含数据管线与 AutoAlpha 平台的全部历史（原嵌套仓库历史已通过 subtree 合并完整保留，
+可用 `git log -- AutoAlpha/...` 追溯），推送到**私有**远端即可：
 
 ```bash
-# 外层数据管线仓库（分支 main）
-cd MultiFactorAshare
-git remote add origin <private-remote-url-1>
+git remote add origin <private-remote-url>
 git push -u origin main
-
-# 内层 AutoAlpha 平台仓库（分支 master）
-cd MultiFactorAshare/AutoAlpha
-git remote add origin <private-remote-url-2>
-git push -u origin master
 ```
 
-两者的 Git 历史均已审计：最大历史 blob < 400 KB（`uv.lock`），无泄露密钥、无二进制行情数据，
-**不需要 Git LFS**。若未来希望单仓库管理，可把 `AutoAlpha` 转为 git submodule；当前刻意保持
-彼此独立，便于平台代码与数据管线各自演进。
+Git 历史已审计：最大历史 blob < 400 KB（`uv.lock`），无泄露密钥、无二进制行情数据，
+**不需要 Git LFS**。合并前的嵌套 `.git` 目录备份在 `.git-autoalpha-backup/`（被 ignore，
+确认无误后可删除）。
 
 ## 大文件与敏感数据隔离
 
@@ -107,7 +101,7 @@ is supplied.
 ## AutoAlpha research platform
 
 因子挖掘循环、协议冻结与盲测治理、三套控制台（AutoAlpha 8787 / AutoCombine 8888 /
-QuantCombine 8889）、起停脚本与容器部署见 `AutoAlpha/README.md`（独立仓库）。
+QuantCombine 8889）、起停脚本与容器部署见 [AutoAlpha/README.md](AutoAlpha/README.md)。
 
 ## License
 

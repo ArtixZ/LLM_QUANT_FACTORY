@@ -219,12 +219,8 @@ docker run --rm -p 8787:8787 \
 | 密钥 | Keychain / 环境变量 | API Key 经系统 Keychain 或 `AUTOALPHA_API_KEY` 注入；`.env*` 被忽略；密钥不写入 SQLite、日志、制品或 Git |
 
 `.gitignore` 另含兜底模式（`*.sqlite3*`、`*.bak`、`*.log`），防止任何位置的数据库或日志误入。
-Git 历史已审计：最大 blob < 400 KB，无泄露密钥，无需 Git LFS。推送到私有远端：
-
-```bash
-git remote add origin <private-remote-url>
-git push -u origin master
-```
+本目录是外层 `MultiFactorAshare` monorepo 的子目录（原独立仓库历史已通过 subtree 合并
+完整保留）；推送、分支与备份统一在仓库根目录操作，见根 `README.md` 的「云端推送」。
 
 **换机恢复流程**：clone 本仓库 → `uv sync --frozen --all-groups` → 在外层工作区用
 `mf-data all` 重建数据面板 → 启动服务后在设置中重新填入 Base URL / API Key / 数据目录。
