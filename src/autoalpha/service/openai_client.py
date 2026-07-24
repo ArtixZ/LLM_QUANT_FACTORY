@@ -52,6 +52,7 @@ class ModelInvocationError(RuntimeError):
         response_hash: str | None = None,
         usage: dict[str, int] | None = None,
         status_code: int | None = None,
+        provider_error: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
@@ -59,6 +60,7 @@ class ModelInvocationError(RuntimeError):
         self.response_hash = response_hash
         self.usage = usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self.status_code = status_code
+        self.provider_error = provider_error
 
     def audit_payload(self) -> dict[str, Any]:
         return {
@@ -67,7 +69,26 @@ class ModelInvocationError(RuntimeError):
             "response_hash": self.response_hash,
             "usage": self.usage,
             "status_code": self.status_code,
+            "provider_error": self.provider_error,
         }
+
+
+def _provider_error_details(response: httpx.Response | None) -> dict[str, str] | None:
+    if response is None or not response.is_error:
+        return None
+    try:
+        body = response.json()
+    except ValueError:
+        text = response.text.strip()
+        return {"message": text[:500]} if text else None
+    error = body.get("error") if isinstance(body, dict) else None
+    source = error if isinstance(error, dict) else body if isinstance(body, dict) else {}
+    details = {
+        key: str(source[key])[:500]
+        for key in ("code", "type", "param", "message")
+        if source.get(key) is not None
+    }
+    return details or None
 
 
 class CompatibleChatClient:
@@ -318,12 +339,14 @@ class CompatibleChatClient:
             status_code = (
                 error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
             )
+            provider_error = _provider_error_details(response)
             raise ModelInvocationError(
                 f"Provider request failed after {self.transport_retries + 1} attempts: "
                 f"{type(error).__name__}",
                 stage="transport",
                 prompt_hash=prompt_hash,
                 status_code=status_code,
+                provider_error=provider_error,
             ) from error
         try:
             body = response.json()

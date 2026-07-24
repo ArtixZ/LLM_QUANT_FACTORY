@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.target_book import is_rebalance_session, select_target_symbols
 
 REQUIRED_MARKET_COLUMNS = frozenset(
     {"date", "symbol", "open", "close", "volume", "can_buy_open", "can_sell_open"}
@@ -108,7 +109,7 @@ class LedgerBacktester:
             can_sell = panels["can_sell_open"].loc[current_date]
             volumes = panels["volume"].loc[current_date]
 
-            if date_index > 0 and _is_rebalance_session(
+            if date_index > 0 and is_rebalance_session(
                 dates,
                 date_index,
                 self.config.rebalance_schedule,
@@ -120,10 +121,10 @@ class LedgerBacktester:
                     else 0
                 )
                 sleeve = sleeves[sleeve_index]
-                sleeve.pending_target = _select_symbols(
+                sleeve.pending_target = select_target_symbols(
                     signal.loc[signal_date],
-                    self.config.top_fraction,
-                    self.config.max_positions,
+                    selection_fraction=self.config.top_fraction,
+                    maximum_positions=self.config.max_positions,
                 )
                 sleeve.signal_date = signal_date
 
@@ -354,33 +355,6 @@ def _market_panels(market: pd.DataFrame) -> dict[str, pd.DataFrame]:
     }
     panels["valuation_close"] = panels["close"].ffill()
     return panels
-
-
-def _select_symbols(
-    row: pd.Series, top_fraction: float, max_positions: int | None = None
-) -> tuple[str, ...]:
-    values = row.replace([np.inf, -np.inf], np.nan).dropna()
-    if values.empty:
-        return ()
-    count = max(1, int(math.ceil(len(values) * top_fraction)))
-    if max_positions is not None:
-        count = min(count, max_positions)
-    ranked = values.sort_values(ascending=False, kind="mergesort")
-    return tuple(str(symbol) for symbol in ranked.index[:count])
-
-
-def _is_rebalance_session(
-    dates: pd.DatetimeIndex,
-    date_index: int,
-    schedule: RebalanceSchedule,
-) -> bool:
-    if schedule == "DAILY_ROLLING":
-        return True
-    current = pd.Timestamp(dates[date_index])
-    previous = pd.Timestamp(dates[date_index - 1])
-    if schedule == "WEEKLY_FIRST_SESSION":
-        return current.isocalendar()[:2] != previous.isocalendar()[:2]
-    return (current.year, current.month) != (previous.year, previous.month)
 
 
 def _sleeve_value(

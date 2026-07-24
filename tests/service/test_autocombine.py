@@ -2,15 +2,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from autoalpha.service.autocombine import (
     DEFAULT_BUDGET,
     DEFAULT_CONSTRUCTION,
     DEFAULT_OBJECTIVE,
     OBJECTIVE_PRESETS,
+    _gate_distance,
     _gate_failures,
     _portfolio_score,
     build_factor_snapshot,
     create_task_record,
+    refresh_task_strategy_clusters,
+)
+from autoalpha.service.autocombine_intelligence import (
+    enrich_factor_record,
+    signal_independence_metrics,
+    write_return_artifact,
 )
 from autoalpha.service.autocombine_store import AutoCombineStore
 from autoalpha.service.store import ServiceStore
@@ -146,11 +155,174 @@ def test_combine_store_persists_task_experiment_and_strategy(tmp_path: Path) -> 
         task["task_id"],
         blind_verdict="BLIND_GENERALIZATION_PASSED",
         blind_evidence_hash="a" * 64,
+        qualified_experiment_id=experiment["id"],
+        production_candidate_experiment_id=experiment["id"],
+        qualification_status="PRODUCTION_CANDIDATE",
     )
     strategy = store.promote_strategy(task["task_id"], experiment["id"], "Test strategy")
     assert store.task(task["task_id"])["factor_count"] == 2  # type: ignore[index]
     assert strategy["lifecycle"] == "QUALIFIED"
     assert strategy["specification"]["factor_weights"] == [0.5, 0.5]
+
+
+def test_semantic_fingerprint_ignores_cosmetic_family_and_normalization() -> None:
+    first = enrich_factor_record(
+        {
+            "proposal": {
+                "name": "AmountStability",
+                "family": "Liquidity Stability",
+                "hypothesis": "stable amount",
+                "expression": {
+                    "operator": "cs_rank",
+                    "parameters": {},
+                    "arguments": [
+                        {
+                            "operator": "negate",
+                            "parameters": {},
+                            "arguments": [
+                                {
+                                    "operator": "rolling_std",
+                                    "parameters": {"window": 60},
+                                    "arguments": [
+                                        {
+                                            "operator": "field",
+                                            "parameters": {"name": "amount"},
+                                            "arguments": [],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        }
+    )
+    second = enrich_factor_record(
+        {
+            "proposal": {
+                "name": "LiquidityStability60D",
+                "family": "Anything",
+                "hypothesis": "same economic signal",
+                "expression": {
+                    "operator": "cs_zscore",
+                    "parameters": {},
+                    "arguments": [
+                        {
+                            "operator": "negate",
+                            "parameters": {},
+                            "arguments": [
+                                {
+                                    "operator": "rolling_std",
+                                    "parameters": {"window": 60},
+                                    "arguments": [
+                                        {
+                                            "operator": "field",
+                                            "parameters": {"name": "amount"},
+                                            "arguments": [],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        }
+    )
+    assert first["mechanism"] == second["mechanism"] == "LIQUIDITY_ACTIVITY"
+    assert first["semantic_cluster_id"] == second["semantic_cluster_id"]
+
+
+def test_signal_independence_reports_effective_bets() -> None:
+    independent = signal_independence_metrics(["A", "B", "C"], {"A:B": 0.0, "A:C": 0.0, "B:C": 0.0})
+    redundant = signal_independence_metrics(
+        ["A", "B", "C"], {"A:B": 0.95, "A:C": 0.95, "B:C": 0.95}
+    )
+    assert independent["portfolio_effective_factor_bets"] == 3.0
+    assert redundant["portfolio_effective_factor_bets"] < 1.2
+
+
+def test_gate_distance_does_not_allow_score_to_hide_hard_failures() -> None:
+    objective = {**DEFAULT_OBJECTIVE, "maximum_drawdown": 0.20}
+    metrics = {
+        "portfolio_coverage": 0.95,
+        "portfolio_walk_forward_positive_fraction": 0.8,
+        "portfolio_walk_forward_worst_sharpe": 0.2,
+        "portfolio_max_drawdown": -0.30,
+        "portfolio_annual_turnover": 5.0,
+        "portfolio_max_factor_correlation": 0.2,
+        "portfolio_cost_stress_net_ir": 1.0,
+        "portfolio_simple_annual_return": 0.50,
+    }
+    assert "drawdown" in _gate_failures(metrics, objective)
+    assert _gate_distance(metrics, objective) > 0
+
+
+def test_task_leaders_are_clustered_by_active_returns(tmp_path: Path) -> None:
+    base = _store(tmp_path)
+    store = AutoCombineStore(base)
+    task_ids: list[str] = []
+    dates = pd.date_range("2020-01-01", periods=120, freq="B")
+    for index, scale in enumerate((1.0, 1.01), start=1):
+        record = create_task_record(
+            base,
+            name=f"Cluster task {index}",
+            market="CN_A",
+            data_path=str(tmp_path),
+            protocol={
+                "exploration_start": "2010-01-01",
+                "exploration_end": "2017-12-31",
+                "validation_start": "2018-01-01",
+                "validation_end": "2024-12-31",
+                "holdout_start": "2025-01-01",
+                "holdout_end": "2026-07-16",
+                "minimum_folds": 2,
+            },
+            scope={"statuses": ["ELIGIBLE"]},
+            construction=DEFAULT_CONSTRUCTION,
+            objective=DEFAULT_OBJECTIVE,
+            budget=DEFAULT_BUDGET,
+            notes="cluster test",
+        )
+        task = store.create_task(record)
+        task_ids.append(task["task_id"])
+        active = pd.Series(
+            [scale * ((position % 7) - 3) / 1000 for position in range(len(dates))],
+            index=dates,
+        )
+        path, digest = write_return_artifact(
+            tmp_path / "artifacts",
+            task_id=task["task_id"],
+            candidate_hash=f"candidate-{index}",
+            net_returns=active,
+            active_returns=active,
+        )
+        experiment = store.record_experiment(
+            task["task_id"],
+            {
+                "iteration": 1,
+                "candidate_hash": f"candidate-{index}",
+                "action": "SEED",
+                "proposal_source": "DETERMINISTIC",
+                "factor_ids": ["F_1", "F_2"],
+                "weights": [0.5, 0.5],
+                "rationale": "test",
+                "hypothesis": "test",
+                "metrics": {"autocombine_return_artifact_path": path},
+                "score": 1.0,
+                "gate_status": "REJECTED",
+                "failed_gates": ["test"],
+                "return_artifact_path": path,
+                "return_artifact_hash": digest,
+            },
+        )
+        store.update_task(task["task_id"], best_experiment_id=experiment["id"])
+    clusters = refresh_task_strategy_clusters(store)
+    assert (
+        clusters[task_ids[0]]["strategy_cluster_id"] == clusters[task_ids[1]]["strategy_cluster_id"]
+    )
+    assert clusters[task_ids[0]]["nearest_active_return_correlation"] > 0.99
 
 
 def test_gate_failures_and_score_prioritize_robust_public_metrics() -> None:

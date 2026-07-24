@@ -143,16 +143,20 @@ class CrossSectionalScreener:
         requested = pd.Timestamp(requested_date)
         load_start = requested - pd.Timedelta(days=500)
         factor_fields = list(self.workspace.factor_fields)
-        columns = [
-            "trade_date",
-            "ts_code",
-            "name",
-            "open",
-            *factor_fields,
-            "raw_close",
-            "is_valid_ohlc",
-            "is_tradable_observation",
-        ]
+        columns = list(
+            dict.fromkeys(
+                [
+                    "trade_date",
+                    "ts_code",
+                    "name",
+                    "open",
+                    *factor_fields,
+                    "raw_close",
+                    "is_valid_ohlc",
+                    "is_tradable_observation",
+                ]
+            )
+        )
         frames = []
         for year in range(load_start.year, requested.year + 1):
             for path in sorted((self.panel_path / f"trade_year={year}").glob("*.parquet")):
@@ -171,7 +175,7 @@ class CrossSectionalScreener:
             )
         resolved_date = available_dates.max()
         valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
-        field_names = ["open", *factor_fields]
+        field_names = list(dict.fromkeys(["open", *factor_fields]))
         data.loc[~valid, field_names] = np.nan
         fields = {
             name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>系统导览 · AutoAlpha / AutoCombine</title>
+  <title>系统导览 · AutoAlpha / AutoCombine / QuantCombine</title>
   <link rel="preconnect" href="https://unpkg.com">
   <link rel="stylesheet" href="/static/styles.css">
   <link rel="stylesheet" href="/static/system_guide.css?v=20260718-v1">
@@ -12,7 +12,7 @@
 <body>
   <header class="app-header">
     <div class="identity">
-      <h1>AutoAlpha / AutoCombine 系统导览</h1>
+      <h1>AutoAlpha / AutoCombine / QuantCombine 系统导览</h1>
       <p>从数据进入到因子证据、组合策略、模拟执行与审计交付的完整研究控制面</p>
     </div>
     <div class="header-actions">
@@ -21,11 +21,11 @@
       <button class="icon-button" id="printGuide" title="打印系统导览"><i data-lucide="printer"></i></button>
     </div>
   </header>
-  <script src="/static/platform_header.js?v=20260718-v4"></script>
+  <script src="/static/platform_header.js?v=20260718-quant-v1"></script>
 
   <main class="guide-page">
     <section class="guide-summary" aria-label="系统摘要">
-      <div><span>研究引擎</span><strong>2</strong><small>因子发现 + 组合优化</small></div>
+      <div><span>研究引擎</span><strong>3</strong><small>因子发现 + LLM组合 + 统计组合</small></div>
       <div><span>LLM 专业角色</span><strong>6</strong><small>全程建议，不越权裁决</small></div>
       <div><span>评价边界</span><strong>4</strong><small>探索、滚动、盲测、仿真</small></div>
       <div><span>核心资产</span><strong>3</strong><small>因子、策略、证据制品</small></div>
@@ -46,6 +46,7 @@
           <a href="#data"><span>07</span>数据工程</a>
           <a href="#factor-assets"><span>08</span>因子资产</a>
           <a href="#autocombine"><span>09</span>AutoCombine</a>
+          <a href="#quantcombine"><span>09B</span>QuantCombine</a>
           <a href="#execution"><span>10</span>回测与交易</a>
           <a href="#surfaces"><span>11</span>工作台地图</a>
           <a href="#governance"><span>12</span>治理与运维</a>
@@ -246,11 +247,11 @@
           <div class="section-kicker">09 · AUTOCOMBINE</div>
           <div class="section-heading"><div><h2>AutoCombine：受约束的多因子组合与权重研究</h2><p>从 AutoAlpha 因子库冻结可见快照，在明确因子数量、权重、目标和时间协议内搜索组合。</p></div><a class="button" href="/" data-service-link="combine"><i data-lucide="arrow-up-right"></i>组合任务</a></div>
           <div class="combine-contract">
-            <div class="combine-input"><span>任务输入</span><ul><li>可见因子或手动指定因子</li><li>必选因子与最大因子数</li><li>最小/最大非负权重与步长</li><li>探索、验证和隐藏区间</li><li>目标预设与实验预算</li></ul></div>
+            <div class="combine-input"><span>任务输入</span><ul><li>可见因子或手动指定因子</li><li>必选因子、机制与语义簇上限</li><li>最小/最大非负权重与步长</li><li>探索、验证和隐藏区间</li><li>目标预设、独立性门槛与实验预算</li></ul></div>
             <i data-lucide="arrow-right"></i>
-            <div class="combine-engine"><i data-lucide="network"></i><span>搜索与评价</span><strong>LLM 子集假设</strong><strong>确定性权重邻域</strong><strong>稳健性门禁</strong><strong>Pareto 前沿</strong></div>
+            <div class="combine-engine"><i data-lucide="network"></i><span>搜索与评价</span><strong>机制指纹与语义去重</strong><strong>多样化子集与权重搜索</strong><strong>Leave-one-out 边际检验</strong><strong>收益来源 Pareto 前沿</strong></div>
             <i data-lucide="arrow-right"></i>
-            <div class="combine-output"><span>任务输出</span><ul><li>每次实验的子集与最终权重</li><li>公开指标轨迹与失败门禁</li><li>成本和回撤稳健性证据</li><li>盲测分类与证据哈希</li><li>不可变 StrategySpec 版本</li></ul></div>
+            <div class="combine-output"><span>任务输出</span><ul><li>研究领先、合格冠军与生产候选三级资格</li><li>有效下注、机制集中度与门禁距离</li><li>逐日净收益、主动收益和跨任务收益簇</li><li>盲测分类与证据哈希</li><li>不可变 StrategySpec 版本</li></ul></div>
           </div>
           <div class="preset-grid">
             <div><span>默认</span><strong>降低回撤优先</strong><p>在基本收益约束下优先改善最大回撤、尾部风险和最差折。</p></div>
@@ -258,7 +259,20 @@
             <div><span>可选</span><strong>年化收益优先</strong><p>提高净年化，但不允许用收益补偿不可交易、过度集中或盲测失败。</p></div>
             <div><span>可选</span><strong>均衡稳健</strong><p>在增量收益、回撤、最差折、换手和机制分散之间做 Pareto 选择。</p></div>
           </div>
-          <div class="combine-rule"><i data-lucide="lock-keyhole"></i><p><strong>任务运行中因子快照不漂移。</strong>因子方向继承自 AutoAlpha，LLM 不能引用快照外因子、翻转方向、查看隐藏精确指标或绕过确定性约束。</p></div>
+          <div class="combine-rule"><i data-lucide="lock-keyhole"></i><p><strong>任务运行中因子快照不漂移，失败门禁不能被高收益补偿。</strong>LLM 只接收分级公开反馈，不能引用快照外因子、翻转方向、查看隐藏精确指标或把同一收益簇包装成多个独立策略。</p></div>
+        </section>
+
+        <section class="guide-section" id="quantcombine">
+          <div class="section-kicker">09B · QUANTCOMBINE</div>
+          <div class="section-heading"><div><h2>QuantCombine：不依赖 LLM 的统计组合优化</h2><p>直接联通共享因子库，以可复现算法完成稳定性筛选、收益聚类、子集搜索、权重求解和多目标晋级。</p></div><a class="button" href="/" data-service-link="quantcombine"><i data-lucide="arrow-up-right"></i>统计组合</a></div>
+          <div class="combine-contract">
+            <div class="combine-input"><span>筛选与去重</span><ul><li>逐因子按同一公开协议重评</li><li>稳定性、最差折、DSR与成本评分</li><li>验证期收益相关性与语义指纹聚类</li><li>每个同源簇保留代表因子</li></ul></div>
+            <i data-lucide="arrow-right"></i>
+            <div class="combine-engine"><i data-lucide="binary"></i><span>混合算法</span><strong>SFFS 前进加入与浮动删除</strong><strong>NSGA-II Pareto进化</strong><strong>贝叶斯式因子纳入后验</strong><strong>收缩协方差与约束权重</strong></div>
+            <i data-lucide="arrow-right"></i>
+            <div class="combine-output"><span>资格与交付</span><ul><li>研究领先、合格冠军与生产候选</li><li>收益、回撤、换手和独立性Pareto前沿</li><li>逐候选父代、动作、权重和收益制品</li><li>Leave-one-out边际贡献</li><li>隔离盲测与版本化策略</li></ul></div>
+          </div>
+          <div class="combine-rule"><i data-lucide="shield-check"></i><p><strong>QuantCombine 不读取 AI Provider 凭证，也不使用自然语言生成权重。</strong>固定随机种子、冻结快照和完整候选账本保证同一数据与配置可复算；LLM可以解释结果，但不能改变该引擎的评价和晋级裁决。</p></div>
         </section>
 
         <section class="guide-section" id="execution">
@@ -284,11 +298,12 @@
 
         <section class="guide-section" id="surfaces">
           <div class="section-kicker">11 · WORKBENCH MAP</div>
-          <div class="section-heading"><div><h2>工作台地图</h2><p>每个页面对应一类清晰的工作对象，避免把自动研究、人工试验和生产证据混在一起。</p></div><span class="section-tag">12 SURFACES</span></div>
+          <div class="section-heading"><div><h2>工作台地图</h2><p>每个页面对应一类清晰的工作对象，避免把自动研究、人工试验和生产证据混在一起。</p></div><span class="section-tag">13 SURFACES</span></div>
           <div class="surface-table">
             <a href="/"><i data-lucide="activity"></i><strong>自动研究</strong><p>查看单个 AutoAlpha 任务的实时阶段、指标、流程和日志。</p><span>对象：研究运行</span></a>
             <a href="/research-tasks"><i data-lucide="list-tree"></i><strong>任务总表</strong><p>创建、启动、停止和编辑多个隔离的自动研究实例。</p><span>对象：任务协议</span></a>
             <a href="/" data-service-link="combine"><i data-lucide="network"></i><strong>组合任务</strong><p>限定范围内搜索因子子集、非负权重和稳健组合。</p><span>对象：组合实验</span></a>
+            <a href="/" data-service-link="quantcombine"><i data-lucide="binary"></i><strong>统计组合</strong><p>不调用LLM，以SFFS、NSGA-II和自适应采样优化组合。</p><span>对象：算法搜索任务</span></a>
             <a href="/strategies" data-service-link="strategies"><i data-lucide="archive"></i><strong>策略库</strong><p>保存通过组合研究边界的不可变 StrategySpec 版本。</p><span>对象：策略资产</span></a>
             <a href="/llm-team"><i data-lucide="brain-circuit"></i><strong>LLM 团队</strong><p>审阅六角色制品、机制知识与模型调用状态。</p><span>对象：咨询证据</span></a>
             <a href="/factors"><i data-lucide="library"></i><strong>因子库</strong><p>检索公式、分类、相似簇、统一评价和生命周期。</p><span>对象：因子资产</span></a>

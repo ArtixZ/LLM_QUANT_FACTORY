@@ -99,6 +99,31 @@ def test_client_preserves_audit_metadata_when_contract_is_invalid() -> None:
     assert raised.value.usage["total_tokens"] == 18
 
 
+def test_client_preserves_sanitized_provider_error_details() -> None:
+    response = {
+        "error": {
+            "code": "insufficient_balance",
+            "type": "billing_error",
+            "message": "Account balance is insufficient",
+        }
+    }
+    client = CompatibleChatClient(
+        base_url="https://provider.test",
+        api_key="secret",
+        model="research-model",
+        transport=httpx.MockTransport(lambda _: httpx.Response(402, json=response)),
+    )
+
+    with pytest.raises(ModelInvocationError) as raised:
+        asyncio.run(client.propose([], 2))
+
+    assert raised.value.audit_payload()["provider_error"] == {
+        "code": "insufficient_balance",
+        "type": "billing_error",
+        "message": "Account balance is insufficient",
+    }
+
+
 def test_client_repairs_invalid_contract_once() -> None:
     calls = 0
 

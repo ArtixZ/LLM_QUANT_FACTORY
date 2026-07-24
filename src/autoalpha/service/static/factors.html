@@ -28,7 +28,7 @@
       <span class="state-pill small">RESEARCH ASSETS</span>
     </div>
   </header>
-  <script src="/static/platform_header.js?v=20260718-v4"></script>
+  <script src="/static/platform_header.js?v=20260718-quant-v1"></script>
 
   <main class="research-page">
     <section class="library-summary-band">
@@ -37,7 +37,8 @@
       <div><span>当前协议合格</span><strong id="qualifiedCount">--</strong></div>
       <div><span>观察因子</span><strong id="observedCount">--</strong></div>
       <div><span>机制分类</span><strong id="categoryCount">--</strong></div>
-      <div><span>相似簇</span><strong id="clusterCount">--</strong></div>
+      <div><span>结构簇</span><strong id="clusterCount">--</strong></div>
+      <div><span>行为簇</span><strong id="behaviorClusterCount">--</strong></div>
       <div><span>影子观察</span><strong id="shadowCount">--</strong></div>
       <div><span>盲测污染</span><strong id="contaminatedCount">--</strong></div>
       <div><span>数据截至</span><strong id="dataEnd">--</strong></div>
@@ -74,6 +75,17 @@
             <option value="PRODUCTION">生产</option>
           </select>
         </label>
+        <label>行为分类
+          <select id="behaviorFilter">
+            <option value="all">全部行为分类</option>
+            <option value="LEADER">行为簇首</option>
+            <option value="NEAR_DUPLICATE">近重复</option>
+            <option value="SUBSTITUTE">可替代</option>
+            <option value="RELATED">相关成员</option>
+            <option value="DISTINCT">独立因子</option>
+            <option value="PENDING">待计算</option>
+          </select>
+        </label>
         <label>排行榜
           <select id="rankingMetric">
             <option value="long_only_overall">纯多综合分</option>
@@ -95,7 +107,8 @@
               <th>因子</th>
               <th>来源任务</th>
               <th>机制类型</th>
-              <th>相似簇</th>
+              <th>结构簇</th>
+              <th>行为簇</th>
               <th>状态</th>
               <th>生命周期</th>
               <th id="rankingValueHeader">纯多综合分</th>
@@ -125,6 +138,7 @@
     <button class="button" id="clearSelection"><i data-lucide="x"></i>清空</button>
     <select id="quickObjectiveProfile" aria-label="快速组合优化目标" title="快速组合优化目标"><option value="DRAWDOWN_FIRST" selected>降低回撤优先</option><option value="PORTFOLIO_SHARPE_FIRST">组合夏普优先</option><option value="ROBUST_ACTIVE_LONG_ONLY">稳健均衡</option><option value="ABSOLUTE_LONG_ONLY">年化收益优先</option><option value="LOW_TURNOVER">低换手优先</option><option value="DIVERSIFICATION_FIRST">分散化优先</option></select>
     <button class="button" id="openAutoCombine" title="按当前目标立即创建并启动 AutoCombine 任务"><i data-lucide="network"></i>快速优化</button>
+    <button class="button" id="openQuantCombine" title="带入 QuantCombine 进行非 LLM 统计组合优化"><i data-lucide="binary"></i>统计优化</button>
     <button class="button primary" id="openBacktest"><i data-lucide="play"></i>组合回测</button>
   </div>
   <dialog class="factor-detail-dialog" id="factorDetailDialog" aria-labelledby="factorDetailTitle">
@@ -141,7 +155,7 @@
   </dialog>
   <div id="toast" role="status"></div>
   <script>window.MathJax = { tex: { displayMath: [["\\[", "\\]"]] }, startup: { typeset: false } };</script>
-  <script src="/static/factors.js?v=20260718-favorites-v1"></script>
+  <script src="/static/factors.js?v=20260719-behavior-v2"></script>
   <script async src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" onload="window.lucide&&window.lucide.createIcons()"></script>
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" onload="window.dispatchEvent(new Event('mathjax-ready'))"></script>
 </body>

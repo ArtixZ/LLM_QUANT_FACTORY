@@ -45,6 +45,7 @@ from autoalpha.service.canonical_evaluation import CANONICAL_LIBRARY_PROTOCOL
 from autoalpha.service.credentials import SystemCredentialStore
 from autoalpha.service.data_center import build_data_center_snapshot
 from autoalpha.service.data_sync import DataSyncWorker
+from autoalpha.service.factor_behavior import load_behavior_snapshot
 from autoalpha.service.factor_library import build_factor_library
 from autoalpha.service.full_llm import role_catalog
 from autoalpha.service.manual_backtest import ManualBacktestSpec, ManualFactorBacktester
@@ -1348,6 +1349,46 @@ async def factor_library(response: Response) -> dict[str, Any]:
         research_diagnostics=store.factor_research_diagnostics(),
         current_protocol=CANONICAL_LIBRARY_PROTOCOL,
     )
+    behavior = load_behavior_snapshot(RUNTIME_ROOT / "factor-behavior")
+    behavior_factors = behavior.get("factors", {})
+    for factor in library["factors"]:
+        evidence = behavior_factors.get(factor["factor_id"], {})
+        factor.update(
+            {
+                "behavior_cluster_id": evidence.get("behavior_cluster_id"),
+                "behavior_cluster_label": evidence.get("behavior_cluster_label"),
+                "behavior_cluster_size": evidence.get("behavior_cluster_size"),
+                "behavior_cluster_role": evidence.get("behavior_cluster_role"),
+                "behavior_nearest_factor_id": evidence.get("behavior_nearest_factor_id"),
+                "behavior_nearest_similarity": evidence.get("behavior_nearest_similarity"),
+                "behavior_signal_correlation": evidence.get("behavior_signal_correlation"),
+                "behavior_return_correlation": evidence.get("behavior_return_correlation"),
+                "behavior_redundancy": evidence.get("behavior_redundancy", "PENDING"),
+                "behavior_cluster_method": evidence.get("behavior_cluster_method"),
+            }
+        )
+    behavior_progress = behavior.get("progress", {})
+    library["behavior_clustering"] = {
+        key: value
+        for key, value in behavior.items()
+        if key not in {"factors", "failures", "clusters", "progress"}
+    }
+    library["behavior_clustering"].update(
+        {
+            "status": behavior_progress.get("status", behavior.get("status", "NOT_STARTED")),
+            "completed_count": behavior_progress.get(
+                "completed_count", behavior.get("evaluated_count", 0)
+            ),
+            "total_count": behavior_progress.get("total_count", len(library["factors"])),
+            "failed_count": behavior_progress.get(
+                "failed_count", behavior.get("failed_count", 0)
+            ),
+            "current_factor_id": behavior_progress.get("current_factor_id"),
+            "clusters": behavior.get("clusters", []),
+        }
+    )
+    library["summary"]["behavior_cluster_count"] = int(behavior.get("cluster_count", 0))
+    library["summary"]["behavior_evaluated_count"] = len(behavior_factors)
     favorite_factors = store.favorite_ids("factor")
     for factor in library["factors"]:
         source = task_lookup.get(factor["source_task_id"])

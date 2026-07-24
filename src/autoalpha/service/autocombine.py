@@ -13,6 +13,14 @@ from typing import Any
 import numpy as np
 
 from autoalpha.config import ResearchConfig
+from autoalpha.service.autocombine_intelligence import (
+    enrich_factor_record,
+    load_return_artifact,
+    mechanism_independence_metrics,
+    public_metric_bands,
+    return_independence,
+    write_return_artifact,
+)
 from autoalpha.service.autocombine_store import AutoCombineStore
 from autoalpha.service.blind_evaluator import BlindEvaluationBoundary
 from autoalpha.service.evaluator import PriceVolumeEvaluator
@@ -31,6 +39,7 @@ DEFAULT_CONSTRUCTION = {
     "candidate_pool_limit": 30,
     "allow_negative_weights": False,
     "maximum_same_family": 2,
+    "maximum_same_semantic_cluster": 1,
 }
 DEFAULT_OBJECTIVE = {
     "profile": "ROBUST_ACTIVE_LONG_ONLY",
@@ -40,7 +49,14 @@ DEFAULT_OBJECTIVE = {
     "minimum_worst_fold_sharpe": -0.50,
     "maximum_drawdown": 0.30,
     "maximum_annual_turnover": 40.0,
-    "maximum_factor_correlation": 0.85,
+    "maximum_factor_correlation": 0.75,
+    "minimum_effective_factor_bets": 1.35,
+    "minimum_effective_mechanisms": 1.40,
+    "maximum_mechanism_weight": 0.75,
+    "maximum_strategy_active_correlation": 0.75,
+    "minimum_marginal_positive_fraction": 0.60,
+    "minimum_deflated_sharpe_probability": 0.50,
+    "maximum_duplicate_semantic_factors": 0,
     "minimum_cost_stress_ir": 0.0,
     "minimum_simple_annual_return": 0.0,
 }
@@ -97,7 +113,9 @@ DEFAULT_BUDGET = {
     "maximum_llm_proposals": 20,
     "maximum_runtime_minutes": 180,
     "maximum_holdout_submissions": 1,
-    "weight_evaluations_per_subset": 6,
+    "weight_evaluations_per_subset": 12,
+    "maximum_subset_revisits": 2,
+    "maximum_same_direction_attempts": 3,
     "iteration_interval_seconds": 0.5,
 }
 
@@ -163,19 +181,21 @@ def build_factor_snapshot(
         except (KeyError, TypeError, ValueError):
             continue
         records.append(
-            {
-                "factor_id": factor_id,
-                "name": record["name"],
-                "family": record["family"],
-                "status": record["status"],
-                "source_task_id": record.get("source_task_id"),
-                "source_iteration": record.get("source_iteration"),
-                "proposal": proposal,
-                "metrics": record.get("metrics") or {},
-                "prefilter_score": _prefilter_score(record.get("metrics") or {}),
-                "required": factor_id in required,
-                "holdout_contaminated": factor_id in contaminated,
-            }
+            enrich_factor_record(
+                {
+                    "factor_id": factor_id,
+                    "name": record["name"],
+                    "family": record["family"],
+                    "status": record["status"],
+                    "source_task_id": record.get("source_task_id"),
+                    "source_iteration": record.get("source_iteration"),
+                    "proposal": proposal,
+                    "metrics": record.get("metrics") or {},
+                    "prefilter_score": _prefilter_score(record.get("metrics") or {}),
+                    "required": factor_id in required,
+                    "holdout_contaminated": factor_id in contaminated,
+                }
+            )
         )
     requested = explicit | required
     unknown = requested - available_ids
@@ -269,6 +289,7 @@ class AutoCombineWorker:
         self.combine_store = combine_store
         self.vault = vault
         self.config_path = config_path
+        self.artifact_root = self.store.path.parent / "artifacts" / "autocombine"
         self._task: asyncio.Task[None] | None = None
         self._evaluator: PriceVolumeEvaluator | None = None
 
@@ -370,6 +391,9 @@ class AutoCombineWorker:
                         "factor_ids": experiment["factor_ids"],
                         "weights": experiment["weights"],
                         "score": experiment["score"],
+                        "gate_distance": experiment.get("gate_distance"),
+                        "qualification": experiment.get("qualification"),
+                        "return_artifact_hash": experiment.get("return_artifact_hash"),
                     },
                 )
                 await asyncio.sleep(float(budget["iteration_interval_seconds"]))
@@ -394,26 +418,30 @@ class AutoCombineWorker:
 
     async def _complete_task(self, reason: str) -> None:
         task = self._require_task()
-        best = (
-            self.combine_store.experiment(int(task["best_experiment_id"]))
-            if task.get("best_experiment_id")
+        qualified = (
+            self.combine_store.experiment(int(task["qualified_experiment_id"]))
+            if task.get("qualified_experiment_id")
             else None
         )
         status = "EXHAUSTED"
-        if best and best["gate_status"] == "PASSED":
+        if qualified and qualified["gate_status"] == "PASSED":
             self.combine_store.update_task(self.task_id, phase="BLIND_REVIEW")
             records = {item["factor_id"]: item for item in task["factor_snapshot"]}
-            factors = [factor_from_pool_record(records[value]) for value in best["factor_ids"]]
+            factors = [factor_from_pool_record(records[value]) for value in qualified["factor_ids"]]
             evaluator = self._evaluator or await asyncio.to_thread(self._build_evaluator, task)
             verdict = await asyncio.to_thread(
                 BlindEvaluationBoundary(evaluator.panel_path, evaluator.config).evaluate_holdout,
                 factors,
-                tuple(float(value) for value in best["weights"]),
+                tuple(float(value) for value in qualified["weights"]),
             )
             self.combine_store.update_task(
                 self.task_id,
                 blind_verdict=verdict.verdict,
                 blind_evidence_hash=verdict.evidence_hash,
+                production_candidate_experiment_id=(qualified["id"] if verdict.passed else None),
+                qualification_status=(
+                    "PRODUCTION_CANDIDATE" if verdict.passed else "BLIND_REJECTED"
+                ),
             )
             self.combine_store.event(
                 self.task_id,
@@ -428,6 +456,7 @@ class AutoCombineWorker:
         self.combine_store.update_task(
             self.task_id, status=status, phase="DELIVERY", stop_requested=0
         )
+        await asyncio.to_thread(refresh_task_strategy_clusters, self.combine_store)
         self.combine_store.event(
             self.task_id,
             "delivery",
@@ -484,7 +513,8 @@ class AutoCombineWorker:
         max_count = int(construction["max_factors"])
         ranked = [item["factor_id"] for item in pool]
         required = {str(value) for value in task["scope"].get("required_factor_ids", [])}
-        family = {item["factor_id"]: str(item["family"]).casefold() for item in pool}
+        mechanism = {item["factor_id"]: str(item["mechanism"]) for item in pool}
+        semantic_cluster = {item["factor_id"]: str(item["semantic_cluster_id"]) for item in pool}
         passing = [item for item in experiments if item["gate_status"] == "PASSED"]
         incumbent = max(
             passing or experiments,
@@ -495,7 +525,7 @@ class AutoCombineWorker:
         candidates: list[tuple[str, ...]] = []
         if not experiments:
             candidates.extend(
-                self._diversified_seeds(ranked, family, max(min_count, len(required)), required)
+                self._diversified_seeds(ranked, mechanism, max(min_count, len(required)), required)
             )
         else:
             current = list(incumbent["factor_ids"]) if incumbent else ranked[:min_count]
@@ -516,16 +546,28 @@ class AutoCombineWorker:
                         continue
                     candidates.append(tuple(value for i, value in enumerate(current) if i != index))
             candidates.extend(
-                self._diversified_seeds(ranked, family, max(min_count, len(required)), required)
+                self._diversified_seeds(ranked, mechanism, max(min_count, len(required)), required)
             )
 
+        recent_limit = int(task["budget"].get("maximum_same_direction_attempts", 3))
+        recent_directions = [
+            self._dominant_mechanism(item["factor_ids"], mechanism)
+            for item in experiments[:recent_limit]
+        ]
         for factor_ids in candidates:
             factor_ids = tuple(dict.fromkeys(factor_ids))
             if not min_count <= len(factor_ids) <= max_count:
                 continue
             if not required <= set(factor_ids):
                 continue
-            if not self._family_limit_ok(factor_ids, family, construction):
+            if not self._family_limit_ok(factor_ids, mechanism, semantic_cluster, construction):
+                continue
+            dominant = self._dominant_mechanism(factor_ids, mechanism)
+            if (
+                recent_directions
+                and len(recent_directions) >= recent_limit
+                and all(value == dominant for value in recent_directions)
+            ):
                 continue
             proposal = CombineProposal(
                 action="SEED" if not experiments else "ADD_REPLACE",
@@ -561,13 +603,31 @@ class AutoCombineWorker:
 
     @staticmethod
     def _family_limit_ok(
-        factor_ids: tuple[str, ...], family: dict[str, str], construction: dict[str, Any]
+        factor_ids: tuple[str, ...],
+        mechanism: dict[str, str],
+        semantic_cluster: dict[str, str],
+        construction: dict[str, Any],
     ) -> bool:
         maximum = int(construction.get("maximum_same_family", 2))
+        maximum_cluster = int(construction.get("maximum_same_semantic_cluster", 1))
         return all(
-            sum(family[value] == family[factor_id] for value in factor_ids) <= maximum
+            sum(mechanism[value] == mechanism[factor_id] for value in factor_ids) <= maximum
+            for factor_id in factor_ids
+        ) and all(
+            sum(semantic_cluster[value] == semantic_cluster[factor_id] for value in factor_ids)
+            <= maximum_cluster
             for factor_id in factor_ids
         )
+
+    @staticmethod
+    def _dominant_mechanism(
+        factor_ids: list[str] | tuple[str, ...], mechanism: dict[str, str]
+    ) -> str:
+        counts: dict[str, int] = {}
+        for factor_id in factor_ids:
+            value = mechanism[factor_id]
+            counts[value] = counts.get(value, 0) + 1
+        return max(counts, key=lambda value: (counts[value], value))
 
     async def _llm_proposal(
         self,
@@ -589,9 +649,15 @@ class AutoCombineWorker:
             {
                 "factor_id": item["factor_id"],
                 "name": item["name"],
-                "family": item["family"],
+                "reported_family": item["family"],
+                "mechanism": item["mechanism"],
+                "semantic_cluster_id": item["semantic_cluster_id"],
+                "expression_summary": item["expression_summary"],
+                "expression_fields": item["expression_fields"],
+                "expression_windows": item["expression_windows"],
                 "hypothesis": item["proposal"].get("hypothesis", ""),
                 "prefilter_score": round(item["prefilter_score"], 4),
+                "holdout_contaminated": bool(item.get("holdout_contaminated")),
             }
             for item in task["factor_snapshot"]
         ]
@@ -602,7 +668,13 @@ class AutoCombineWorker:
                 "weights": item["weights"],
                 "gate_status": item["gate_status"],
                 "failed_gates": item["failed_gates"],
-                "public_summary": _public_metric_summary(item.get("metrics") or {}),
+                "public_metric_bands": public_metric_bands(item.get("metrics") or {}),
+                "mechanism_weights": (item.get("metrics") or {}).get(
+                    "portfolio_mechanism_weights", {}
+                ),
+                "redundant_factor_ids": (item.get("metrics") or {}).get(
+                    "portfolio_redundant_factor_ids", []
+                ),
             }
             for item in experiments[:12]
         ]
@@ -612,8 +684,11 @@ class AutoCombineWorker:
                 "You are the portfolio architecture role in an institutional A-share research "
                 "system. Select only existing factor_ids. Propose one static long-only composite "
                 "signal subset. Do not invent factors, inspect hidden periods, flip signs, or tune "
-                "decimal weights. Favor mechanism complementarity and robust public out-of-sample "
-                "evidence. Return JSON with action, factor_ids, rationale, hypothesis, risk."
+                "decimal weights. Treat differently named factors with the same mechanism, fields, "
+                "window and semantic cluster as redundant. Favor genuinely independent mechanisms "
+                "and robust public out-of-sample evidence. Exact public metrics are intentionally "
+                "hidden to reduce adaptive validation overfit. Return JSON with action, "
+                "factor_ids, rationale, hypothesis, risk."
             ),
             context={
                 "iteration": iteration,
@@ -637,6 +712,13 @@ class AutoCombineWorker:
         required = {str(value) for value in task["scope"].get("required_factor_ids", [])}
         if not required <= set(factor_ids):
             raise ValueError("LLM combination omitted required factors")
+        records = {item["factor_id"]: item for item in task["factor_snapshot"]}
+        mechanism = {factor_id: str(item["mechanism"]) for factor_id, item in records.items()}
+        clusters = {
+            factor_id: str(item["semantic_cluster_id"]) for factor_id, item in records.items()
+        }
+        if not self._family_limit_ok(factor_ids, mechanism, clusters, task["construction"]):
+            raise ValueError("LLM combination violates mechanism-diversity constraints")
         return CombineProposal(
             action=str(analysis.artifact["action"]).upper()[:32],
             factor_ids=factor_ids,
@@ -648,12 +730,12 @@ class AutoCombineWorker:
         )
 
     def _proposal_exists(self, proposal: CombineProposal, task: dict[str, Any]) -> bool:
-        del task
         proposed = frozenset(proposal.factor_ids)
-        return any(
+        count = sum(
             frozenset(experiment["factor_ids"]) == proposed
             for experiment in self.combine_store.experiments(self.task_id, limit=5000)
         )
+        return count >= int(task["budget"].get("maximum_subset_revisits", 2))
 
     def _evaluate_proposal(
         self,
@@ -665,31 +747,84 @@ class AutoCombineWorker:
         started = time.monotonic()
         records = {item["factor_id"]: item for item in task["factor_snapshot"]}
         factors = [factor_from_pool_record(records[factor_id]) for factor_id in proposal.factor_ids]
-        best: tuple[float, tuple[float, ...], dict[str, Any], list[str]] | None = None
+        best: (
+            tuple[
+                tuple[float, ...],
+                tuple[float, ...],
+                Any,
+                dict[str, Any],
+                list[str],
+                float,
+            ]
+            | None
+        ) = None
         evaluated_count = 0
-        for weights in self._weight_candidates(proposal.factor_ids, task):
+        for weights in self._weight_candidates(proposal.factor_ids, task, iteration):
+            candidate_hash = _candidate_hash(proposal.factor_ids, weights)
+            if self.combine_store.candidate_exists(self.task_id, candidate_hash):
+                continue
             evaluation = evaluator.evaluate_portfolio(factors, weights=weights)
             evaluated_count += 1
-            metrics = evaluation.metrics
+            metrics = dict(evaluation.metrics)
+            metrics.update(
+                mechanism_independence_metrics(records, list(proposal.factor_ids), list(weights))
+            )
+            active_returns = evaluation.net_returns - evaluator._market_benchmark_returns(
+                evaluation.net_returns.index
+            )
+            metrics.update(self._strategy_independence_metrics(active_returns))
             failures = _gate_failures(metrics, task["objective"])
+            distance = _gate_distance(metrics, task["objective"])
             score = _portfolio_score(metrics, failures, task["objective"])
-            if best is None or score > best[0]:
-                best = (score, weights, metrics, failures)
+            rank = (
+                float(not failures),
+                -float(len(failures)),
+                -distance,
+                score,
+            )
+            if best is None or rank > best[0]:
+                best = (rank, weights, evaluation, metrics, failures, score)
         if best is None:
             raise RuntimeError("该组合的全部权重候选均已评估")
-        score, weights, metrics, failures = best
-        metrics = dict(metrics)
+        _, weights, evaluation, metrics, failures, score = best
+        if not failures:
+            metrics.update(
+                self._leave_one_out_metrics(
+                    evaluator,
+                    records,
+                    list(proposal.factor_ids),
+                    list(weights),
+                    metrics,
+                    task,
+                )
+            )
+            failures = _gate_failures(metrics, task["objective"])
+        distance = _gate_distance(metrics, task["objective"])
+        candidate_hash = _candidate_hash(proposal.factor_ids, weights)
+        active_returns = evaluation.net_returns - evaluator._market_benchmark_returns(
+            evaluation.net_returns.index
+        )
+        artifact_path, artifact_hash = write_return_artifact(
+            self.artifact_root,
+            task_id=self.task_id,
+            candidate_hash=candidate_hash,
+            net_returns=evaluation.net_returns,
+            active_returns=active_returns,
+        )
         metrics.update(
             {
                 "autocombine_objective_profile": task["objective"]["profile"],
                 "autocombine_weight_evaluations": evaluated_count,
                 "autocombine_snapshot_hash": task["snapshot_hash"],
                 "autocombine_hidden_metrics_exposed": False,
+                "autocombine_gate_distance": distance,
+                "autocombine_return_artifact_path": artifact_path,
+                "autocombine_return_artifact_hash": artifact_hash,
             }
         )
         return {
             "iteration": iteration,
-            "candidate_hash": _candidate_hash(proposal.factor_ids, weights),
+            "candidate_hash": candidate_hash,
             "action": proposal.action,
             "proposal_source": proposal.source,
             "factor_ids": list(proposal.factor_ids),
@@ -698,15 +833,19 @@ class AutoCombineWorker:
             "hypothesis": proposal.hypothesis,
             "metrics": metrics,
             "score": score,
+            "gate_distance": distance,
+            "qualification": "QUALIFIED" if not failures else "EVALUATED",
             "gate_status": "PASSED" if not failures else "REJECTED",
             "failed_gates": failures,
             "prompt_hash": proposal.prompt_hash,
             "response_hash": proposal.response_hash,
+            "return_artifact_path": artifact_path,
+            "return_artifact_hash": artifact_hash,
             "duration_seconds": time.monotonic() - started,
         }
 
     def _weight_candidates(
-        self, factor_ids: tuple[str, ...], task: dict[str, Any]
+        self, factor_ids: tuple[str, ...], task: dict[str, Any], iteration: int
     ) -> list[tuple[float, ...]]:
         construction = task["construction"]
         n = len(factor_ids)
@@ -721,6 +860,24 @@ class AutoCombineWorker:
         raw: list[np.ndarray] = [np.full(n, 1 / n)]
         softmax = np.exp(scores - scores.max())
         raw.append(softmax / softmax.sum())
+        inverse_risk = np.array(
+            [
+                1.0
+                / max(
+                    0.05,
+                    abs(
+                        _metric(
+                            records[factor_id].get("metrics") or {},
+                            "recent_long_only_max_drawdown",
+                            "long_only_max_drawdown",
+                            default=-0.5,
+                        )
+                    ),
+                )
+                for factor_id in factor_ids
+            ]
+        )
+        raw.append(inverse_risk / inverse_risk.sum())
         for index in range(n):
             overweight = np.full(n, (1.0 - maximum) / max(1, n - 1))
             overweight[index] = maximum
@@ -728,6 +885,15 @@ class AutoCombineWorker:
             underweight = np.full(n, (1.0 - minimum) / max(1, n - 1))
             underweight[index] = minimum
             raw.append(underweight)
+        seed = int(
+            canonical_hash(
+                {"task": self.task_id, "factors": sorted(factor_ids), "iteration": iteration}
+            )[:16],
+            16,
+        )
+        generator = np.random.default_rng(seed)
+        for _ in range(max(0, limit - len(raw)) * 3):
+            raw.append(generator.dirichlet(np.ones(n) * 1.5))
         candidates: list[tuple[float, ...]] = []
         for values in raw:
             clipped = np.clip(values, minimum, maximum)
@@ -741,25 +907,139 @@ class AutoCombineWorker:
                 break
         return candidates
 
+    def _strategy_independence_metrics(self, active_returns: Any) -> dict[str, Any]:
+        maximum = 0.0
+        nearest_strategy_id: str | None = None
+        comparisons = 0
+        for strategy in self.combine_store.strategies():
+            evaluation = strategy.get("specification", {}).get("evaluation", {})
+            path = evaluation.get("autocombine_return_artifact_path")
+            if not path or not Path(path).is_file():
+                continue
+            try:
+                reference = load_return_artifact(path)["active_return"]
+                comparison = return_independence(active_returns, reference)
+            except (OSError, TypeError, ValueError):
+                continue
+            comparisons += 1
+            correlation = abs(float(comparison["pearson"]))
+            if correlation > maximum:
+                maximum = correlation
+                nearest_strategy_id = str(strategy["strategy_id"])
+        return {
+            "portfolio_max_strategy_active_correlation": maximum,
+            "portfolio_nearest_strategy_id": nearest_strategy_id,
+            "portfolio_strategy_independence_comparisons": comparisons,
+        }
+
+    def _leave_one_out_metrics(
+        self,
+        evaluator: PriceVolumeEvaluator,
+        records: dict[str, dict[str, Any]],
+        factor_ids: list[str],
+        weights: list[float],
+        base_metrics: dict[str, Any],
+        task: dict[str, Any],
+    ) -> dict[str, Any]:
+        base_score = _portfolio_score(base_metrics, [], task["objective"])
+        diagnostics: list[dict[str, Any]] = []
+        for index, factor_id in enumerate(factor_ids):
+            remaining_ids = [
+                value for position, value in enumerate(factor_ids) if position != index
+            ]
+            remaining_weights = np.array(
+                [value for position, value in enumerate(weights) if position != index], dtype=float
+            )
+            remaining_weights = remaining_weights / remaining_weights.sum()
+            evaluation = evaluator.evaluate_portfolio(
+                [factor_from_pool_record(records[value]) for value in remaining_ids],
+                weights=tuple(float(value) for value in remaining_weights),
+            )
+            reduced_metrics = dict(evaluation.metrics)
+            reduced_metrics.update(
+                mechanism_independence_metrics(records, remaining_ids, list(remaining_weights))
+            )
+            reduced_active = evaluation.net_returns - evaluator._market_benchmark_returns(
+                evaluation.net_returns.index
+            )
+            reduced_metrics.update(self._strategy_independence_metrics(reduced_active))
+            reduced_score = _portfolio_score(reduced_metrics, [], task["objective"])
+            score_delta = base_score - reduced_score
+            diagnostics.append(
+                {
+                    "factor_id": factor_id,
+                    "objective_score_delta": score_delta,
+                    "sharpe_delta": _metric(base_metrics, "portfolio_sharpe_ratio")
+                    - _metric(reduced_metrics, "portfolio_sharpe_ratio"),
+                    "annual_return_delta": _metric(base_metrics, "portfolio_simple_annual_return")
+                    - _metric(reduced_metrics, "portfolio_simple_annual_return"),
+                    "worst_fold_delta": _metric(base_metrics, "portfolio_walk_forward_worst_sharpe")
+                    - _metric(reduced_metrics, "portfolio_walk_forward_worst_sharpe"),
+                    "positive": score_delta > 0.01,
+                }
+            )
+        redundant = [item["factor_id"] for item in diagnostics if not item["positive"]]
+        positive_fraction = (
+            sum(bool(item["positive"]) for item in diagnostics) / len(diagnostics)
+            if diagnostics
+            else 1.0
+        )
+        return {
+            "portfolio_leave_one_out": diagnostics,
+            "portfolio_marginal_positive_fraction": positive_fraction,
+            "portfolio_redundant_factor_count": len(redundant),
+            "portfolio_redundant_factor_ids": redundant,
+        }
+
     def _update_best(self, task: dict[str, Any], experiment: dict[str, Any]) -> None:
-        current = (
-            self.combine_store.experiment(int(task["best_experiment_id"]))
-            if task.get("best_experiment_id")
+        del task
+        current_task = self._require_task()
+        current_leader = (
+            self.combine_store.experiment(int(current_task["best_experiment_id"]))
+            if current_task.get("best_experiment_id")
             else None
         )
-        candidate_passed = experiment["gate_status"] == "PASSED"
-        current_passed = current is not None and current["gate_status"] == "PASSED"
-        should_update = (
-            current is None
-            or (candidate_passed and not current_passed)
-            or (
-                candidate_passed == current_passed
-                and float(experiment["score"]) > float(current["score"])
-            )
+        leader_changed = current_leader is None or _experiment_selection_key(
+            experiment
+        ) > _experiment_selection_key(current_leader)
+        current_qualified = (
+            self.combine_store.experiment(int(current_task["qualified_experiment_id"]))
+            if current_task.get("qualified_experiment_id")
+            else None
         )
-        if should_update:
+        qualified_changed = experiment["gate_status"] == "PASSED" and (
+            current_qualified is None
+            or _qualified_selection_key(experiment) > _qualified_selection_key(current_qualified)
+        )
+        updates: dict[str, Any] = {"phase": "ROBUSTNESS"}
+        if leader_changed:
+            if current_leader is not None and current_leader["id"] != experiment["id"]:
+                self.combine_store.update_experiment(
+                    int(current_leader["id"]),
+                    qualification=(
+                        "QUALIFIED" if current_leader["gate_status"] == "PASSED" else "EVALUATED"
+                    ),
+                )
+            updates["best_experiment_id"] = experiment["id"]
+            self.combine_store.update_experiment(
+                int(experiment["id"]), qualification="RESEARCH_LEADER"
+            )
+        if qualified_changed:
+            if current_qualified is not None and current_qualified["id"] != experiment["id"]:
+                self.combine_store.update_experiment(
+                    int(current_qualified["id"]), qualification="QUALIFIED"
+                )
+            updates["qualified_experiment_id"] = experiment["id"]
+            updates["qualification_status"] = "QUALIFIED_CHAMPION"
+            self.combine_store.update_experiment(
+                int(experiment["id"]), qualification="QUALIFIED_CHAMPION"
+            )
+        elif current_qualified is None:
+            updates["qualification_status"] = "RESEARCH_LEADER_ONLY"
+        if leader_changed or qualified_changed:
             self.combine_store.update_task(
-                self.task_id, best_experiment_id=experiment["id"], phase="ROBUSTNESS"
+                self.task_id,
+                **updates,
             )
 
     def _write_memory(self, experiment: dict[str, Any]) -> None:
@@ -913,6 +1193,27 @@ def _candidate_hash(factor_ids: tuple[str, ...], weights: tuple[float, ...]) -> 
     return canonical_hash([(factor_id, round(weight, 6)) for factor_id, weight in ordered])
 
 
+def _experiment_selection_key(experiment: dict[str, Any]) -> tuple[float, ...]:
+    failures = experiment.get("failed_gates") or []
+    distance = float(experiment.get("gate_distance") or 0.0)
+    return (
+        float(experiment.get("gate_status") == "PASSED"),
+        -float(len(failures)),
+        -distance,
+        float(experiment.get("score") or -1_000.0),
+    )
+
+
+def _qualified_selection_key(experiment: dict[str, Any]) -> tuple[float, ...]:
+    metrics = experiment.get("metrics") or {}
+    return (
+        float(experiment.get("score") or -1_000.0),
+        _metric(metrics, "portfolio_walk_forward_worst_sharpe", default=-100.0),
+        _metric(metrics, "portfolio_active_information_ratio", default=-100.0),
+        _metric(metrics, "portfolio_max_drawdown", default=-1.0),
+    )
+
+
 def _gate_failures(metrics: dict[str, Any], objective: dict[str, Any]) -> list[str]:
     checks = {
         "coverage": _metric(metrics, "portfolio_coverage") >= float(objective["minimum_coverage"]),
@@ -926,12 +1227,95 @@ def _gate_failures(metrics: dict[str, Any], objective: dict[str, Any]) -> list[s
         <= float(objective["maximum_annual_turnover"]),
         "correlation": _metric(metrics, "portfolio_max_factor_correlation", default=1)
         <= float(objective["maximum_factor_correlation"]),
+        "effective_factor_bets": _metric(
+            metrics,
+            "portfolio_effective_factor_bets",
+            default=float(objective.get("minimum_effective_factor_bets", 1.0)),
+        )
+        >= float(objective.get("minimum_effective_factor_bets", 1.0)),
+        "effective_mechanisms": _metric(
+            metrics,
+            "portfolio_effective_mechanisms",
+            default=float(objective.get("minimum_effective_mechanisms", 1.0)),
+        )
+        >= float(objective.get("minimum_effective_mechanisms", 1.0)),
+        "mechanism_concentration": _metric(
+            metrics,
+            "portfolio_maximum_mechanism_weight",
+            default=float(objective.get("maximum_mechanism_weight", 1.0)),
+        )
+        <= float(objective.get("maximum_mechanism_weight", 1.0)),
+        "semantic_duplicates": _metric(
+            metrics, "portfolio_duplicate_semantic_factor_count", default=0.0
+        )
+        <= float(objective.get("maximum_duplicate_semantic_factors", 0)),
+        "strategy_independence": _metric(
+            metrics, "portfolio_max_strategy_active_correlation", default=0.0
+        )
+        <= float(objective.get("maximum_strategy_active_correlation", 1.0)),
+        "deflated_sharpe": _metric(
+            metrics,
+            "portfolio_deflated_sharpe_probability",
+            default=float(objective.get("minimum_deflated_sharpe_probability", 0.0)),
+        )
+        >= float(objective.get("minimum_deflated_sharpe_probability", 0.0)),
         "cost_stress": _metric(metrics, "portfolio_cost_stress_net_ir", default=-100)
         >= float(objective["minimum_cost_stress_ir"]),
         "annual_return": _metric(metrics, "portfolio_simple_annual_return")
         >= float(objective.get("minimum_simple_annual_return", 0.0)),
     }
+    if "portfolio_marginal_positive_fraction" in metrics:
+        checks["marginal_contribution"] = _metric(
+            metrics, "portfolio_marginal_positive_fraction"
+        ) >= float(objective.get("minimum_marginal_positive_fraction", 0.0))
     return [name for name, passed in checks.items() if not passed]
+
+
+def _gate_distance(metrics: dict[str, Any], objective: dict[str, Any]) -> float:
+    lower_bounds = {
+        "portfolio_coverage": float(objective["minimum_coverage"]),
+        "portfolio_walk_forward_positive_fraction": float(
+            objective["minimum_positive_fold_fraction"]
+        ),
+        "portfolio_walk_forward_worst_sharpe": float(objective["minimum_worst_fold_sharpe"]),
+        "portfolio_max_drawdown": -float(objective["maximum_drawdown"]),
+        "portfolio_cost_stress_net_ir": float(objective["minimum_cost_stress_ir"]),
+        "portfolio_simple_annual_return": float(objective.get("minimum_simple_annual_return", 0.0)),
+        "portfolio_effective_factor_bets": float(
+            objective.get("minimum_effective_factor_bets", 1.0)
+        ),
+        "portfolio_effective_mechanisms": float(objective.get("minimum_effective_mechanisms", 1.0)),
+        "portfolio_deflated_sharpe_probability": float(
+            objective.get("minimum_deflated_sharpe_probability", 0.0)
+        ),
+    }
+    upper_bounds = {
+        "portfolio_annual_turnover": float(objective["maximum_annual_turnover"]),
+        "portfolio_max_factor_correlation": float(objective["maximum_factor_correlation"]),
+        "portfolio_maximum_mechanism_weight": float(objective.get("maximum_mechanism_weight", 1.0)),
+        "portfolio_duplicate_semantic_factor_count": float(
+            objective.get("maximum_duplicate_semantic_factors", 0)
+        ),
+        "portfolio_max_strategy_active_correlation": float(
+            objective.get("maximum_strategy_active_correlation", 1.0)
+        ),
+    }
+    distance = 0.0
+    for key, bound in lower_bounds.items():
+        value = _metric(metrics, key, default=bound)
+        scale = max(abs(bound), 0.1)
+        distance += max(0.0, bound - value) / scale
+    for key, bound in upper_bounds.items():
+        value = _metric(metrics, key, default=bound)
+        scale = max(abs(bound), 0.1)
+        distance += max(0.0, value - bound) / scale
+    if "portfolio_marginal_positive_fraction" in metrics:
+        bound = float(objective.get("minimum_marginal_positive_fraction", 0.0))
+        distance += max(
+            0.0,
+            bound - _metric(metrics, "portfolio_marginal_positive_fraction"),
+        ) / max(bound, 0.1)
+    return float(distance)
 
 
 def _portfolio_score(
@@ -939,6 +1323,7 @@ def _portfolio_score(
     failures: list[str],
     objective: dict[str, Any] | None = None,
 ) -> float:
+    del failures
     objective = merge_defaults(objective or {}, DEFAULT_OBJECTIVE)
     active_ir = _metric(metrics, "portfolio_active_information_ratio")
     active_annual = _metric(metrics, "portfolio_active_simple_annual_return")
@@ -949,6 +1334,10 @@ def _portfolio_score(
     drawdown = _metric(metrics, "portfolio_max_drawdown", default=-1)
     turnover = _metric(metrics, "portfolio_annual_turnover", default=100)
     correlation = _metric(metrics, "portfolio_max_factor_correlation", default=1)
+    effective_bets = _metric(metrics, "portfolio_effective_factor_bets", default=1)
+    effective_mechanisms = _metric(metrics, "portfolio_effective_mechanisms", default=1)
+    mechanism_weight = _metric(metrics, "portfolio_maximum_mechanism_weight", default=1)
+    strategy_correlation = _metric(metrics, "portfolio_max_strategy_active_correlation", default=0)
     profile = str(objective.get("profile", "ROBUST_ACTIVE_LONG_ONLY"))
     components = {
         "ROBUST_ACTIVE_LONG_ONLY": 0.25 * active_ir
@@ -983,13 +1372,23 @@ def _portfolio_score(
         + 0.30 * worst
         + 0.45 * drawdown,
         "DIVERSIFICATION_FIRST": -0.90 * correlation
+        - 0.75 * strategy_correlation
+        - 0.50 * mechanism_weight
+        + 0.20 * effective_bets
+        + 0.20 * effective_mechanisms
         + 0.35 * sharpe
         + 1.20 * annual
         + 0.30 * worst
         + 0.50 * drawdown,
     }
+    independence_adjustment = (
+        0.08 * effective_bets
+        + 0.08 * effective_mechanisms
+        - 0.12 * mechanism_weight
+        - 0.12 * strategy_correlation
+    )
     return float(
-        components.get(profile, components["ROBUST_ACTIVE_LONG_ONLY"]) - 0.35 * len(failures)
+        components.get(profile, components["ROBUST_ACTIVE_LONG_ONLY"]) + independence_adjustment
     )
 
 
@@ -1002,6 +1401,11 @@ def _public_metric_summary(metrics: dict[str, Any]) -> dict[str, float]:
         "portfolio_max_drawdown",
         "portfolio_annual_turnover",
         "portfolio_max_factor_correlation",
+        "portfolio_effective_factor_bets",
+        "portfolio_effective_mechanisms",
+        "portfolio_maximum_mechanism_weight",
+        "portfolio_max_strategy_active_correlation",
+        "portfolio_marginal_positive_fraction",
         "portfolio_walk_forward_positive_fraction",
         "portfolio_walk_forward_worst_sharpe",
         "portfolio_cost_stress_net_ir",
@@ -1018,3 +1422,69 @@ def _experiment_summary(experiment: dict[str, Any]) -> str:
         f"{_metric(metrics, 'portfolio_walk_forward_worst_sharpe', default=-100):.2f} · "
         f"门禁 {len(experiment['failed_gates'])} 项未通过"
     )
+
+
+def refresh_task_strategy_clusters(
+    combine_store: AutoCombineStore, *, threshold: float = 0.75
+) -> dict[str, dict[str, Any]]:
+    leaders: dict[str, tuple[dict[str, Any], Any]] = {}
+    for task in combine_store.tasks():
+        if not task.get("best_experiment_id"):
+            continue
+        experiment = combine_store.experiment(int(task["best_experiment_id"]))
+        if experiment is None:
+            continue
+        path = experiment.get("return_artifact_path") or (experiment.get("metrics") or {}).get(
+            "autocombine_return_artifact_path"
+        )
+        if not path or not Path(path).is_file():
+            continue
+        try:
+            active = load_return_artifact(path)["active_return"]
+        except (OSError, TypeError, ValueError):
+            continue
+        leaders[str(task["task_id"])] = (task, active)
+    parent = {task_id: task_id for task_id in leaders}
+
+    def find(value: str) -> str:
+        while parent[value] != value:
+            parent[value] = parent[parent[value]]
+            value = parent[value]
+        return value
+
+    def union(left: str, right: str) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[max(left_root, right_root)] = min(left_root, right_root)
+
+    comparisons: dict[str, list[tuple[str, float]]] = {task_id: [] for task_id in leaders}
+    task_ids = sorted(leaders)
+    for left_index, left_id in enumerate(task_ids):
+        for right_id in task_ids[left_index + 1 :]:
+            result = return_independence(leaders[left_id][1], leaders[right_id][1])
+            correlation = abs(float(result["pearson"]))
+            comparisons[left_id].append((right_id, correlation))
+            comparisons[right_id].append((left_id, correlation))
+            if correlation >= threshold:
+                union(left_id, right_id)
+    groups: dict[str, list[str]] = {}
+    for task_id in task_ids:
+        groups.setdefault(find(task_id), []).append(task_id)
+    cluster_ids = {
+        task_id: f"RC_{canonical_hash(sorted(members))[:10]}"
+        for members in groups.values()
+        for task_id in members
+    }
+    result: dict[str, dict[str, Any]] = {}
+    for task_id in task_ids:
+        nearest = max(comparisons[task_id], key=lambda item: item[1], default=(None, 0.0))
+        payload = {
+            "strategy_cluster_id": cluster_ids[task_id],
+            "nearest_task_id": nearest[0],
+            "nearest_active_return_correlation": float(nearest[1]),
+        }
+        task = leaders[task_id][0]
+        if any(task.get(key) != value for key, value in payload.items()):
+            combine_store.update_task(task_id, **payload)
+        result[task_id] = payload
+    return result

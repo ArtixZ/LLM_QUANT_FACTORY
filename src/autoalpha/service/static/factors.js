@@ -8,6 +8,7 @@ const libraryState = {
   task: "all",
   status: "all",
   lifecycle: "all",
+  behavior: "all",
   ranking: "long_only_overall",
   rankingAscending: false,
   favoriteOnly: false,
@@ -50,6 +51,10 @@ function bindLibraryControls() {
   });
   document.getElementById("lifecycleFilter").addEventListener("change", event => {
     libraryState.lifecycle = event.target.value;
+    renderFactorTable();
+  });
+  document.getElementById("behaviorFilter").addEventListener("change", event => {
+    libraryState.behavior = event.target.value;
     renderFactorTable();
   });
   document.getElementById("rankingMetric").addEventListener("change", event => {
@@ -96,6 +101,12 @@ function bindLibraryControls() {
       toast(error.message, true);
       button.disabled = false;
     }
+  };
+  document.getElementById("openQuantCombine").onclick = () => {
+    const factors = [...libraryState.selected];
+    if (!factors.length) return;
+    const origin = `${window.location.protocol}//${window.location.hostname}:8889`;
+    window.location.href = `${origin}/?factors=${encodeURIComponent(factors.join(","))}`;
   };
   document.getElementById("selectVisible").addEventListener("change", event => {
     filteredFactors().forEach(factor => {
@@ -180,12 +191,20 @@ function renderSummary() {
   text("observedCount", summary.observed_count);
   text("categoryCount", summary.category_count);
   text("clusterCount", summary.cluster_count);
+  const behavior = libraryState.data.behavior_clustering || {};
+  const behaviorCount = summary.behavior_cluster_count || 0;
+  text(
+    "behaviorClusterCount",
+    behavior.status === "RUNNING"
+      ? `${behavior.completed_count || 0}/${behavior.total_count || summary.factor_count}`
+      : behaviorCount || "待计算",
+  );
   text("shadowCount", summary.shadow_count);
   text("contaminatedCount", summary.contaminated_count);
   text("dataEnd", libraryState.data.data.last_trade_date);
   text(
     "librarySummary",
-    `${summary.factor_count} 个持久化候选 · 主榜 ${summary.long_only_evaluated_count || 0} · 近期榜 ${summary.recent_long_only_evaluated_count || 0} · ${summary.stale_protocol_count} 个待统一重评 · ${formatClock(libraryState.refreshedAt)} 已同步`,
+    `${summary.factor_count} 个持久化候选 · 主榜 ${summary.long_only_evaluated_count || 0} · 行为分类 ${behavior.status || "NOT_STARTED"}${behavior.status === "RUNNING" ? ` ${behavior.completed_count || 0}/${behavior.total_count || summary.factor_count}` : ""} · ${summary.stale_protocol_count} 个待统一重评 · ${formatClock(libraryState.refreshedAt)} 已同步`,
   );
 }
 
@@ -211,10 +230,15 @@ function filteredFactors() {
     .filter(factor => libraryState.task === "all" || factor.source_task_id === libraryState.task)
     .filter(factor => libraryState.status === "all" || factor.research_state === libraryState.status)
     .filter(factor => libraryState.lifecycle === "all" || factor.lifecycle_state === libraryState.lifecycle)
+    .filter(factor => {
+      if (libraryState.behavior === "all") return true;
+      if (libraryState.behavior === "LEADER") return factor.behavior_cluster_role === "LEADER";
+      return (factor.behavior_redundancy || "PENDING") === libraryState.behavior;
+    })
     .filter(factor => !libraryState.favoriteOnly || factor.favorite)
     .filter(factor => {
       if (!libraryState.query) return true;
-      const haystack = [factor.factor_id, factor.name, factor.family, factor.category, factor.hypothesis, factor.cluster_id, factor.lifecycle_state, factor.source_task_name, factor.source_market, factor.origin, ...(factor.tags || [])]
+      const haystack = [factor.factor_id, factor.name, factor.family, factor.category, factor.hypothesis, factor.cluster_id, factor.behavior_cluster_id, factor.behavior_cluster_label, factor.behavior_redundancy, factor.lifecycle_state, factor.source_task_name, factor.source_market, factor.origin, ...(factor.tags || [])]
         .join(" ").toLowerCase();
       return haystack.includes(libraryState.query);
     })
@@ -327,6 +351,21 @@ function factorRow(factor, rank) {
   const cluster = element("div", "cluster-cell");
   cluster.append(element("strong", "", factor.cluster_id), element("small", "", `${factor.cluster_role} · ${factor.cluster_size}`));
   row.append(cell(cluster));
+  const behaviorCluster = element("div", "cluster-cell");
+  behaviorCluster.append(
+    element("strong", "", factor.behavior_cluster_id || "待计算"),
+    element(
+      "small",
+      "",
+      factor.behavior_cluster_id
+        ? `${factor.behavior_cluster_role} · ${factor.behavior_cluster_size} · ${behaviorLabel(factor.behavior_redundancy)}`
+        : "向量行为指纹尚未完成",
+    ),
+  );
+  if (factor.behavior_nearest_factor_id) {
+    behaviorCluster.title = `最近因子 ${factor.behavior_nearest_factor_id} · 综合相似度 ${number4(factor.behavior_nearest_similarity)}`;
+  }
+  row.append(cell(behaviorCluster));
   const researchStatus = statusPill(factor.research_state);
   researchStatus.title = historicalMetrics
     ? `评价协议已过期：${factor.metric_protocol || "未知"}；当前任务协议：${factor.current_protocol || "未知"}`
@@ -375,7 +414,7 @@ async function openFactorDetail(factor) {
   text("factorDetailTitle", factor.name);
   text("factorDetailId", `${factor.factor_id} · ITER ${factor.source_iteration} · ${factor.source_task_name || factor.source_task_id}`);
   text("factorDetailHypothesis", factor.hypothesis || "该因子尚未记录经济假设。");
-  document.getElementById("factorDetailTags").replaceChildren(tag(factor.family || "未分类家族"), tag(factor.origin || "AUTO_LLM_RESEARCH"), ...(factor.tags || []).map(value => tag(value)), tag(`簇 ${factor.cluster_id || "--"}`), statusPill(factor.research_state), statusPill(factor.lifecycle_state));
+  document.getElementById("factorDetailTags").replaceChildren(tag(factor.family || "未分类家族"), tag(factor.origin || "AUTO_LLM_RESEARCH"), ...(factor.tags || []).map(value => tag(value)), tag(`结构簇 ${factor.cluster_id || "--"}`), tag(`行为簇 ${factor.behavior_cluster_id || "待计算"}`), statusPill(factor.research_state), statusPill(factor.lifecycle_state));
   const latex = expressionToLatex(factor.expression);
   const stats = expressionStats(factor.expression);
   document.getElementById("factorLatex").textContent = `\\[${latex}\\]`;
@@ -398,6 +437,9 @@ async function openFactorDetail(factor) {
     ["主榜年化换手", number(metrics.long_only_annual_turnover)],
     ["主榜容量", currency(metrics.long_only_capacity_cny)],
     ["组合边际净 IR", marginal.incremental_net_ir == null ? "未进入策略晋级" : number(marginal.incremental_net_ir)],
+    ["行为分类", factor.behavior_cluster_id ? `${factor.behavior_cluster_label} · ${factor.behavior_cluster_role} · ${behaviorLabel(factor.behavior_redundancy)}` : "待向量行为重算"],
+    ["最近行为因子", factor.behavior_nearest_factor_id ? `${factor.behavior_nearest_factor_id} · ${number4(factor.behavior_nearest_similarity)}` : "--"],
+    ["信号 / 残差收益相关", `${number4(factor.behavior_signal_correlation)} / ${number4(factor.behavior_return_correlation)}`],
     ["诊断 · Alpha多空夏普", number(metrics.sharpe_ratio)],
     ["诊断 · Alpha多空年化", percent(metrics.simple_annual_return)],
     ["诊断 · Rank IC / IR", `${number4(metrics.rank_ic_mean)} / ${number(metrics.rank_ic_ir)}`],
@@ -426,6 +468,10 @@ async function openFactorDetail(factor) {
   } catch (error) {
     if (libraryState.detailFactor?.factor_id === factor.factor_id) document.getElementById("factorIntelligence").innerHTML = `<p class="table-empty">${escapeHtml(error.message)}</p>`;
   }
+}
+
+function behaviorLabel(value) {
+  return ({ NEAR_DUPLICATE: "近重复", SUBSTITUTE: "可替代", RELATED: "相关", DISTINCT: "独立", PENDING: "待计算" })[value] || value || "待计算";
 }
 
 async function toggleFactorFavorite(factorId) {

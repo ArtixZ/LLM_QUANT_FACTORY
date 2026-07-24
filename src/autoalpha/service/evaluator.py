@@ -38,6 +38,7 @@ from autoalpha.research.evaluation import cross_sectional_ic
 from autoalpha.research.incremental import annual_robustness, compare_portfolios
 from autoalpha.research.multiple_testing import deflated_sharpe_ratio
 from autoalpha.research.statistics import hac_mean_inference
+from autoalpha.service.autocombine_intelligence import signal_independence_metrics
 from autoalpha.service.research_protocol import research_evidence_tier
 
 
@@ -252,9 +253,7 @@ class PriceVolumeEvaluator:
         """Evaluate alpha diagnostics and the deployable A-share portfolio separately."""
         if not factors:
             raise ValueError("A portfolio requires at least one factor")
-        evidence_tier = getattr(
-            self, "research_evidence_tier", research_evidence_tier(self.config)
-        )
+        evidence_tier = getattr(self, "research_evidence_tier", research_evidence_tier(self.config))
         normalized_weights = _normalize_weights(factors, weights)
         alpha_all, proposed_all = self._portfolio_paths(factors, normalized_weights)
         evaluation_dates = _walk_forward_dates(proposed_all.index, self.config)
@@ -299,6 +298,9 @@ class PriceVolumeEvaluator:
         )
         correlations = self._factor_correlations(factors)
         maximum_correlation = max((abs(value) for value in correlations.values()), default=0.0)
+        signal_independence = signal_independence_metrics(
+            [factor.factor_id for factor in factors], correlations
+        )
         proposed_sharpe = _annualized_ir(proposed["net"])
         proposed_annual_return = float(proposed["net"].mean() * 245)
         proposed_drawdown = _max_drawdown(proposed["net"])
@@ -330,6 +332,7 @@ class PriceVolumeEvaluator:
             "portfolio_annual_return_dispersion": annual.annual_return_dispersion,
             "portfolio_factor_count": len(factors),
             "portfolio_max_factor_correlation": maximum_correlation,
+            **signal_independence,
             "portfolio_incremental_net_ir": increment.incremental_net_ir,
             "portfolio_incremental_annual_return": increment.incremental_annual_return,
             "portfolio_incremental_max_drawdown": increment.incremental_max_drawdown,
@@ -352,9 +355,7 @@ class PriceVolumeEvaluator:
             },
             "portfolio_evaluation_protocol": self.config.governance.protocol_version,
             "portfolio_research_evidence_tier": evidence_tier,
-            "portfolio_task_production_promotion_allowed": (
-                evidence_tier == "PRIMARY_DISCOVERY"
-            ),
+            "portfolio_task_production_promotion_allowed": (evidence_tier == "PRIMARY_DISCOVERY"),
             "portfolio_holding_period_days": self.config.portfolio.holding_period_days,
             "portfolio_signal_availability": "END_OF_DAY_AFTER_CLOSE",
             "portfolio_execution_lag_sessions": 1,
@@ -720,9 +721,7 @@ class PriceVolumeEvaluator:
                 correlations[f"{left.factor_id}:{right.factor_id}"] = value
         return correlations
 
-    def _load_fields(
-        self, required_fields: set[str] | None = None
-    ) -> dict[str, pd.DataFrame]:
+    def _load_fields(self, required_fields: set[str] | None = None) -> dict[str, pd.DataFrame]:
         required = set(required_fields or set())
         required.update({"open", "adj_close", "amount"})
         if self._fields is not None and required.issubset(self._fields):
@@ -734,9 +733,7 @@ class PriceVolumeEvaluator:
             if self._fields is not None and required.issubset(self._fields):
                 return self._fields
             loaded = self._fields or {}
-            missing_factor_fields = sorted(
-                (required - set(loaded)) & set(self.factor_fields)
-            )
+            missing_factor_fields = sorted((required - set(loaded)) & set(self.factor_fields))
             initial_load = not loaded
             if not missing_factor_fields and not initial_load:
                 return loaded
@@ -878,9 +875,7 @@ def _active_return_metrics(
     tracking_error = float(active.std(ddof=1) * math.sqrt(245))
     benchmark_variance = float(aligned.var(ddof=1))
     beta = (
-        float(path["net"].cov(aligned) / benchmark_variance)
-        if benchmark_variance > 1e-15
-        else 0.0
+        float(path["net"].cov(aligned) / benchmark_variance) if benchmark_variance > 1e-15 else 0.0
     )
     return {
         f"{prefix}_benchmark_mode": "ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PROXY",
@@ -892,9 +887,7 @@ def _active_return_metrics(
         f"{prefix}_active_walk_forward_positive_fraction": float(
             np.mean([fold["annual_return"] > 0 for fold in folds])
         ),
-        f"{prefix}_active_walk_forward_worst_sharpe": float(
-            min(fold["sharpe"] for fold in folds)
-        ),
+        f"{prefix}_active_walk_forward_worst_sharpe": float(min(fold["sharpe"] for fold in folds)),
     }
 
 

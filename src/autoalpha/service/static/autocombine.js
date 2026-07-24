@@ -43,6 +43,14 @@ function statusLabel(status) {
   })[status] || status;
 }
 
+function qualificationLabel(status) {
+  return ({
+    NO_EXPERIMENT: "尚无实验", RESEARCH_LEADER_ONLY: "仅研究领先",
+    QUALIFIED_CHAMPION: "公开门禁合格", PRODUCTION_CANDIDATE: "生产候选",
+    BLIND_REJECTED: "盲测未通过",
+  })[status] || status || "--";
+}
+
 async function loadBootstrap() {
   state.bootstrap = await api("/api/bootstrap");
   renderSummary();
@@ -72,7 +80,7 @@ function renderTaskList() {
   $("taskList").innerHTML = tasks.length ? tasks.map((task) => `
     <div class="combine-task-item ${task.task_id === state.taskId ? "active" : ""}" data-task-id="${esc(task.task_id)}" role="button" tabindex="0">
       <div class="task-item-top"><strong>${esc(task.name)}</strong><button class="favorite-button${task.favorite ? " is-favorite" : ""}" type="button" data-favorite-task="${esc(task.task_id)}" title="${task.favorite ? "取消收藏" : "收藏组合任务"}" aria-label="${task.favorite ? "取消收藏" : "收藏组合任务"}"><i data-lucide="star"></i></button><span class="state-pill small ${esc(task.status)}">${esc(statusLabel(task.status))}</span></div>
-      <div class="task-item-meta"><span>${esc(task.market === "CN_A" ? "A 股" : task.market)} · ${task.factor_count} 因子</span><span>${task.iteration}/${task.budget.maximum_experiments}</span></div>
+      <div class="task-item-meta"><span>${esc(task.market === "CN_A" ? "A 股" : task.market)} · ${task.factor_count} 因子</span><span>${esc(qualificationLabel(task.qualification_status))}</span></div>
       <div class="task-item-foot"><code>${esc(task.task_id)}</code><div class="mini-progress"><i style="width:${Math.round(task.progress * 100)}%"></i></div></div>
     </div>`).join("") : `<div class="rail-empty">没有符合筛选条件的任务</div>`;
   document.querySelectorAll("[data-task-id]").forEach((button) => {
@@ -108,6 +116,8 @@ function renderTaskDetail() {
   $("taskFactorCount").textContent = `${task.factor_count} 个`;
   $("taskFactorBounds").textContent = `${task.construction.min_factors} — ${task.construction.max_factors}`;
   $("taskWeightBounds").textContent = `${percent(task.construction.minimum_weight, 0)} — ${percent(task.construction.maximum_weight, 0)} · 步长 ${percent(task.construction.weight_step, 0)}`;
+  $("taskQualification").textContent = qualificationLabel(task.qualification_status);
+  $("taskReturnCluster").textContent = task.strategy_cluster_id ? `${task.strategy_cluster_id} · 最近 ρ ${number(task.nearest_active_return_correlation, 3)}` : "等待收益证据";
   $("taskWorker").textContent = task.worker_alive ? "WORKER ACTIVE" : "IDLE";
   $("taskProgress").style.width = `${Math.round(task.progress * 100)}%`;
   $("snapshotBadge").textContent = `SNAPSHOT ${task.snapshot_hash.slice(0, 10)}`;
@@ -123,7 +133,7 @@ function renderTaskDetail() {
   $("dataPath").textContent = task.data_path;
   $("dataPath").title = task.data_path;
   renderFlow(task.phase, task.status);
-  renderChampion(best, snapshot);
+  renderChampion(state.detail, snapshot);
   renderExperiments(experiments, state.detail.frontier, snapshot);
   renderSnapshot(snapshot);
   renderLogs();
@@ -145,21 +155,32 @@ function factorName(factorId, snapshot = state.detail?.factor_snapshot || []) {
   return snapshot.find((item) => item.factor_id === factorId)?.name || factorId;
 }
 
-function renderChampion(best, snapshot) {
-  const metrics = best?.metrics || {};
-  $("bestSharpe").textContent = best ? number(metrics.portfolio_sharpe_ratio) : "--";
-  $("bestAnnual").textContent = best ? percent(metrics.portfolio_simple_annual_return) : "--";
-  $("bestActiveIr").textContent = best ? number(metrics.portfolio_active_information_ratio) : "--";
-  $("bestDrawdown").textContent = best ? percent(metrics.portfolio_max_drawdown) : "--";
-  $("bestWorstFold").textContent = best ? number(metrics.portfolio_walk_forward_worst_sharpe) : "--";
-  $("bestTurnover").textContent = best ? number(metrics.portfolio_annual_turnover) : "--";
-  $("championSubtitle").textContent = best ? `实验 #${best.iteration} · ${best.proposal_source} · 综合分 ${number(best.score, 3)}` : "尚无有效实验";
-  $("promoteButton").disabled = !best || best.gate_status !== "PASSED";
-  $("bestComposition").innerHTML = best ? best.factor_ids.map((factorId, index) => `
-    <div class="component-row"><strong title="${esc(factorId)}">${esc(factorName(factorId, snapshot))}</strong><div class="weight-bar"><i style="width:${Math.min(100, best.weights[index] * 200)}%"></i></div><span>${percent(best.weights[index], 0)}</span></div>`).join("") : `<div class="empty-line">搜索开始后将在此显示最佳组合构成</div>`;
+function renderChampion(detail, snapshot) {
+  const research = detail.research_leader;
+  const qualified = detail.qualified_champion;
+  const production = detail.production_candidate;
+  const shown = production || qualified || research;
+  const metrics = shown?.metrics || {};
+  $("researchLeaderState").textContent = research ? `#${research.iteration} · ${research.gate_status === "PASSED" ? "已过门禁" : "未合格"}` : "等待实验";
+  $("qualifiedChampionState").textContent = qualified ? `#${qualified.iteration} · PASSED` : "尚未产生";
+  $("productionCandidateState").textContent = production ? `#${production.iteration} · BLIND PASSED` : "尚未盲测";
+  $("bestSharpe").textContent = shown ? number(metrics.portfolio_sharpe_ratio) : "--";
+  $("bestAnnual").textContent = shown ? percent(metrics.portfolio_simple_annual_return) : "--";
+  $("bestActiveIr").textContent = shown ? number(metrics.portfolio_active_information_ratio) : "--";
+  $("bestDrawdown").textContent = shown ? percent(metrics.portfolio_max_drawdown) : "--";
+  $("bestWorstFold").textContent = shown ? number(metrics.portfolio_walk_forward_worst_sharpe) : "--";
+  $("bestEffectiveBets").textContent = shown ? number(metrics.portfolio_effective_factor_bets) : "--";
+  $("bestEffectiveMechanisms").textContent = shown ? number(metrics.portfolio_effective_mechanisms) : "--";
+  $("bestStrategyCorrelation").textContent = shown ? number(metrics.portfolio_max_strategy_active_correlation, 3) : "--";
+  const tier = production ? "生产候选" : qualified ? "合格冠军" : research ? "研究领先项（未合格）" : "";
+  $("championSubtitle").textContent = shown ? `${tier} · 实验 #${shown.iteration} · ${shown.proposal_source} · 目标分 ${number(shown.score, 3)}` : "尚无有效实验";
+  $("promoteButton").disabled = !production;
+  $("bestComposition").innerHTML = shown ? shown.factor_ids.map((factorId, index) => `
+    <div class="component-row"><strong title="${esc(factorId)}">${esc(factorName(factorId, snapshot))}</strong><div class="weight-bar"><i style="width:${Math.min(100, shown.weights[index] * 200)}%"></i></div><span>${percent(shown.weights[index], 0)}</span></div>`).join("") : `<div class="empty-line">搜索开始后将在此显示研究领先组合</div>`;
   const gates = $("bestGates");
-  gates.classList.toggle("failed", Boolean(best && best.failed_gates.length));
-  gates.textContent = !best ? "等待候选" : best.failed_gates.length ? `未通过：${best.failed_gates.join(" · ")}` : "全部公开组合门禁通过，可登记为 QUALIFIED 策略版本";
+  gates.classList.toggle("failed", Boolean(shown && shown.failed_gates.length));
+  const redundant = metrics.portfolio_redundant_factor_ids || [];
+  gates.textContent = !shown ? "等待候选" : shown.failed_gates.length ? `未通过：${shown.failed_gates.join(" · ")} · 门禁距离 ${number(shown.gate_distance, 3)}` : redundant.length ? `边际冗余：${redundant.join(" · ")}` : production ? "公开门禁与隔离盲测全部通过，可登记策略版本" : "公开组合门禁通过，等待隔离盲测";
 }
 
 function renderExperiments(experiments, frontier, snapshot) {
@@ -172,17 +193,18 @@ function renderExperiments(experiments, frontier, snapshot) {
       <td><strong>#${String(item.iteration).padStart(3, "0")}</strong></td>
       <td><strong>${esc(item.proposal_source)}</strong><br><code>${esc(item.action)}</code></td>
       <td><div class="factor-stack">${factors}</div></td>
-      <td><span class="gate-badge ${item.gate_status === "PASSED" ? "" : "failed"}" title="${esc(item.failed_gates.join(", "))}">${item.gate_status === "PASSED" ? "通过" : `${item.failed_gates.length} 项`}</span></td>
-      <td>${number(item.score, 3)}</td><td>${number(metrics.portfolio_sharpe_ratio)}</td><td>${percent(metrics.portfolio_simple_annual_return)}</td>
+      <td><strong>${esc(item.qualification || "EVALUATED")}</strong><br><span class="gate-badge ${item.gate_status === "PASSED" ? "" : "failed"}" title="${esc(item.failed_gates.join(", "))}">${item.gate_status === "PASSED" ? "通过" : `${item.failed_gates.length} 项`}</span></td>
+      <td>${number(item.gate_distance, 3)}</td><td>${number(item.score, 3)}</td><td>${number(metrics.portfolio_sharpe_ratio)}</td><td>${percent(metrics.portfolio_simple_annual_return)}</td>
       <td>${number(metrics.portfolio_active_information_ratio)}</td><td>${percent(metrics.portfolio_max_drawdown)}</td><td>${number(metrics.portfolio_walk_forward_worst_sharpe)}</td>
+      <td>${number(metrics.portfolio_effective_factor_bets)}</td><td>${number(metrics.portfolio_effective_mechanisms)}</td><td>${number(metrics.portfolio_max_factor_correlation, 3)}</td>
       <td>${number(metrics.portfolio_annual_turnover, 1)}</td><td>${number(item.duration_seconds, 1)}s</td></tr>`;
-  }).join("") : `<tr><td colspan="12" class="empty-table">尚未运行组合实验</td></tr>`;
+  }).join("") : `<tr><td colspan="16" class="empty-table">尚未运行组合实验</td></tr>`;
 }
 
 function renderSnapshot(snapshot) {
   $("snapshotCount").textContent = `${snapshot.length} 个因子`;
   $("snapshotList").innerHTML = snapshot.map((item, index) => `
-    <div class="snapshot-item ${item.holdout_contaminated ? "contaminated" : ""}"><code>#${index + 1}</code><strong title="${esc(item.factor_id)}">${esc(item.name)}</strong><span>${esc(item.family)}${item.required ? " · 必选" : ""}${item.holdout_contaminated ? " · 污染" : ""}</span><span>${number(item.prefilter_score, 2)}</span></div>`).join("");
+    <div class="snapshot-item ${item.holdout_contaminated ? "contaminated" : ""}" title="${esc(item.expression_summary || "")}"><code>#${index + 1}</code><strong title="${esc(item.factor_id)}">${esc(item.name)}</strong><span>${esc(item.mechanism || item.family)} · ${esc(item.semantic_cluster_id || "--")}${item.required ? " · 必选" : ""}${item.holdout_contaminated ? " · 污染" : ""}</span><span>${number(item.prefilter_score, 2)}</span></div>`).join("");
 }
 
 function renderLogs() {
@@ -293,12 +315,13 @@ function fillTaskDefaults() {
     formMinFactors: "min_factors", formMaxFactors: "max_factors",
     formMinWeight: "minimum_weight", formMaxWeight: "maximum_weight",
     formWeightStep: "weight_step", formPoolLimit: "candidate_pool_limit",
-    formFamilyLimit: "maximum_same_family",
+    formFamilyLimit: "maximum_same_family", formSemanticClusterLimit: "maximum_same_semantic_cluster",
   };
   Object.entries(constructionFields).forEach(([id, key]) => { if (construction[key] != null) $(id).value = construction[key]; });
   const budgetFields = {
     formExperiments: "maximum_experiments", formLlmProposals: "maximum_llm_proposals",
     formRuntime: "maximum_runtime_minutes", formWeightEvaluations: "weight_evaluations_per_subset",
+    formSubsetRevisits: "maximum_subset_revisits", formDirectionAttempts: "maximum_same_direction_attempts",
     formInterval: "iteration_interval_seconds",
   };
   Object.entries(budgetFields).forEach(([id, key]) => { if (budget[key] != null) $(id).value = budget[key]; });
@@ -320,7 +343,10 @@ function applyObjectivePreset() {
     formCoverage: "minimum_coverage", formPositiveFolds: "minimum_positive_fold_fraction",
     formWorstFold: "minimum_worst_fold_sharpe", formMaxDrawdown: "maximum_drawdown",
     formMaxTurnover: "maximum_annual_turnover", formMaxCorrelation: "maximum_factor_correlation",
-    formMinAnnual: "minimum_simple_annual_return",
+    formMinAnnual: "minimum_simple_annual_return", formMinEffectiveBets: "minimum_effective_factor_bets",
+    formMinEffectiveMechanisms: "minimum_effective_mechanisms", formMaxMechanismWeight: "maximum_mechanism_weight",
+    formMaxStrategyCorrelation: "maximum_strategy_active_correlation", formMinMarginalPositive: "minimum_marginal_positive_fraction",
+    formMinDsr: "minimum_deflated_sharpe_probability",
   };
   Object.entries(fields).forEach(([id, key]) => { $(id).value = preset[key]; });
   $("presetDescription").textContent = preset.description;
@@ -386,6 +412,7 @@ async function submitTask(event) {
       minimum_weight: Number($("formMinWeight").value), maximum_weight: Number($("formMaxWeight").value),
       weight_step: Number($("formWeightStep").value), candidate_pool_limit: Number($("formPoolLimit").value),
       allow_negative_weights: false, maximum_same_family: Number($("formFamilyLimit").value),
+      maximum_same_semantic_cluster: Number($("formSemanticClusterLimit").value),
     },
     objective: {
       profile: $("formObjectiveProfile").value, preset_version: 1, minimum_coverage: Number($("formCoverage").value),
@@ -393,11 +420,20 @@ async function submitTask(event) {
       maximum_drawdown: Number($("formMaxDrawdown").value), maximum_annual_turnover: Number($("formMaxTurnover").value),
       maximum_factor_correlation: Number($("formMaxCorrelation").value), minimum_cost_stress_ir: 0,
       minimum_simple_annual_return: Number($("formMinAnnual").value),
+      minimum_effective_factor_bets: Number($("formMinEffectiveBets").value),
+      minimum_effective_mechanisms: Number($("formMinEffectiveMechanisms").value),
+      maximum_mechanism_weight: Number($("formMaxMechanismWeight").value),
+      maximum_strategy_active_correlation: Number($("formMaxStrategyCorrelation").value),
+      minimum_marginal_positive_fraction: Number($("formMinMarginalPositive").value),
+      minimum_deflated_sharpe_probability: Number($("formMinDsr").value),
+      maximum_duplicate_semantic_factors: 0,
     },
     budget: {
       maximum_experiments: Number($("formExperiments").value), maximum_llm_proposals: Number($("formLlmProposals").value),
       maximum_runtime_minutes: Number($("formRuntime").value), maximum_holdout_submissions: 1,
       weight_evaluations_per_subset: Number($("formWeightEvaluations").value), iteration_interval_seconds: Number($("formInterval").value),
+      maximum_subset_revisits: Number($("formSubsetRevisits").value),
+      maximum_same_direction_attempts: Number($("formDirectionAttempts").value),
     },
   };
   try {
@@ -415,7 +451,7 @@ async function taskCommand(command) {
 }
 
 async function promoteBest() {
-  const best = state.detail?.best;
+  const best = state.detail?.production_candidate;
   if (!best) return;
   try {
     await api(`/api/tasks/${state.taskId}/promote`, { method: "POST", body: JSON.stringify({ experiment_id: best.id, name: state.detail.task.name }) });

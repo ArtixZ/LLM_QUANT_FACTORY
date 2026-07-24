@@ -200,17 +200,21 @@ class RealisticAshareBatchEngine(MassiveVectorBatchEngine):
         load_start = pd.Timestamp(self.config.start_date) - pd.Timedelta(days=800)
         load_end = pd.Timestamp(self.config.end_date) + pd.Timedelta(days=10)
         factor_columns = list(self.workspace.factor_fields)
-        columns = [
-            "trade_date",
-            "ts_code",
-            "open",
-            *factor_columns,
-            "raw_open",
-            "is_valid_ohlc",
-            "is_tradable_observation",
-            "can_buy_open_proxy",
-            "can_sell_open_proxy",
-        ]
+        columns = list(
+            dict.fromkeys(
+                [
+                    "trade_date",
+                    "ts_code",
+                    "open",
+                    *factor_columns,
+                    "raw_open",
+                    "is_valid_ohlc",
+                    "is_tradable_observation",
+                    "can_buy_open_proxy",
+                    "can_sell_open_proxy",
+                ]
+            )
+        )
         frames = []
         for year in range(load_start.year, load_end.year + 1):
             for path in sorted((panel_path / f"trade_year={year}").glob("*.parquet")):
@@ -221,7 +225,7 @@ class RealisticAshareBatchEngine(MassiveVectorBatchEngine):
         data["trade_date"] = pd.to_datetime(data["trade_date"])
         data = data[(data["trade_date"] >= load_start) & (data["trade_date"] <= load_end)]
         valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
-        value_columns = ["open", *factor_columns, "raw_open"]
+        value_columns = list(dict.fromkeys(["open", *factor_columns, "raw_open"]))
         data.loc[~valid, value_columns] = np.nan
         fields = {
             name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()

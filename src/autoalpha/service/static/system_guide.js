@@ -111,6 +111,7 @@ const FLOW_STAGES = [
 
 const serviceOrigins = {
   combine: `${window.location.protocol}//${window.location.hostname}:8888/`,
+  quantcombine: `${window.location.protocol}//${window.location.hostname}:8889/`,
   strategies: `${window.location.protocol}//${window.location.hostname}:8888/strategies`,
   batch: `${window.location.protocol}//${window.location.hostname}:8790/`,
 };

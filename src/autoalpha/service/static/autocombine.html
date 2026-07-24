@@ -26,7 +26,7 @@
       <button class="button primary" id="newTaskButton"><i data-lucide="plus"></i>新建组合任务</button>
     </div>
   </header>
-  <script src="/static/platform_header.js?v=20260718-v4"></script>
+  <script src="/static/platform_header.js?v=20260718-quant-v1"></script>
 
   <main class="combine-shell">
     <section class="summary-band" aria-label="AutoCombine 状态摘要">
@@ -87,6 +87,8 @@
               <div><span>可见因子</span><strong id="taskFactorCount">--</strong></div>
               <div><span>因子数约束</span><strong id="taskFactorBounds">--</strong></div>
               <div><span>权重约束</span><strong id="taskWeightBounds">--</strong></div>
+              <div><span>研究资格</span><strong id="taskQualification">--</strong></div>
+              <div><span>收益来源簇</span><strong id="taskReturnCluster">--</strong></div>
               <div><span>并发状态</span><strong id="taskWorker">--</strong></div>
             </div>
             <div class="progress-track"><i id="taskProgress"></i></div>
@@ -97,7 +99,7 @@
             <div class="panel-header"><div><h2>研究流程</h2><p>当前步骤高亮，盲测边界与公开搜索严格分离</p></div><span class="state-pill small" id="snapshotBadge">SNAPSHOT --</span></div>
             <div class="combine-flow-grid" id="flowGrid">
               <div class="flow-step" data-phase="PREFLIGHT"><span>01</span><strong>冻结快照</strong><p>因子、公式、数据与协议哈希</p></div>
-              <div class="flow-step" data-phase="SCREENING"><span>02</span><strong>预检聚类</strong><p>污染剔除与机制分散</p></div>
+              <div class="flow-step" data-phase="SCREENING"><span>02</span><strong>预检聚类</strong><p>机制指纹、语义簇与表达式去重</p></div>
               <div class="flow-step" data-phase="SEARCHING"><span>03</span><strong>组合搜索</strong><p>LLM 提议与确定性搜索协同</p></div>
               <div class="flow-step" data-phase="ROBUSTNESS"><span>04</span><strong>稳健性门禁</strong><p>滚动窗口、成本、回撤与相关性</p></div>
               <div class="flow-step blind" data-phase="BLIND_REVIEW"><span>05</span><strong>隔离盲测</strong><p>仅返回分类结论与证据哈希</p></div>
@@ -114,14 +116,21 @@
 
           <div class="analysis-grid">
             <section class="panel champion-panel">
-              <div class="panel-header"><div><h2>当前最佳组合</h2><p id="championSubtitle">尚无有效实验</p></div><button class="button" id="promoteButton" disabled><i data-lucide="package-check"></i>进入策略库</button></div>
+              <div class="panel-header"><div><h2>组合资格与领先项</h2><p id="championSubtitle">尚无有效实验</p></div><button class="button" id="promoteButton" disabled><i data-lucide="package-check"></i>进入策略库</button></div>
+              <div class="qualification-strip">
+                <div><span>研究领先项</span><strong id="researchLeaderState">等待实验</strong></div>
+                <div><span>合格冠军</span><strong id="qualifiedChampionState">尚未产生</strong></div>
+                <div><span>生产候选</span><strong id="productionCandidateState">尚未盲测</strong></div>
+              </div>
               <div class="champion-metrics">
                 <div><span>纯多夏普</span><strong id="bestSharpe">--</strong></div>
                 <div><span>简单年化</span><strong id="bestAnnual">--</strong></div>
                 <div><span>主动 IR</span><strong id="bestActiveIr">--</strong></div>
                 <div><span>最大回撤</span><strong id="bestDrawdown">--</strong></div>
                 <div><span>最差折夏普</span><strong id="bestWorstFold">--</strong></div>
-                <div><span>年化换手</span><strong id="bestTurnover">--</strong></div>
+                <div><span>有效因子下注</span><strong id="bestEffectiveBets">--</strong></div>
+                <div><span>有效机制数</span><strong id="bestEffectiveMechanisms">--</strong></div>
+                <div><span>策略相关性</span><strong id="bestStrategyCorrelation">--</strong></div>
               </div>
               <div class="composition" id="bestComposition"></div>
               <div class="gate-line" id="bestGates">等待候选</div>
@@ -140,6 +149,10 @@
                   <option value="portfolio_walk_forward_positive_fraction">正折比例</option>
                   <option value="portfolio_annual_turnover">年化换手</option>
                   <option value="portfolio_max_factor_correlation">最大相关性</option>
+                  <option value="portfolio_effective_factor_bets">有效因子下注</option>
+                  <option value="portfolio_effective_mechanisms">有效机制数</option>
+                  <option value="portfolio_max_strategy_active_correlation">策略主动相关性</option>
+                  <option value="autocombine_gate_distance">门禁距离</option>
                 </select></label>
               </div>
               <div class="combine-chart"><canvas id="metricChart"></canvas><div id="chartEmpty">等待实验数据</div></div>
@@ -151,7 +164,7 @@
             <div class="panel-header"><div><h2>组合实验档案</h2><p>子集、最终离散权重、来源、门禁与公开指标完整留痕</p></div><span id="experimentSummary">0 个实验</span></div>
             <div class="experiment-table-wrap">
               <table class="experiment-table">
-                <thead><tr><th>轮次</th><th>来源 / 动作</th><th>因子组合与权重</th><th>门禁</th><th>综合分</th><th>夏普</th><th>年化</th><th>主动 IR</th><th>回撤</th><th>最差折</th><th>换手</th><th>耗时</th></tr></thead>
+                <thead><tr><th>轮次</th><th>来源 / 动作</th><th>因子组合与权重</th><th>资格 / 门禁</th><th>门禁距离</th><th>目标分</th><th>夏普</th><th>年化</th><th>主动 IR</th><th>回撤</th><th>最差折</th><th>有效下注</th><th>机制数</th><th>最大相关</th><th>换手</th><th>耗时</th></tr></thead>
                 <tbody id="experimentRows"></tbody>
               </table>
             </div>
@@ -219,6 +232,7 @@
           <label>最大权重<input id="formMaxWeight" type="number" min="0.1" max="1" step="0.05" value="0.5"></label>
           <label>权重步长<input id="formWeightStep" type="number" min="0.01" max="0.25" step="0.01" value="0.05"></label>
           <label>同机制上限<input id="formFamilyLimit" type="number" min="1" max="5" value="2"></label>
+          <label>同语义簇上限<input id="formSemanticClusterLimit" type="number" min="1" max="5" value="1"></label>
         </section>
         <section class="form-section">
           <h3>优化目标与门禁</h3>
@@ -229,15 +243,23 @@
           <label>最差折夏普下限<input id="formWorstFold" type="number" min="-10" max="10" step="0.1" value="-0.5"></label>
           <label>最大回撤<input id="formMaxDrawdown" type="number" min="0.01" max="1" step="0.01" value="0.3"></label>
           <label>最大年化换手<input id="formMaxTurnover" type="number" min="0.1" max="1000" step="1" value="40"></label>
-          <label>最大因子相关性<input id="formMaxCorrelation" type="number" min="0" max="1" step="0.01" value="0.85"></label>
+          <label>最大因子相关性<input id="formMaxCorrelation" type="number" min="0" max="1" step="0.01" value="0.75"></label>
           <label>最低简单年化<input id="formMinAnnual" type="number" min="-1" max="10" step="0.01" value="0"></label>
+          <label>最低有效因子下注<input id="formMinEffectiveBets" type="number" min="1" max="12" step="0.05" value="1.35"></label>
+          <label>最低有效机制数<input id="formMinEffectiveMechanisms" type="number" min="1" max="12" step="0.05" value="1.4"></label>
+          <label>单机制最大权重<input id="formMaxMechanismWeight" type="number" min="0.1" max="1" step="0.05" value="0.75"></label>
+          <label>策略主动相关上限<input id="formMaxStrategyCorrelation" type="number" min="0" max="1" step="0.05" value="0.75"></label>
+          <label>最低边际正贡献比例<input id="formMinMarginalPositive" type="number" min="0" max="1" step="0.05" value="0.6"></label>
+          <label>最低 DSR 概率<input id="formMinDsr" type="number" min="0" max="1" step="0.05" value="0.5"></label>
         </section>
         <section class="form-section">
           <h3>实验预算</h3>
           <label>最大实验数<input id="formExperiments" type="number" min="1" max="5000" value="60"></label>
           <label>LLM 提议上限<input id="formLlmProposals" type="number" min="0" max="1000" value="20"></label>
           <label>最长分钟<input id="formRuntime" type="number" min="1" max="10080" value="180"></label>
-          <label>每子集权重评价<input id="formWeightEvaluations" type="number" min="1" max="30" value="6"></label>
+          <label>每子集权重评价<input id="formWeightEvaluations" type="number" min="1" max="100" value="12"></label>
+          <label>同子集最多探索<input id="formSubsetRevisits" type="number" min="1" max="10" value="2"></label>
+          <label>同方向连续尝试<input id="formDirectionAttempts" type="number" min="1" max="10" value="3"></label>
           <label>迭代间隔秒<input id="formInterval" type="number" min="0" max="3600" step="0.5" value="0.5"></label>
         </section>
       </div>
@@ -248,6 +270,6 @@
 
   <div id="toast" role="status"></div>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="/static/autocombine.js?v=20260718-favorites-v1"></script>
+  <script src="/static/autocombine.js?v=20260718-independence-v2"></script>
 </body>
 </html>

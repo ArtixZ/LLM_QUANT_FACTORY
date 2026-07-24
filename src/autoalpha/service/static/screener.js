@@ -27,14 +27,30 @@ async function loadLibrary() {
     input.value = data.last_trade_date;
     text("screenerDataRange", `${data.first_trade_date} - ${data.last_trade_date}`);
     text("screenerSummary", `${screenerState.library.summary.factor_count} 个因子 · 收盘后横截面评分`);
-    const queryFactors = new URLSearchParams(window.location.search).get("factors");
+    const queryParameters = new URLSearchParams(window.location.search);
+    const queryFactors = queryParameters.get("factors");
     if (queryFactors) {
       const available = new Set(screenerState.library.factors.map(factor => factor.factor_id));
-      queryFactors.split(",").filter(factorId => available.has(factorId)).slice(0, 12)
-        .forEach(factorId => screenerState.selected.set(factorId, 1));
+      const queryWeights = (queryParameters.get("weights") || "").split(",").map(Number);
+      queryFactors.split(",").slice(0, 12).forEach((factorId, index) => {
+        if (!available.has(factorId)) return;
+        const weight = queryWeights[index];
+        screenerState.selected.set(factorId, Number.isFinite(weight) && weight > 0 ? weight : 1);
+      });
     }
+    const requestedDate = queryParameters.get("as_of_date");
+    if (requestedDate && requestedDate >= input.min && requestedDate <= input.max) input.value = requestedDate;
+    const requestedCount = Number(queryParameters.get("selection_count"));
+    if (Number.isInteger(requestedCount) && requestedCount >= 1 && requestedCount <= 500) {
+      document.getElementById("selectionCount").value = requestedCount;
+    }
+    const requestedSide = queryParameters.get("selection_side");
+    if (["TOP", "BOTTOM"].includes(requestedSide)) document.getElementById("selectionSide").value = requestedSide;
     await loadPresets();
     renderPicker();
+    if (queryParameters.get("run") === "1" && screenerState.selected.size) {
+      await runScreen({ preventDefault() {} });
+    }
   } catch (error) {
     toast(error.message, true);
   }

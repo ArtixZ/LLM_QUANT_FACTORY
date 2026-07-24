@@ -7,6 +7,8 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from autoalpha.backtest.target_book import rebalance_mask, select_target_positions
+
 RebalanceSchedule = Literal[
     "WEEKLY_FIRST_SESSION", "BIWEEKLY_FIRST_SESSION", "MONTHLY_FIRST_SESSION"
 ]
@@ -84,10 +86,9 @@ class AshareVectorBacktester:
             raise ValueError("A-share vector backtest requires at least 60 entry sessions")
 
         dates = entry_return.index
-        schedule = _rebalance_mask(dates, self.config.rebalance_schedule, active)
+        schedule = rebalance_mask(dates, self.config.rebalance_schedule, active)
         signal_values = signal.to_numpy(dtype=float, copy=False)
         return_values = entry_return.to_numpy(dtype=float, copy=False)
-        raw_values = raw_open.to_numpy(dtype=float, copy=False)
         buy_values = can_buy_open.fillna(False).to_numpy(dtype=bool, copy=False)
         sell_values = can_sell_open.fillna(False).to_numpy(dtype=bool, copy=False)
         weights = np.zeros(signal.shape[1], dtype=float)
@@ -118,9 +119,7 @@ class AshareVectorBacktester:
             buy_turnover = 0.0
             sell_turnover = 0.0
             if schedule[position] and position > 0:
-                desired = self._desired_weights(
-                    signal_values[position - 1], raw_values[position], buy_values[position]
-                )
+                desired = self._desired_weights(signal_values[position - 1])
                 weights, buy_turnover, sell_turnover, transaction_cost = self._execute_target(
                     weights,
                     desired,
@@ -182,23 +181,16 @@ class AshareVectorBacktester:
             },
         )
 
-    def _desired_weights(
-        self, signal: np.ndarray, raw_open: np.ndarray, can_buy: np.ndarray
-    ) -> np.ndarray:
-        eligible = np.isfinite(signal) & np.isfinite(raw_open) & (raw_open > 0) & can_buy
-        candidates = np.flatnonzero(eligible)
+    def _desired_weights(self, signal: np.ndarray) -> np.ndarray:
+        candidates = select_target_positions(
+            signal,
+            selection_fraction=self.config.selection_fraction,
+            maximum_positions=self.config.maximum_positions,
+        )
         desired = np.zeros_like(signal, dtype=float)
         if candidates.size == 0:
             return desired
-        count = min(
-            self.config.maximum_positions,
-            max(1, int(math.ceil(candidates.size * self.config.selection_fraction))),
-        )
-        if count < candidates.size:
-            selected = candidates[np.argpartition(signal[candidates], -count)[-count:]]
-        else:
-            selected = candidates
-        desired[selected] = self.config.gross_exposure / selected.size
+        desired[candidates] = self.config.gross_exposure / candidates.size
         return desired
 
     def _execute_target(
@@ -262,23 +254,6 @@ def _align_panels(*panels: pd.DataFrame) -> tuple[pd.DataFrame, ...]:
     if len(index) < 3 or len(columns) == 0:
         raise ValueError("A-share vector panels do not have enough aligned observations")
     return tuple(panel.sort_index().reindex(index=index, columns=columns) for panel in panels)
-
-
-def _rebalance_mask(
-    dates: pd.DatetimeIndex, schedule: RebalanceSchedule, active: np.ndarray
-) -> np.ndarray:
-    if schedule == "MONTHLY_FIRST_SESSION":
-        keys = dates.to_period("M").astype(str)
-    else:
-        iso = dates.isocalendar()
-        keys = (iso["year"].astype(str) + "-" + iso["week"].astype(str)).to_numpy()
-    first = np.r_[True, np.asarray(keys[1:] != keys[:-1], dtype=bool)]
-    if schedule == "BIWEEKLY_FIRST_SESSION":
-        weekly_positions = np.flatnonzero(first & active)
-        keep = np.zeros(len(dates), dtype=bool)
-        keep[weekly_positions[::2]] = True
-        first = keep
-    return first & active
 
 
 def _metrics(

@@ -18,6 +18,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     await loadTemplates();
     await Promise.all([loadPresets(), loadFactors(), loadHistory()]);
+    applyBacktestQueryParameters();
   } catch (error) {
     toast(error.message, true);
   }
@@ -182,7 +183,17 @@ async function loadFactors() {
   endInput.value = data.last_trade_date;
   text("dataRange", `${data.first_trade_date} — ${data.last_trade_date}`);
   text("backtestSummary", `${backtestState.library.summary.factor_count} 个因子 · ${data.fingerprint.slice(0, 12)} · MANUAL / NON-GOVERNANCE`);
+  renderPicker();
+  renderSelectedEditor();
+}
+
+function applyBacktestQueryParameters() {
   const queryParameters = new URLSearchParams(window.location.search);
+  const queryPreset = queryParameters.get("backtest_preset");
+  if (queryPreset && backtestState.presets.some(preset => preset.preset_id === queryPreset)) {
+    document.getElementById("backtestPreset").value = queryPreset;
+    applyBacktestPreset();
+  }
   const queryFactors = queryParameters.get("factors");
   if (queryFactors) {
     const available = new Set(backtestState.library.factors.map(factor => factor.factor_id));
@@ -193,6 +204,24 @@ async function loadFactors() {
       backtestState.selected.set(factorId, Number.isFinite(weight) && weight > 0 ? weight : 1);
     });
   }
+  const assignments = {
+    start_date: "startDate",
+    end_date: "endDate",
+    backtest_engine: "backtestEngine",
+    execution_data_mode: "executionDataMode",
+    product_template: "productTemplate",
+    gross_exposure: "grossExposure",
+    holding_period_days: "holdingPeriod",
+    rebalance_schedule: "rebalanceSchedule",
+    maximum_positions: "maximumPositions",
+    selection_fraction: "selectionFraction",
+  };
+  Object.entries(assignments).forEach(([parameter, controlId]) => {
+    const value = queryParameters.get(parameter);
+    const control = document.getElementById(controlId);
+    if (value !== null && control) control.value = value;
+  });
+  applyEngineDefaults(false);
   renderPicker();
   renderSelectedEditor();
 }

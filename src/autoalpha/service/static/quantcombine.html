@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QuantCombine · 统计组合优化</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v3">
+  <link rel="stylesheet" href="/static/quantcombine.css?v=20260720-workflows-v2">
+</head>
+<body class="quant-body">
+  <header class="app-header">
+    <div class="identity">
+      <h1>QuantCombine</h1>
+      <p>非 LLM 因子筛选、多目标搜索与稳健组合优化</p>
+    </div>
+    <div class="header-actions">
+      <span class="live-dot"></span><span>实时</span>
+      <span class="state-pill small algorithm-pill">LLM OFF</span>
+      <button class="button primary" id="newTaskButton"><i data-lucide="plus"></i>新建统计任务</button>
+    </div>
+  </header>
+  <script src="/static/platform_header.js?v=20260718-quant-v1"></script>
+
+  <main class="quant-page">
+    <section class="quant-kpis" aria-label="QuantCombine 状态摘要">
+      <div><span>统计任务</span><strong id="taskCount">--</strong><small id="activeTaskCount">--</small></div>
+      <div><span>候选组合</span><strong id="candidateCount">--</strong><small>全部搜索过程可审计</small></div>
+      <div><span>因子库</span><strong id="factorCount">--</strong><small>与 AutoAlpha 实时共库</small></div>
+      <div><span>Pareto 候选</span><strong id="paretoCount">--</strong><small>收益、风险与独立性并列</small></div>
+      <div><span>研究引擎</span><strong>READY</strong><small>SFFS · NSGA-II · Bayesian</small></div>
+    </section>
+
+    <div class="quant-layout">
+      <aside class="quant-sidebar">
+        <div class="section-heading"><div><span>TASK REGISTRY</span><h2>统计优化任务</h2></div><button class="icon-button" id="refreshButton" title="刷新"><i data-lucide="refresh-cw"></i></button></div>
+        <div class="sidebar-filters"><input id="taskSearch" type="search" placeholder="搜索任务或ID"><select id="taskStatus"><option value="ALL">全部状态</option><option value="RUNNING">运行中</option><option value="READY">待启动</option><option value="PAUSED">已暂停</option><option value="DELIVERY">已完成</option></select></div>
+        <div class="quant-task-list" id="taskList"></div>
+      </aside>
+
+      <section class="quant-workspace" id="emptyWorkspace">
+        <div class="empty-state"><i data-lucide="binary"></i><h2>创建第一个统计组合任务</h2><p>从共享因子库冻结候选空间，由确定性和统计算法完成筛选、搜索、验证与审计。</p><button class="button primary" id="emptyCreateButton">新建任务</button></div>
+      </section>
+
+      <section class="quant-workspace" id="taskWorkspace" hidden>
+        <section class="quant-task-head">
+          <div><span>QUANTCOMBINE TASK</span><h2 id="taskName">--</h2><code id="taskIdentity">--</code></div>
+          <div class="task-actions">
+            <span class="state-pill" id="taskState">--</span>
+            <button class="button" id="headerQuickScreenButton" type="button" disabled title="使用当前最佳组合在最新交易日快速选股"><i data-lucide="list-filter"></i>便捷选股</button>
+            <button class="button" id="headerQuickBacktestButton" type="button" disabled title="将当前最佳组合及任务协议带入手动回测"><i data-lucide="chart-no-axes-combined"></i>便捷回测</button>
+            <button class="button primary" id="startButton"><i data-lucide="play"></i>启动</button>
+            <button class="button danger" id="stopButton"><i data-lucide="square"></i>停止</button>
+          </div>
+        </section>
+
+        <section class="task-progress-band">
+          <div><span>阶段</span><strong id="taskPhase">--</strong></div>
+          <div><span>真实评价</span><strong id="evaluationProgress">--</strong></div>
+          <div><span>候选组合</span><strong id="taskCandidateCount">--</strong></div>
+          <div><span>研究资格</span><strong id="qualificationState">--</strong></div>
+          <div class="progress-cell"><span>预算进度</span><div class="progress-track"><i id="progressFill"></i></div><strong id="progressText">--</strong></div>
+        </section>
+
+        <section class="panel pipeline-panel">
+          <div class="panel-header"><div><h2>算法流水线</h2><p>当前步骤高亮，隐藏测试仅在公开门禁通过后执行</p></div><span class="state-pill small">NO LLM</span></div>
+          <div class="quant-pipeline" id="pipeline">
+            <div data-phase="PREFLIGHT"><b>01</b><strong>冻结快照</strong><span>公式与协议哈希</span></div>
+            <div data-phase="SCREENING"><b>02</b><strong>稳定性筛选</strong><span>逐因子统一重评</span></div>
+            <div data-phase="CLUSTERING"><b>03</b><strong>收益聚类</strong><span>语义与收益去重</span></div>
+            <div data-phase="SFFS"><b>04</b><strong>SFFS</strong><span>前进加入与浮动删除</span></div>
+            <div data-phase="EVOLUTION"><b>05</b><strong>NSGA-II</strong><span>Pareto进化搜索</span></div>
+            <div data-phase="ADAPTIVE"><b>06</b><strong>自适应采样</strong><span>组合后验更新</span></div>
+            <div data-phase="BLIND_REVIEW"><b>07</b><strong>隔离盲测</strong><span>生产候选验证</span></div>
+            <div data-phase="DELIVERY"><b>08</b><strong>策略交付</strong><span>版本化策略规范</span></div>
+          </div>
+        </section>
+
+        <section class="protocol-band">
+          <div><span>探索区</span><strong id="explorationRange">--</strong></div>
+          <div><span>验证区</span><strong id="validationRange">--</strong></div>
+          <div><span>隐藏区</span><strong id="holdoutRange">REDACTED</strong></div>
+          <div><span>引擎模式</span><strong id="engineMode">--</strong></div>
+          <div><span>因子约束</span><strong id="factorConstraint">--</strong></div>
+        </section>
+
+        <div class="quant-analysis-grid">
+          <section class="panel best-panel">
+            <div class="panel-header">
+              <div><h2>当前最佳组合</h2><p id="bestSubtitle">等待候选</p></div>
+              <div class="best-actions">
+                <button class="button" id="quickScreenButton" type="button" disabled><i data-lucide="list-filter"></i>便捷选股</button>
+                <button class="button" id="quickBacktestButton" type="button" disabled><i data-lucide="chart-no-axes-combined"></i>便捷回测</button>
+                <button class="button" id="promoteButton" disabled><i data-lucide="package-check"></i>进入策略库</button>
+              </div>
+            </div>
+            <div class="qualification-strip"><div><span>研究领先</span><strong id="leaderState">--</strong></div><div><span>合格冠军</span><strong id="qualifiedState">--</strong></div><div><span>生产候选</span><strong id="productionState">--</strong></div></div>
+            <div class="best-metrics">
+              <div><span>纯多夏普</span><strong id="bestSharpe">--</strong></div>
+              <div><span>简单年化</span><strong id="bestAnnual">--</strong></div>
+              <div><span>最大回撤</span><strong id="bestDrawdown">--</strong></div>
+              <div><span>最差折夏普</span><strong id="bestWorstFold">--</strong></div>
+              <div><span>有效下注</span><strong id="bestBets">--</strong></div>
+              <div><span>有效机制</span><strong id="bestMechanisms">--</strong></div>
+              <div><span>最大相关</span><strong id="bestCorrelation">--</strong></div>
+              <div><span>年化换手</span><strong id="bestTurnover">--</strong></div>
+            </div>
+            <div class="best-composition" id="bestComposition"></div>
+            <div class="gate-summary" id="bestGates">等待评价</div>
+          </section>
+
+          <section class="panel trajectory-panel">
+            <div class="panel-header chart-heading"><div><h2>多目标搜索轨迹</h2><p>每个点是一组实际回测过的因子和权重</p></div><label>指标<select id="chartMetric"><option value="portfolio_sharpe_ratio">纯多夏普</option><option value="portfolio_simple_annual_return">简单年化</option><option value="portfolio_max_drawdown">最大回撤</option><option value="portfolio_walk_forward_worst_sharpe">最差折夏普</option><option value="portfolio_annual_turnover">年化换手</option><option value="portfolio_effective_factor_bets">有效下注</option><option value="portfolio_effective_mechanisms">有效机制</option><option value="gate_distance">门禁距离</option></select></label></div>
+            <div class="chart-wrap"><canvas id="trajectoryChart"></canvas><p id="chartEmpty">等待组合评价</p></div>
+            <div class="chart-legend"><span class="sffs">SFFS</span><span class="evolution">NSGA-II</span><span class="adaptive">Adaptive</span><span class="pareto">Pareto</span></div>
+          </section>
+        </div>
+
+        <section class="panel screening-panel">
+          <div class="panel-header"><div><h2>因子筛选与独立簇</h2><p>单因子统一重评后，按验证期收益与语义指纹聚类</p></div><span id="screenSummary">0 已评价</span></div>
+          <div class="table-scroll"><table><thead><tr><th>排名</th><th>因子</th><th>机制</th><th>收益簇</th><th>角色</th><th>稳定性</th><th>夏普</th><th>年化</th><th>回撤</th><th>最差折</th><th>换手</th><th>处理</th></tr></thead><tbody id="screenRows"></tbody></table></div>
+        </section>
+
+        <section class="panel candidate-panel">
+          <div class="panel-header"><div><h2>候选组合档案</h2><p>SFFS、进化与自适应搜索结果统一比较</p></div><span id="candidateSummary">0 个候选</span></div>
+          <div class="table-scroll"><table><thead><tr><th>#</th><th>阶段 / 算法</th><th>因子与权重</th><th>Pareto</th><th>门禁</th><th>得分</th><th>夏普</th><th>年化</th><th>回撤</th><th>最差折</th><th>下注</th><th>机制</th><th>相关</th><th>换手</th></tr></thead><tbody id="candidateRows"></tbody></table></div>
+        </section>
+
+        <div class="quant-bottom-grid">
+          <section class="panel audit-panel"><div class="panel-header"><div><h2>审计时间线</h2><p>筛选、搜索、门禁与交付操作完整留痕</p></div></div><div class="event-list" id="eventList"></div></section>
+          <section class="panel config-panel"><div class="panel-header"><div><h2>冻结配置</h2><p>任务运行期间不可漂移</p></div></div><dl id="configList"></dl></section>
+        </div>
+      </section>
+
+      <section class="quant-workspace" id="strategyWorkspace" hidden>
+        <section class="panel strategy-panel"><div class="panel-header"><div><h2>QuantCombine 策略库</h2><p>通过隔离盲测后交付的非 LLM 策略版本</p></div><span id="strategyCount">0 个版本</span></div><div id="strategyList" class="strategy-list"></div></section>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="taskDialog" class="quant-dialog">
+    <form id="taskForm">
+      <div class="dialog-title"><div><span>NEW QUANTCOMBINE TASK</span><h2>创建统计组合优化任务</h2></div><button type="button" class="icon-button" id="closeDialog"><i data-lucide="x"></i></button></div>
+      <div class="quant-form-grid">
+        <section><h3>任务与数据</h3><label>任务名称<input id="formName" required maxlength="100" placeholder="例如：A股稳健独立收益组合"></label><label>市场<select id="formMarket"><option value="CN_A">A 股</option></select></label><label class="wide">数据工作区<input id="formDataPath" required></label><label class="wide">说明<textarea id="formNotes" maxlength="2000"></textarea></label></section>
+        <section><h3>因子可见范围</h3><label>范围模式<select id="formScopeMode"><option value="SMART">智能候选池</option><option value="MANUAL">手动指定</option><option value="HYBRID">必选 + 智能补足</option></select></label><label>候选池上限<input id="formPoolLimit" type="number" min="5" max="100" value="30"></label><label class="wide">来源任务<select id="formSourceTasks" multiple size="4"></select></label><div class="factor-picker wide"><div><input id="factorSearch" type="search" placeholder="搜索名称、ID、机制或来源"><strong id="selectedFactorCount">0 已选</strong></div><div id="factorPickerList"></div></div></section>
+        <section><h3>时间协议</h3><label>探索起始<input id="formExplorationStart" type="date" required></label><label>探索结束<input id="formExplorationEnd" type="date" required></label><label>验证起始<input id="formValidationStart" type="date" required></label><label>验证结束<input id="formValidationEnd" type="date" required></label><label>隐藏起始<input id="formHoldoutStart" type="date" required></label><label>隐藏结束<input id="formHoldoutEnd" type="date" required></label><label>最少验证折<input id="formMinimumFolds" type="number" min="1" max="20" value="3"></label></section>
+        <section><h3>组合约束</h3><label>最少因子<input id="formMinFactors" type="number" min="1" max="12" value="2"></label><label>最多因子<input id="formMaxFactors" type="number" min="1" max="12" value="5"></label><label>最小权重<input id="formMinWeight" type="number" min="0.01" max="0.5" step="0.01" value="0.05"></label><label>最大权重<input id="formMaxWeight" type="number" min="0.1" max="1" step="0.05" value="0.5"></label><label>权重步长<input id="formWeightStep" type="number" min="0.01" max="0.25" step="0.01" value="0.05"></label></section>
+        <section><h3>统计搜索引擎</h3><label>引擎模式<select id="formEngineMode"><option value="ENSEMBLE">集成优化（推荐）</option><option value="DETERMINISTIC">仅 SFFS</option><option value="EVOLUTIONARY">SFFS + NSGA-II</option><option value="BAYESIAN">SFFS + 自适应采样</option></select></label><label>聚类阈值<input id="formClusterThreshold" type="number" min="0.3" max="0.99" step="0.01" value="0.78"></label><label>SFFS束宽<input id="formBeamWidth" type="number" min="1" max="10" value="3"></label><label>进化种群<input id="formPopulation" type="number" min="4" max="100" value="12"></label><label>进化代数<input id="formGenerations" type="number" min="1" max="100" value="4"></label><label>自适应试验<input id="formAdaptiveTrials" type="number" min="0" max="1000" value="16"></label><label>协方差收缩<input id="formShrinkage" type="number" min="0" max="1" step="0.05" value="0.35"></label><label>权重正则<input id="formRegularization" type="number" min="0" max="10" step="0.01" value="0.08"></label></section>
+        <section><h3>目标与硬门禁</h3><label class="wide">优化预设<select id="formObjective"></select></label><p class="wide preset-note" id="presetNote"></p><label>最低覆盖率<input id="formCoverage" type="number" min="0" max="1" step="0.05"></label><label>正折比例<input id="formPositiveFolds" type="number" min="0" max="1" step="0.05"></label><label>最差折夏普<input id="formWorstFold" type="number" min="-10" max="10" step="0.1"></label><label>最大回撤<input id="formMaxDrawdown" type="number" min="0.01" max="1" step="0.01"></label><label>最大换手<input id="formTurnover" type="number" min="0.1" max="1000" step="1"></label><label>最大因子相关<input id="formCorrelation" type="number" min="0" max="1" step="0.01"></label><label>最低有效下注<input id="formBets" type="number" min="1" max="12" step="0.05"></label><label>最低有效机制<input id="formMechanisms" type="number" min="1" max="12" step="0.05"></label><label>最大机制权重<input id="formMechanismWeight" type="number" min="0.1" max="1" step="0.05"></label><label>最低 DSR<input id="formDsr" type="number" min="0" max="1" step="0.05"></label></section>
+        <section><h3>计算预算</h3><label>最大真实评价<input id="formEvaluations" type="number" min="10" max="100000" value="180"></label><label>最长分钟<input id="formRuntime" type="number" min="1" max="10080" value="240"></label><label>每子集权重方案<input id="formWeightCandidates" type="number" min="1" max="50" value="8"></label><p class="wide budget-note">预算包含单因子筛选、权重候选、留一法诊断；所有评价均使用同一纯多A股代理回测协议。</p></section>
+      </div>
+      <div class="dialog-actions"><button type="button" class="button" id="cancelDialog">取消</button><button type="submit" class="button primary"><i data-lucide="binary"></i>冻结并创建</button></div>
+    </form>
+  </dialog>
+  <div id="toast" role="status"></div>
+  <script src="/static/quantcombine.js?v=20260720-workflows-v2"></script>
+  <script async src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" onload="window.lucide&&window.lucide.createIcons()"></script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -21,10 +22,11 @@ from autoalpha.service.autocombine import (
     AutoCombineManager,
     canonical_hash,
     create_task_record,
+    refresh_task_strategy_clusters,
 )
+from autoalpha.service.autocombine_intelligence import enrich_factor_record
 from autoalpha.service.autocombine_store import AutoCombineStore
 from autoalpha.service.credentials import SystemCredentialStore
-from autoalpha.service.factor_library import factor_category
 from autoalpha.service.research_protocol import (
     default_task_protocol,
     panel_validation_fold_capacity,
@@ -69,6 +71,7 @@ class ConstructionSpec(BaseModel):
     candidate_pool_limit: int = Field(default=30, ge=5, le=100)
     allow_negative_weights: bool = False
     maximum_same_family: int = Field(default=2, ge=1, le=5)
+    maximum_same_semantic_cluster: int = Field(default=1, ge=1, le=5)
 
     @model_validator(mode="after")
     def valid_constraints(self) -> ConstructionSpec:
@@ -100,7 +103,14 @@ class ObjectiveSpec(BaseModel):
     minimum_worst_fold_sharpe: float = Field(default=-0.50, ge=-10, le=10)
     maximum_drawdown: float = Field(default=0.30, ge=0.01, le=1)
     maximum_annual_turnover: float = Field(default=40.0, ge=0.1, le=1000)
-    maximum_factor_correlation: float = Field(default=0.85, ge=0, le=1)
+    maximum_factor_correlation: float = Field(default=0.75, ge=0, le=1)
+    minimum_effective_factor_bets: float = Field(default=1.35, ge=1, le=12)
+    minimum_effective_mechanisms: float = Field(default=1.40, ge=1, le=12)
+    maximum_mechanism_weight: float = Field(default=0.75, ge=0.1, le=1)
+    maximum_strategy_active_correlation: float = Field(default=0.75, ge=0, le=1)
+    minimum_marginal_positive_fraction: float = Field(default=0.60, ge=0, le=1)
+    minimum_deflated_sharpe_probability: float = Field(default=0.50, ge=0, le=1)
+    maximum_duplicate_semantic_factors: int = Field(default=0, ge=0, le=12)
     minimum_cost_stress_ir: float = Field(default=0.0, ge=-10, le=10)
     minimum_simple_annual_return: float = Field(default=0.0, ge=-1, le=10)
 
@@ -110,7 +120,9 @@ class BudgetSpec(BaseModel):
     maximum_llm_proposals: int = Field(default=20, ge=0, le=1000)
     maximum_runtime_minutes: int = Field(default=180, ge=1, le=10080)
     maximum_holdout_submissions: int = Field(default=1, ge=1, le=5)
-    weight_evaluations_per_subset: int = Field(default=6, ge=1, le=30)
+    weight_evaluations_per_subset: int = Field(default=12, ge=1, le=100)
+    maximum_subset_revisits: int = Field(default=2, ge=1, le=10)
+    maximum_same_direction_attempts: int = Field(default=3, ge=1, le=10)
     iteration_interval_seconds: float = Field(default=0.5, ge=0, le=3600)
 
 
@@ -185,6 +197,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 stop_requested=0,
                 last_error="服务重启后已从持久化检查点恢复，可继续启动。",
             )
+    await asyncio.to_thread(refresh_task_strategy_clusters, combine_store)
     yield
     await manager.shutdown()
 
@@ -266,7 +279,7 @@ async def bootstrap() -> dict[str, Any]:
             "factor_id": record["factor_id"],
             "name": record["name"],
             "family": record["family"],
-            "mechanism": factor_category(str(record["family"]), str(record["name"])),
+            "mechanism": enrich_factor_record(record)["mechanism"],
             "status": record["status"],
             "source_task_id": record.get("source_task_id"),
             "source_iteration": record.get("source_iteration"),
@@ -428,6 +441,10 @@ async def create_task(payload: CombineTaskRequest) -> dict[str, Any]:
     contaminated_count = sum(
         bool(item.get("holdout_contaminated")) for item in task["factor_snapshot"]
     )
+    mechanism_counts: dict[str, int] = {}
+    for item in task["factor_snapshot"]:
+        mechanism = str(item.get("mechanism", "OTHER"))
+        mechanism_counts[mechanism] = mechanism_counts.get(mechanism, 0) + 1
     combine_store.event(
         task["task_id"],
         "action",
@@ -435,7 +452,14 @@ async def create_task(payload: CombineTaskRequest) -> dict[str, Any]:
         "AutoCombine 任务已创建",
         f"已冻结 {task['factor_count']} 个可见因子，快照 {task['snapshot_hash'][:12]}。"
         + (f" 其中 {contaminated_count} 个因子带隐藏期污染标记。" if contaminated_count else ""),
-        payload={"snapshot_hash": task["snapshot_hash"], "factor_count": task["factor_count"]},
+        payload={
+            "snapshot_hash": task["snapshot_hash"],
+            "factor_count": task["factor_count"],
+            "mechanism_counts": mechanism_counts,
+            "semantic_cluster_count": len(
+                {item.get("semantic_cluster_id") for item in task["factor_snapshot"]}
+            ),
+        },
     )
     return _task_view(task)
 
@@ -497,12 +521,33 @@ async def task_detail(task_id: str) -> dict[str, Any]:
             if task.get("best_experiment_id")
             else None
         ),
+        "research_leader": (
+            combine_store.experiment(int(task["best_experiment_id"]))
+            if task.get("best_experiment_id")
+            else None
+        ),
+        "qualified_champion": (
+            combine_store.experiment(int(task["qualified_experiment_id"]))
+            if task.get("qualified_experiment_id")
+            else None
+        ),
+        "production_candidate": (
+            combine_store.experiment(int(task["production_candidate_experiment_id"]))
+            if task.get("production_candidate_experiment_id")
+            else None
+        ),
         "worker_alive": manager.alive(task_id),
         "factor_snapshot": [
             {
                 "factor_id": item["factor_id"],
                 "name": item["name"],
                 "family": item["family"],
+                "mechanism": item.get("mechanism", "OTHER"),
+                "semantic_cluster_id": item.get("semantic_cluster_id"),
+                "mechanism_fingerprint": item.get("mechanism_fingerprint"),
+                "expression_summary": item.get("expression_summary"),
+                "expression_fields": item.get("expression_fields", []),
+                "expression_windows": item.get("expression_windows", []),
                 "status": item["status"],
                 "source_task_id": item["source_task_id"],
                 "prefilter_score": item["prefilter_score"],
@@ -581,6 +626,9 @@ def _pareto_frontier(experiments: list[dict[str, Any]]) -> list[int]:
             float(metrics.get("portfolio_simple_annual_return", 0.0)),
             float(metrics.get("portfolio_max_drawdown", -1.0)),
             -float(metrics.get("portfolio_annual_turnover", 1_000.0)),
+            float(metrics.get("portfolio_effective_factor_bets", 1.0)),
+            float(metrics.get("portfolio_effective_mechanisms", 1.0)),
+            -float(metrics.get("portfolio_max_strategy_active_correlation", 0.0)),
         )
         dominated = False
         for other in candidates:
@@ -592,6 +640,9 @@ def _pareto_frontier(experiments: list[dict[str, Any]]) -> list[int]:
                 float(other_metrics.get("portfolio_simple_annual_return", 0.0)),
                 float(other_metrics.get("portfolio_max_drawdown", -1.0)),
                 -float(other_metrics.get("portfolio_annual_turnover", 1_000.0)),
+                float(other_metrics.get("portfolio_effective_factor_bets", 1.0)),
+                float(other_metrics.get("portfolio_effective_mechanisms", 1.0)),
+                -float(other_metrics.get("portfolio_max_strategy_active_correlation", 0.0)),
             )
             if all(a >= b for a, b in zip(comparison, point, strict=True)) and any(
                 a > b for a, b in zip(comparison, point, strict=True)
