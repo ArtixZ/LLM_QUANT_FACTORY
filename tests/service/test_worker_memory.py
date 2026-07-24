@@ -332,3 +332,33 @@ def test_worker_freezes_stability_campaign_before_model_proposal(tmp_path: Path)
     assert context["extension_allowed"] is False
     campaign = store.active_direction_campaign(config.generation)
     assert campaign is not None and campaign["attempts_used"] == 1
+
+
+def test_canonical_family_unifies_label_variants() -> None:
+    from autoalpha.dsl.expression import canonical_family
+
+    variants = ["Valuation", "valuation", "VALUATION"]
+    assert {canonical_family(name) for name in variants} == {"valuation"}
+    assert canonical_family("TurnoverLiquidity") == "turnover_liquidity"
+    assert canonical_family("TURNOVER_LIQUIDITY") == "turnover_liquidity"
+    assert canonical_family("Order Flow") == "order_flow"
+    assert canonical_family("order-flow") == "order_flow"
+    assert canonical_family("  ") == "unknown"
+
+
+def test_pool_expression_signatures_deduplicate_and_cap() -> None:
+    from autoalpha.service.worker import _pool_expression_signatures
+
+    pool = [
+        {"proposal": {"expression": _expression(5)}},
+        {"proposal": {"expression": _expression(5)}},
+        {"proposal": {"expression": _expression(10)}},
+        {"proposal": {}},
+        {"proposal": {"expression": _expression(20)}},
+    ]
+
+    signatures = _pool_expression_signatures(pool, limit=2)
+
+    assert len(signatures) == 2
+    assert signatures[0] != signatures[1]
+    assert all("rolling_mean" in signature for signature in signatures)

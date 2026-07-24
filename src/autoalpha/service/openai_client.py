@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from autoalpha.dsl.expression import Expression, FactorDefinition
+from autoalpha.dsl.expression import Expression, FactorDefinition, canonical_family
 
 
 @dataclass(frozen=True)
@@ -249,7 +249,7 @@ class CompatibleChatClient:
             expression = Expression.from_dict(raw["expression"])
             factor = FactorDefinition(
                 name=str(raw["name"]),
-                family=str(raw["family"]),
+                family=canonical_family(str(raw["family"])),
                 hypothesis=str(raw["hypothesis"]),
                 expression=expression,
                 expected_direction=_direction(raw.get("expected_direction", 1)),
@@ -422,6 +422,9 @@ Explicitly avoid mechanisms and expression signatures that dominate recent failu
 only variation of a prior tree is not novel. Prefer slower signals when recent candidates exceed the
 turnover gate. The candidate may enter at a small weight, so a modest standalone factor is useful
 when it is genuinely orthogonal to the active members.
+data_context.existing_factor_signatures lists compact signatures of expressions already tested.
+Never propose a tree whose signature (operator nesting plus parameters) already appears there;
+duplicates are rejected deterministically and waste one of the campaign's attempts.
 Candidates are also screened for behavioral redundancy: a deterministic gate rejects any signal
 whose realized cross-sectional correlation with an existing library factor is too high, even when
 the expression tree differs. Memory entries expose this as single_factor.library_redundancy and a

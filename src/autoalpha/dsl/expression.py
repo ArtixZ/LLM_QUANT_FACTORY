@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -85,6 +86,21 @@ class FactorDefinition:
 
 def field(name: str) -> Expression:
     return Expression("field", parameters=(("name", name),))
+
+
+def canonical_family(name: str) -> str:
+    """Normalize free-form family labels to one snake_case vocabulary.
+
+    LLM proposals label the same family inconsistently ("Valuation",
+    "valuation", "TURNOVER_LIQUIDITY", "TurnoverLiquidity", "Order Flow"),
+    which silently fragments family budgets, crowding statistics, and
+    diversity selection. Aggregations and newly stored proposals should use
+    this canonical form; historical records are normalized at read time only.
+    """
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(name).strip())
+    text = re.sub(r"[\s\-/]+", "_", text)
+    text = re.sub(r"_+", "_", text)
+    return text.strip("_").lower() or "unknown"
 
 
 def constant(value: float, *, unit: str = "dimensionless") -> Expression:

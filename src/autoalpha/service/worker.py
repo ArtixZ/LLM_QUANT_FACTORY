@@ -20,7 +20,7 @@ from autoalpha.data.research_fields import (
     expression_fields,
     products_for_fields,
 )
-from autoalpha.dsl.expression import Expression, FactorDefinition, field, operation
+from autoalpha.dsl.expression import FactorDefinition, canonical_family, field, operation
 from autoalpha.operations.artifacts import ArtifactRegistry
 from autoalpha.research.multiple_testing import probability_of_backtest_overfitting
 from autoalpha.research.statistics import benjamini_hochberg
@@ -521,6 +521,11 @@ class ContinuousResearchWorker:
             )
         data_capabilities = evaluator.data_capabilities
         self._update_state(phase="DIRECTION")
+        # One snapshot serves the research program context, structure dedup, trial
+        # count, LLM library context, redundancy references, and canonical library
+        # metrics below; the pool only mutates after register_candidate, so
+        # refetching it repeatedly per iteration is waste.
+        pool_snapshot = await asyncio.to_thread(self.store.factor_pool, limit=5000)
         research_program = await asyncio.to_thread(
             self._research_program_context,
             iteration,
@@ -528,6 +533,7 @@ class ContinuousResearchWorker:
             run_id=run_id,
             generation_id=generation_id,
             data_capabilities=data_capabilities,
+            pool_records=pool_snapshot,
         )
         direction_context = self._prepare_direction_campaign(
             run_id,
@@ -552,6 +558,7 @@ class ContinuousResearchWorker:
             "data_policy": data_capabilities["policy"],
             "signal_timing": data_capabilities["signal_timing"],
             "extended_data_experiment": research_program["data_experiment"],
+            "existing_factor_signatures": _pool_expression_signatures(pool_snapshot, limit=250),
             "price_research_ready": workspace.price_research_ready,
             "source_integrity_passed": workspace.source_integrity_passed,
             "institutional_pit_ready": workspace.institutional_pit_ready,
@@ -626,10 +633,6 @@ class ContinuousResearchWorker:
             )
             raise
         self._update_state(phase="SEMANTICS")
-        # One snapshot serves the structure dedup, trial count, LLM library context,
-        # and canonical library metrics below; the pool only mutates after
-        # register_candidate, so refetching it repeatedly per iteration is waste.
-        pool_snapshot = self.store.factor_pool(limit=5000)
         repair_count = 0
         while True:
             factor = proposal.factor
@@ -1726,6 +1729,7 @@ class ContinuousResearchWorker:
         run_id: str | None = None,
         generation_id: str | None = None,
         data_capabilities: dict[str, Any] | None = None,
+        pool_records: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         active = self.store.active_portfolio(run_id=run_id)
         stored_protocol = active["metrics"].get("portfolio_evaluation_protocol") if active else None
@@ -1816,10 +1820,12 @@ class ContinuousResearchWorker:
 
         pool = [
             item
-            for item in self.store.factor_pool(limit=5000)
+            for item in (
+                pool_records if pool_records is not None else self.store.factor_pool(limit=5000)
+            )
             if item.get("source_task_id", "legacy-ashare") == self.task_id
         ][:500]
-        family_counts = Counter(str(item["family"]) for item in pool)
+        family_counts = Counter(canonical_family(str(item["family"])) for item in pool)
         status_counts = Counter(str(item["status"]) for item in pool)
         capabilities = data_capabilities or build_research_data_capabilities(evaluator.workspace)
         eligible_extended = set(capabilities.get("eligible_extended_fields", []))
@@ -2133,13 +2139,15 @@ def _select_research_memories(
             break
 
     represented_families = {
-        payload.get("family") for row, payload in parsed if int(row["id"]) in selected and payload
+        canonical_family(str(payload.get("family") or ""))
+        for row, payload in parsed
+        if int(row["id"]) in selected and payload
     }
     for row, payload in parsed:
         if len(selected) >= limit:
             break
-        family = payload.get("family") if payload else None
-        if family and family not in represented_families:
+        family = canonical_family(str(payload.get("family") or "")) if payload else None
+        if family and family != "unknown" and family not in represented_families:
             selected[int(row["id"])] = row
             represented_families.add(family)
 
@@ -2330,6 +2338,20 @@ def _validate_mechanism_direction_alignment(
         )
 
 
+def _pool_expression_signatures(
+    pool_snapshot: list[dict[str, Any]], *, limit: int = 250
+) -> list[str]:
+    """Compact signatures of recently tested expressions for duplicate avoidance."""
+    signatures: dict[str, None] = {}
+    for record in pool_snapshot:
+        if len(signatures) >= limit:
+            break
+        signature = _expression_signature((record.get("proposal") or {}).get("expression"))
+        if signature:
+            signatures.setdefault(signature, None)
+    return list(signatures)
+
+
 def _redundancy_references(
     pool_snapshot: list[dict[str, Any]],
     *,
@@ -2350,20 +2372,8 @@ def _redundancy_references(
             break
         if str(record.get("factor_id")) == exclude_id:
             continue
-        proposal = record.get("proposal") or {}
-        expression = proposal.get("expression")
-        if not expression:
-            continue
         try:
-            references.append(
-                FactorDefinition(
-                    name=str(proposal.get("name") or record.get("name") or record["factor_id"]),
-                    family=str(proposal.get("family") or record.get("family") or "unknown"),
-                    hypothesis=str(proposal.get("hypothesis") or "library reference factor"),
-                    expression=Expression.from_dict(expression),
-                    expected_direction=int(proposal.get("expected_direction", 1)),
-                )
-            )
+            references.append(factor_from_pool_record(record))
         except Exception:
             continue
     return references
