@@ -27,6 +27,7 @@ class GlobalSettingsValues(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     full_llm_enabled: bool = True
     iteration_interval_seconds: float = Field(default=5.0, ge=0.5, le=3600)
+    proposal_batch_size: int = Field(default=3, ge=1, le=3)
     maximum_active_factors: int = Field(default=5, ge=1, le=12)
     research_concurrency: int = Field(default=2, ge=1, le=8)
     data_path: str
@@ -151,6 +152,7 @@ def default_settings(project_root: Path) -> dict[str, Any]:
         "temperature": 0.7,
         "full_llm_enabled": True,
         "iteration_interval_seconds": 5.0,
+        "proposal_batch_size": 3,
         "maximum_active_factors": 5,
         "research_concurrency": int(os.getenv("AUTOALPHA_MAX_CONCURRENT_RESEARCH", "2")),
         "data_path": os.getenv("AUTOALPHA_DATA_PATH", str(project_root.parent / "data")),
@@ -226,6 +228,16 @@ def settings_catalog() -> list[dict[str, Any]]:
                     0.5,
                     3600,
                     0.5,
+                ),
+                _field(
+                    "proposal_batch_size",
+                    "同方向批量提案数",
+                    "number",
+                    "下一轮",
+                    "数据库",
+                    1,
+                    3,
+                    1,
                 ),
                 _field(
                     "maximum_active_factors",

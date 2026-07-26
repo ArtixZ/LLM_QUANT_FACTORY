@@ -25,7 +25,7 @@ class PortfolioIncrement:
     treatment_annual_return: float
     return_drawdown_efficiency_change: float
     hac: MeanInference
-    bootstrap_confidence_interval: tuple[float, float]
+    bootstrap_confidence_interval: tuple[float, float] | None
     cost_stress_net_ir: float | None
 
 
@@ -50,6 +50,8 @@ def compare_portfolios(
     bootstrap_samples: int = 2000,
     seed: int = 0,
 ) -> PortfolioIncrement:
+    if bootstrap_samples < 0:
+        raise ValueError("bootstrap_samples must be non-negative")
     paired = pd.concat(
         [control_net_returns.rename("control"), treatment_net_returns.rename("treatment")],
         axis=1,
@@ -59,11 +61,15 @@ def compare_portfolios(
         raise ValueError("Insufficient paired observations for portfolio comparison")
     incremental = (paired["treatment"] - paired["control"]).rename("incremental_net_return")
     hac = hac_mean_inference(incremental.to_numpy(), lags=hac_lags)
-    bootstrap = stationary_block_bootstrap_mean(
-        incremental.to_numpy(),
-        block_size=bootstrap_block_size,
-        samples=bootstrap_samples,
-        seed=seed,
+    bootstrap = (
+        stationary_block_bootstrap_mean(
+            incremental.to_numpy(),
+            block_size=bootstrap_block_size,
+            samples=bootstrap_samples,
+            seed=seed,
+        )
+        if bootstrap_samples > 0
+        else None
     )
     control_drawdown = _maximum_drawdown(paired["control"])
     treatment_drawdown = _maximum_drawdown(paired["treatment"])

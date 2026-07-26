@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any
@@ -120,6 +121,7 @@ def diagnose_direction(
     blocked_directions: set[str],
     config: ResearchConfig,
     data_experiment: dict[str, Any] | None = None,
+    campaign_history: list[dict[str, Any]] | None = None,
 ) -> DirectionPlan:
     scores = {item.direction: 0.0 for item in DIRECTIONS}
     reasons: dict[str, list[str]] = {item.direction: [] for item in DIRECTIONS}
@@ -226,6 +228,34 @@ def diagnose_direction(
         reasons["EXPLORE_NEW_MECHANISM"].append("当前世代公开样本不足，优先扩充机制证据")
     scores["EXPLORE_NEW_MECHANISM"] += 1.0
 
+    direction_bandit: dict[str, dict[str, float | int]] = {}
+    completed_attempts = 0
+    history = campaign_history or []
+    for item in history:
+        completed_attempts += sum(
+            1 for attempt in item.get("attempts", []) if attempt.get("status") == "COMPLETED"
+        )
+    for item in DIRECTIONS:
+        attempts = [
+            attempt
+            for campaign in history
+            if campaign.get("direction") == item.direction
+            for attempt in campaign.get("attempts", [])
+            if attempt.get("status") == "COMPLETED"
+        ]
+        successes = sum(bool(attempt.get("improved")) for attempt in attempts)
+        posterior = (successes + 1.0) / (len(attempts) + 2.0)
+        uncertainty = math.sqrt(math.log(completed_attempts + 2.0) / (len(attempts) + 1.0))
+        bonus = 12.0 * posterior + 7.0 * uncertainty
+        scores[item.direction] += bonus
+        direction_bandit[item.direction] = {
+            "research_attempts": len(attempts),
+            "improved_attempts": successes,
+            "posterior_improvement_probability": round(posterior, 6),
+            "uncertainty_bonus": round(uncertainty, 6),
+            "score_bonus": round(bonus, 6),
+        }
+
     data_experiment = data_experiment or {}
     eligible_extended = sorted(
         {str(field) for field in data_experiment.get("eligible_extended_fields", [])}
@@ -240,12 +270,24 @@ def diagnose_direction(
         for key, value in data_experiment.get("mechanism_counts", {}).items()
         if str(key) in MECHANISM_DOMAINS
     }
+    mechanism_stats = {
+        str(key): value
+        for key, value in data_experiment.get("mechanism_stats", {}).items()
+        if str(key) in MECHANISM_DOMAINS and isinstance(value, dict)
+    }
+
+    def mechanism_priority(mechanism: str) -> tuple[float, float, float, int]:
+        statistics = mechanism_stats.get(mechanism, {})
+        return (
+            float(statistics.get("behavior_clusters", 0) or 0),
+            float(statistics.get("attempted", mechanism_counts.get(mechanism, 0)) or 0),
+            -float(statistics.get("smoothed_library_yield", 0.5) or 0.0),
+            MECHANISM_DOMAINS.index(mechanism),
+        )
+
     target_mechanism = min(
         MECHANISM_DOMAINS,
-        key=lambda mechanism: (
-            mechanism_counts.get(mechanism, 0),
-            MECHANISM_DOMAINS.index(mechanism),
-        ),
+        key=mechanism_priority,
     )
     if eligible_extended:
         scores["EXPLORE_EXTENDED_DATA"] += 34.0 if recent_extended == 0 else 8.0
@@ -265,7 +307,21 @@ def diagnose_direction(
         target_mechanism = min(
             extended_domains,
             key=lambda mechanism: (
-                mechanism_counts.get(mechanism, 0),
+                float(
+                    mechanism_stats.get(mechanism, {}).get("behavior_clusters", 0) or 0
+                ),
+                float(
+                    mechanism_stats.get(mechanism, {}).get(
+                        "attempted", mechanism_counts.get(mechanism, 0)
+                    )
+                    or 0
+                ),
+                -float(
+                    mechanism_stats.get(mechanism, {}).get(
+                        "smoothed_library_yield", 0.5
+                    )
+                    or 0.0
+                ),
                 extended_domains.index(mechanism),
             ),
         )
@@ -298,7 +354,9 @@ def diagnose_direction(
             "under_tested_extended_fields": under_tested,
             "recent_extended_experiments": recent_extended,
             "mechanism_counts": mechanism_counts,
+            "mechanism_stats": mechanism_stats,
             "target_mechanism": target_mechanism,
+            "direction_bandit": direction_bandit,
             "all_direction_scores": {key: round(value, 6) for key, value in scores.items()},
         },
     )
@@ -379,13 +437,10 @@ def assess_direction_outcome(
         "EXPLORE_EXTENDED_DATA": (candidate_eligible and bool(observed_fields & required_fields)),
         "EXPLORE_NEW_MECHANISM": candidate_eligible,
     }
-    exploratory_direction = direction in {"EXPLORE_EXTENDED_DATA", "EXPLORE_NEW_MECHANISM"}
-    direction_improved = bool(
-        tests.get(direction, False) and (candidate_eligible if exploratory_direction else accepted)
-    )
+    direction_improved = bool(tests.get(direction, False) and candidate_eligible)
     unresolved = proposed.get("portfolio_proposed_absolute_failures")
     objective_resolved = bool(
-        direction_improved and isinstance(unresolved, list) and not unresolved
+        direction_improved and accepted and isinstance(unresolved, list) and not unresolved
     )
     return {
         "direction": direction,
@@ -393,6 +448,7 @@ def assess_direction_outcome(
         "candidate_eligible": candidate_eligible,
         "direction_improved": direction_improved,
         "objective_resolved": objective_resolved,
+        "promotion_resolved": objective_resolved,
         "metric_changes": changes,
         "unresolved_absolute_gates": unresolved if isinstance(unresolved, list) else [],
         "candidate_fields": sorted(observed_fields),

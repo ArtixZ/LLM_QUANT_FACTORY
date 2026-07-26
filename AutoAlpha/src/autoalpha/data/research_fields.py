@@ -63,6 +63,8 @@ class ResearchFieldProfile:
     source_product: str
     unit: str
     availability: str = "END_OF_DAY_NEXT_SESSION"
+    temporal_behavior: str = "DAILY_OBSERVATION"
+    research_guidance: str = "Evaluate through the next tradable session."
 
     def to_dict(self) -> dict[str, str]:
         return asdict(self)
@@ -248,9 +250,32 @@ def research_field_profiles() -> dict[str, ResearchFieldProfile]:
             description=description,
             source_product=product,
             unit=_unit(name, amount_unit="cny", volume_unit="shares"),
+            temporal_behavior=_temporal_behavior(name, product),
+            research_guidance=_research_guidance(name, product),
         )
         for name, (label, description, product) in _FIELD_DETAILS.items()
     }
+
+
+def _temporal_behavior(name: str, product: str) -> str:
+    if name in {"total_share", "float_share", "free_share"}:
+        return "LOW_FREQUENCY_STEPWISE_STATE"
+    if product == "moneyflow":
+        return "DAILY_FLOW"
+    if name in {"pe", "pe_ttm", "pb", "ps", "ps_ttm", "dv_ratio", "dv_ttm"}:
+        return "DAILY_MARK_TO_MARKET_FUNDAMENTAL_STATE"
+    return "DAILY_OBSERVATION"
+
+
+def _research_guidance(name: str, product: str) -> str:
+    if name in {"total_share", "float_share", "free_share"}:
+        return (
+            "Prefer level, event-age or explicitly decayed event signals; short-window delta and "
+            "returns often become sparse or tie-heavy."
+        )
+    if product == "moneyflow":
+        return "Use only after the close and execute no earlier than the next tradable session."
+    return "Evaluate through the next tradable session."
 
 
 def expression_fields(expression: Expression | Mapping[str, Any] | None) -> set[str]:

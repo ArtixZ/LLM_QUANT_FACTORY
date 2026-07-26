@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -18,7 +19,9 @@ from autoalpha.service.evaluator import (
     _annualized_ir,
     _compound_annual_return,
     _exploratory_gate_failures,
+    _ic_diagnostics,
     _normalize_weights,
+    _shared_signal_cache_key,
     _standalone_long_only_metrics,
 )
 
@@ -30,6 +33,75 @@ def test_dashboard_return_metrics_use_explicit_annualization() -> None:
     assert _compound_annual_return(returns) == pytest.approx(
         (1.01 * 0.995 * 1.002) ** (245 / 3) - 1
     )
+
+
+def test_sparse_ic_is_diagnostic_only_and_remains_finite() -> None:
+    empty = _ic_diagnostics(pd.Series(dtype=float))
+    sparse = _ic_diagnostics(pd.Series([0.01, 0.02, -0.01]))
+
+    assert empty == {"mean": 0.0, "ir": 0.0, "p_value": 1.0}
+    assert sparse["mean"] == pytest.approx(0.02 / 3)
+    assert np.isfinite(list(sparse.values())).all()
+
+
+def test_shared_signal_cache_isolated_by_direction_and_data_scope() -> None:
+    config = ResearchConfig.from_toml(Path("config/research.toml"))
+    evaluator = SimpleNamespace(
+        workspace=SimpleNamespace(fingerprint="data-v1"),
+        config=config,
+    )
+    positive = FactorDefinition("positive", "test", "positive", field("amount"), 1)
+    negative = FactorDefinition("negative", "test", "negative", field("amount"), -1)
+
+    positive_key = _shared_signal_cache_key(evaluator, positive)
+    negative_key = _shared_signal_cache_key(evaluator, negative)
+
+    assert positive.factor_id == negative.factor_id
+    assert positive_key != negative_key
+    assert positive_key[:3] == (
+        "data-v1",
+        config.splits.train.start.isoformat(),
+        config.splits.validation.end.isoformat(),
+    )
+
+
+def test_signal_preflight_distinguishes_slow_state_from_degenerate_cross_section() -> None:
+    base = ResearchConfig.from_toml(Path("config/research.toml"))
+    config = replace(base, minimum_cross_section=3)
+    dates = pd.bdate_range(config.splits.validation.start, periods=100)
+    columns = ["A", "B", "C", "D"]
+    slow = FactorDefinition("slow", "test", "slow state", field("amount"))
+    degenerate = FactorDefinition("flat", "test", "flat state", field("close"))
+    evaluator = object.__new__(PriceVolumeEvaluator)
+    evaluator.config = config
+    evaluator.validator = type("Validator", (), {"validate": lambda self, expression: None})()
+    evaluator._signal_cache = OrderedDict(
+        {
+            slow.factor_id: pd.DataFrame(
+                np.tile([1.0, 2.0, 3.0, 4.0], (len(dates), 1)),
+                index=dates,
+                columns=columns,
+            ),
+            degenerate.factor_id: pd.DataFrame(1.0, index=dates, columns=columns),
+        }
+    )
+    evaluator._signal_cache_lock = Lock()
+    evaluator._preflight_cache = OrderedDict()
+    evaluator._preflight_cache_lock = Lock()
+    evaluator._field_load_lock = None
+    evaluator._fields = {
+        "adj_close": pd.DataFrame(10.0, index=dates, columns=columns),
+        "open": pd.DataFrame(10.0, index=dates, columns=columns),
+        "amount": pd.DataFrame(1_000_000.0, index=dates, columns=columns),
+    }
+
+    slow_result = evaluator.preflight(slow)
+    flat_result = evaluator.preflight(degenerate)
+
+    assert slow_result.passed
+    assert "low_temporal_update_rate" in slow_result.warnings
+    assert not flat_result.passed
+    assert "cross_sectionally_degenerate" in flat_result.failures
 
 
 def test_exploratory_gates_do_not_treat_zero_control_drawdown_as_incremental() -> None:

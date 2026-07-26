@@ -18,6 +18,7 @@ def test_global_settings_round_trip_structured_values(tmp_path: Path) -> None:
     defaults["market_data_root"] = str(tmp_path / "market")
     defaults["data_product_ids"] = ["core_market", "daily_basic"]
     defaults["full_llm_enabled"] = False
+    defaults["proposal_batch_size"] = 2
     values = GlobalSettingsValues.model_validate(defaults)
 
     restored = GlobalSettingsValues.from_store(
@@ -27,6 +28,7 @@ def test_global_settings_round_trip_structured_values(tmp_path: Path) -> None:
     assert restored == values
     assert restored.data_product_ids == ["core_market", "daily_basic"]
     assert restored.full_llm_enabled is False
+    assert restored.proposal_batch_size == 2
     assert values.to_store()["data_product_ids"] == '["core_market","daily_basic"]'
 
 

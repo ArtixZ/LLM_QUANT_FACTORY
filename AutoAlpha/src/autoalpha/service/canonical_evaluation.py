@@ -88,9 +88,12 @@ def evaluate_canonical_library_factor(
         }
     )
     if source_task_metrics is not None:
-        main["source_task_metrics"] = source_task_metrics.get(
-            "source_task_metrics", source_task_metrics
-        )
+        task_metrics = source_task_metrics.get("task_research_metrics")
+        if not isinstance(task_metrics, dict):
+            task_metrics = source_task_metrics.get("source_task_metrics", source_task_metrics)
+        main["task_research_metrics"] = task_metrics
+        # Backward-compatible alias for existing factor-library consumers.
+        main["source_task_metrics"] = task_metrics
     return main
 
 

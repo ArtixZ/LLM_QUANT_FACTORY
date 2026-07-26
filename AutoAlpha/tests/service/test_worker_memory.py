@@ -15,6 +15,10 @@ from autoalpha.service.worker import (
     _is_public_feasibility_recovery,
     _memory_summary,
     _multiple_testing_adjustments,
+    _online_behavior_assignment,
+    _post_evaluation_role_route,
+    _pre_evaluation_role_route,
+    _redundancy_references,
     _select_research_memories,
 )
 
@@ -41,6 +45,125 @@ def _expression(window: int) -> dict:
 
 def test_expression_structure_detects_parameter_only_variants() -> None:
     assert _expression_structure(_expression(10)) == _expression_structure(_expression(20))
+
+
+def _pool_record(
+    factor: FactorDefinition,
+    *,
+    status: str,
+    canonical_mechanism: str,
+) -> dict:
+    return {
+        "factor_id": factor.factor_id,
+        "name": factor.name,
+        "family": factor.family,
+        "status": status,
+        "proposal": {
+            "name": factor.name,
+            "family": factor.family,
+            "hypothesis": factor.hypothesis,
+            "expression": factor.expression.to_dict(),
+            "expected_direction": factor.expected_direction,
+            "canonical_mechanism": canonical_mechanism,
+        },
+    }
+
+
+def test_redundancy_panel_keeps_active_and_global_cluster_leaders() -> None:
+    active = FactorDefinition("active", "price", "active", field("close"))
+    leader = FactorDefinition("leader", "volume", "leader", field("vol"))
+    adjacent = FactorDefinition("adjacent", "liquidity", "adjacent", field("amount"))
+    low_priority = FactorDefinition("old", "price", "old", field("open"))
+    records = [
+        _pool_record(adjacent, status="ELIGIBLE", canonical_mechanism="TURNOVER_LIQUIDITY"),
+        _pool_record(low_priority, status="SCREENED_OUT", canonical_mechanism="PRICE_REVERSAL"),
+        _pool_record(leader, status="SCREENED_OUT", canonical_mechanism="TURNOVER_LIQUIDITY"),
+        _pool_record(active, status="ACTIVE", canonical_mechanism="PRICE_REVERSAL"),
+    ]
+    behavior = {
+        leader.factor_id: {
+            "behavior_cluster_id": "B_VOLUME",
+            "behavior_cluster_role": "LEADER",
+        },
+        active.factor_id: {
+            "behavior_cluster_id": "B_ACTIVE",
+            "behavior_cluster_role": "LEADER",
+        },
+    }
+
+    references = _redundancy_references(
+        records,
+        exclude_id="not-present",
+        behavior_factors=behavior,
+        candidate_fields={"amount"},
+        candidate_mechanism="TURNOVER_LIQUIDITY",
+        limit=3,
+    )
+
+    assert active.factor_id in {factor.factor_id for factor in references}
+    assert leader.factor_id in {factor.factor_id for factor in references}
+    assert len(references) == 3
+
+
+def test_online_behavior_assignment_reuses_peer_cluster_or_marks_new_cluster() -> None:
+    behavior = {
+        "F_peer": {
+            "behavior_cluster_id": "B_1234",
+            "behavior_cluster_label": "流动性行为簇",
+            "behavior_cluster_size": 4,
+        }
+    }
+    related = _online_behavior_assignment(
+        {
+            "library_signal_correlation_peer": "F_peer",
+            "library_signal_correlation_max": 0.91,
+            "library_signal_correlation_signed": 0.91,
+        },
+        behavior,
+        threshold=0.85,
+    )
+    distinct = _online_behavior_assignment(
+        {
+            "library_signal_correlation_peer": "F_peer",
+            "library_signal_correlation_max": 0.31,
+            "library_signal_correlation_signed": -0.31,
+        },
+        behavior,
+        threshold=0.85,
+    )
+
+    assert related["online_behavior_cluster_id"] == "B_1234"
+    assert related["online_behavior_cluster_role"] == "MEMBER"
+    assert related["online_behavior_redundancy"] == "SUBSTITUTE"
+    assert distinct["online_behavior_cluster_id"] == "PENDING_NEW_CLUSTER"
+    assert distinct["online_behavior_cluster_role"] == "PROVISIONAL_LEADER"
+
+
+def test_llm_role_routing_is_conditional_on_complexity_and_failure_type() -> None:
+    simple = _pre_evaluation_role_route(
+        {
+            "expression": field("amount").to_dict(),
+            "canonical_mechanism": "TURNOVER_LIQUIDITY",
+        },
+        research_program={
+            "data_experiment": {
+                "eligible_extended_fields": [],
+                "mechanism_stats": {
+                    "TURNOVER_LIQUIDITY": {"attempted": 20, "behavior_clusters": 8}
+                },
+            },
+            "adaptive_direction": {"direction": "IMPROVE_EXECUTION_EFFICIENCY"},
+        },
+        preflight_warnings=set(),
+    )
+    execution_failure = _post_evaluation_role_route(
+        {"portfolio_action_gate_failures": ["turnover"]},
+        candidate_eligible=False,
+        portfolio_accepted=False,
+    )
+
+    assert simple["roles"] == ["FALSIFICATION_DESIGNER"]
+    assert execution_failure["roles"] == ["ROOT_CAUSE_ANALYST", "TCA_PAPER_OBSERVER"]
 
 
 def test_memory_summary_preserves_best_portfolio_failure() -> None:
@@ -288,7 +411,11 @@ def test_research_context_revalues_legacy_incumbent_under_current_protocol(
     context = worker._research_program_context(2, evaluator, generation_id=config.generation)
 
     active = context["active_portfolio"]
-    assert active["metrics"] == {"portfolio_sharpe_ratio": 3.81}
+    assert active["metrics"]["portfolio_sharpe_ratio"] == 3.81
+    assert active["metrics"]["portfolio_control_state"] == "NEEDS_REHABILITATION"
+    assert active["metrics"]["portfolio_proposed_absolute_failures"] == [
+        "INCOMPLETE_CONTROL_METRICS"
+    ]
     assert active["legacy_portfolio_withheld"] is False
     assert active["stored_protocol"] == config.governance.protocol_version
     assert active["metrics_source"] == "current_protocol_revaluation"

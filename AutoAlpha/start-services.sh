@@ -18,14 +18,24 @@ port_alive() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 
 start_one() {
   local name="$1" port="$2" bin="$3"; shift 3
+  local label="com.autoalpha.local.$name.$port"
+  local log="$RT/logs/$name-$port.log"
   if port_alive "$port"; then
     echo "[skip] $name 已在 $port 端口运行"
     return
   fi
-  nohup env AUTOALPHA_RUNTIME="$RT" "$@" "$ROOT/.venv/bin/$bin" \
-    >> "$RT/logs/$name-$port.log" 2>&1 &
-  echo $! > "$RT/pids/$name-$port.pid"
-  echo "[start] $name (pid $!) -> http://127.0.0.1:$port"
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
+    launchctl remove "$label" >/dev/null 2>&1 || true
+    launchctl submit -l "$label" -o "$log" -e "$log" -- \
+      /usr/bin/env AUTOALPHA_RUNTIME="$RT" "$@" "$ROOT/.venv/bin/$bin"
+    echo "[start] $name (launchd: $label) -> http://127.0.0.1:$port"
+  else
+    nohup env AUTOALPHA_RUNTIME="$RT" "$@" "$ROOT/.venv/bin/$bin" \
+      >> "$log" 2>&1 </dev/null &
+    disown "$!" 2>/dev/null || true
+    echo $! > "$RT/pids/$name-$port.pid"
+    echo "[start] $name (pid $!) -> http://127.0.0.1:$port"
+  fi
 }
 
 start_one autoalpha    8788 autoalpha-service    AUTOALPHA_PORT=8788
@@ -39,6 +49,8 @@ for port in 8788 8888 8889; do
     sleep 0.5
   done
   port_alive "$port" || { echo "[error] 端口 $port 未就绪，查看 $RT/logs"; exit 1; }
+  lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n1 \
+    > "$RT/pids/$(case "$port" in 8788) echo autoalpha;; 8888) echo autocombine;; *) echo quantcombine;; esac)-$port.pid"
 done
 echo "[ok] 三个服务端口均已就绪"
 

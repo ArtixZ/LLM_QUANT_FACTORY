@@ -157,6 +157,53 @@ def test_client_repairs_invalid_contract_once() -> None:
     assert calls == 2
 
 
+def test_client_generates_distinct_proposal_batch_with_single_request() -> None:
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "content": """{"proposals":[
+                    {"name":"amount-rank","family":"liquidity",
+                    "hypothesis":"liquidity level persists","change":"rank amount",
+                    "expected":"positive spread","expected_direction":1,
+                    "expression":{"operator":"cs_rank","arguments":[
+                    {"operator":"field","arguments":[],
+                    "parameters":{"name":"amount"}}],"parameters":{}}},
+                    {"name":"volume-change","family":"liquidity",
+                    "hypothesis":"volume change reverses","change":"rank volume delta",
+                    "expected":"positive spread","expected_direction":-1,
+                    "expression":{"operator":"delta","arguments":[
+                    {"operator":"field","arguments":[],
+                    "parameters":{"name":"vol"}}],"parameters":{"periods":5}}}
+                    ]}"""
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 80, "total_tokens": 180},
+    }
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=response)
+
+    client = CompatibleChatClient(
+        base_url="https://provider.test",
+        api_key="secret",
+        model="research-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    proposals = asyncio.run(client.propose_batch([], 8, batch_size=2))
+
+    assert calls == 1
+    assert [proposal.factor.name for proposal in proposals] == ["amount-rank", "volume-change"]
+    assert proposals[0].usage["total_tokens"] == 180
+    assert proposals[1].usage["total_tokens"] == 0
+    assert proposals[1].usage["batch_position"] == 2
+
+
 def test_client_retries_transient_transport_failure() -> None:
     calls = 0
 

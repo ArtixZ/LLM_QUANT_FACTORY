@@ -2459,15 +2459,20 @@ class ServiceStore:
         diagnostics: dict[str, Any],
         early_stop_consecutive_misses: int,
         run_id: str | None = None,
+        attempt_id: int | None = None,
     ) -> dict[str, Any]:
         now = _now()
         with self.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            where = "iteration=?"
-            parameters: tuple[Any, ...] = (iteration,)
-            if run_id:
-                where += " AND run_id=?"
-                parameters = (iteration, run_id)
+            if attempt_id is not None:
+                where = "id=?"
+                parameters: tuple[Any, ...] = (attempt_id,)
+            else:
+                where = "iteration=?"
+                parameters = (iteration,)
+                if run_id:
+                    where += " AND run_id=?"
+                    parameters = (iteration, run_id)
             attempt = connection.execute(
                 f"SELECT * FROM direction_attempts WHERE {where} ORDER BY id DESC LIMIT 1",  # noqa: S608
                 parameters,
@@ -2541,31 +2546,106 @@ class ServiceStore:
             assert updated is not None
             return self._direction_campaign_record(connection, updated)
 
+    def cancel_direction_attempt(
+        self,
+        *,
+        attempt_id: int,
+        outcome: str,
+        diagnostics: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Cancel an operationally interrupted attempt without charging research budget."""
+        now = _now()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            attempt = connection.execute(
+                "SELECT * FROM direction_attempts WHERE id=?", (attempt_id,)
+            ).fetchone()
+            if attempt is None:
+                raise KeyError(f"Direction attempt not found: {attempt_id}")
+            campaign = connection.execute(
+                "SELECT * FROM direction_campaigns WHERE id=?",
+                (attempt["campaign_id"],),
+            ).fetchone()
+            assert campaign is not None
+            if attempt["status"] != "RESERVED":
+                return self._direction_campaign_record(connection, campaign)
+            connection.execute(
+                """UPDATE direction_attempts
+                SET status='CANCELLED_OPERATIONAL', outcome=?, improved=0,
+                    objective_resolved=0, diagnostics_json=?, updated_at=?
+                WHERE id=?""",
+                (outcome, _canonical(diagnostics), now, attempt_id),
+            )
+            connection.execute(
+                """UPDATE direction_campaigns
+                SET attempts_used=MAX(0, attempts_used-1), updated_at=?
+                WHERE id=?""",
+                (now, campaign["id"]),
+            )
+            updated = connection.execute(
+                "SELECT * FROM direction_campaigns WHERE id=?", (campaign["id"],)
+            ).fetchone()
+            assert updated is not None
+            return self._direction_campaign_record(connection, updated)
+
     def reconcile_orphaned_direction_attempts(
         self, *, early_stop_consecutive_misses: int
     ) -> list[dict[str, Any]]:
+        del early_stop_consecutive_misses
         with self.connection() as connection:
             rows = connection.execute(
-                """SELECT attempt.iteration, iteration.candidate_id
+                """SELECT attempt.id, attempt.run_id, attempt.iteration,
+                       iteration.candidate_id, iteration.status AS iteration_status
                 FROM direction_attempts AS attempt
-                LEFT JOIN iterations AS iteration ON iteration.iteration=attempt.iteration
+                LEFT JOIN iterations AS iteration
+                  ON iteration.run_id=attempt.run_id
+                 AND iteration.iteration=attempt.iteration
                 WHERE attempt.status='RESERVED'
                   AND (iteration.status IS NULL OR iteration.status!='RUNNING')
                 ORDER BY attempt.id"""
             ).fetchall()
         reconciled = []
         for row in rows:
-            campaign = self.complete_direction_attempt(
-                iteration=int(row["iteration"]),
-                candidate_id=row["candidate_id"],
+            campaign = self.cancel_direction_attempt(
+                attempt_id=int(row["id"]),
                 outcome="SERVICE_RESTART_INTERRUPTED",
-                improved=False,
-                objective_resolved=False,
-                diagnostics={"reconciled": True},
-                early_stop_consecutive_misses=early_stop_consecutive_misses,
+                diagnostics={
+                    "reconciled": True,
+                    "run_id": row["run_id"],
+                    "iteration_status": row["iteration_status"],
+                    "candidate_id": row["candidate_id"],
+                    "research_budget_charged": False,
+                },
             )
-            reconciled.append({"iteration": int(row["iteration"]), "campaign_id": campaign["id"]})
+            reconciled.append(
+                {
+                    "attempt_id": int(row["id"]),
+                    "run_id": row["run_id"],
+                    "iteration": int(row["iteration"]),
+                    "campaign_id": campaign["id"],
+                    "budget_refunded": True,
+                }
+            )
         return reconciled
+
+    def reconcile_exhausted_direction_campaigns(self) -> list[dict[str, Any]]:
+        """Close impossible ACTIVE campaigns left behind by an older service version."""
+        now = _now()
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT id, generation_id, direction, last_iteration
+                FROM direction_campaigns
+                WHERE status='ACTIVE' AND attempts_used>=maximum_attempts"""
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    """UPDATE direction_campaigns
+                    SET status='EXHAUSTED', closed_iteration=last_iteration,
+                        closure_reason='RECOVERED_EXHAUSTED_CAMPAIGN', updated_at=?
+                    WHERE id=?""",
+                    (now, row["id"]),
+                )
+        return [dict(row) for row in rows]
 
     def _direction_campaign_record(
         self, connection: sqlite3.Connection, row: sqlite3.Row

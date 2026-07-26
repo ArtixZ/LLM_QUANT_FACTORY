@@ -733,11 +733,23 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         store.append_event(
             "audit",
             "ORPHANED_DIRECTION_ATTEMPT_RECONCILED",
-            "中断方向尝试已计入预算",
-            "服务重启不会返还已发起的方向尝试额度。",
+            "中断方向尝试已从科研预算剥离",
+            "服务中断属于运维故障，保留审计记录但不消耗方向研究额度。",
+            run_id=attempt.get("run_id"),
             iteration=attempt["iteration"],
             level="WARN",
             payload=attempt,
+        )
+    exhausted_campaigns = store.reconcile_exhausted_direction_campaigns()
+    for campaign in exhausted_campaigns:
+        store.append_event(
+            "audit",
+            "EXHAUSTED_DIRECTION_CAMPAIGN_RECONCILED",
+            "异常活动战役已关闭",
+            "战役额度已耗尽但状态仍为活动，启动恢复已将其安全关闭。",
+            iteration=campaign.get("last_iteration"),
+            level="WARN",
+            payload=campaign,
         )
     if state["state"] == "STOPPING":
         store.update_state(state="STOPPED", phase="STOPPED", stop_requested=0)
@@ -1364,8 +1376,10 @@ async def factor_library(response: Response) -> dict[str, Any]:
         del task_config
         generation_ids[str(task_id)] = generation_id
     contamination = store.contaminated_factor_ids()
+    pool_records = store.factor_pool(limit=5000)
+    pool_lookup = {str(record["factor_id"]): record for record in pool_records}
     library = build_factor_library(
-        store.factor_pool(limit=5000),
+        pool_records,
         lifecycle_states=store.factor_lifecycle_states(),
         contaminated_factor_ids=contamination,
         research_diagnostics=store.factor_research_diagnostics(),
@@ -1375,18 +1389,33 @@ async def factor_library(response: Response) -> dict[str, Any]:
     behavior_factors = behavior.get("factors", {})
     for factor in library["factors"]:
         evidence = behavior_factors.get(factor["factor_id"], {})
+        online = pool_lookup.get(factor["factor_id"], {}).get("metrics", {})
         factor.update(
             {
-                "behavior_cluster_id": evidence.get("behavior_cluster_id"),
-                "behavior_cluster_label": evidence.get("behavior_cluster_label"),
-                "behavior_cluster_size": evidence.get("behavior_cluster_size"),
-                "behavior_cluster_role": evidence.get("behavior_cluster_role"),
-                "behavior_nearest_factor_id": evidence.get("behavior_nearest_factor_id"),
-                "behavior_nearest_similarity": evidence.get("behavior_nearest_similarity"),
-                "behavior_signal_correlation": evidence.get("behavior_signal_correlation"),
+                "behavior_cluster_id": evidence.get("behavior_cluster_id")
+                or online.get("online_behavior_cluster_id"),
+                "behavior_cluster_label": evidence.get("behavior_cluster_label")
+                or online.get("online_behavior_cluster_label"),
+                "behavior_cluster_size": evidence.get("behavior_cluster_size")
+                or online.get("online_behavior_cluster_size"),
+                "behavior_cluster_role": evidence.get("behavior_cluster_role")
+                or online.get("online_behavior_cluster_role"),
+                "behavior_nearest_factor_id": evidence.get("behavior_nearest_factor_id")
+                or online.get("online_behavior_nearest_factor_id"),
+                "behavior_nearest_similarity": evidence.get("behavior_nearest_similarity")
+                if evidence
+                else online.get("online_behavior_nearest_similarity"),
+                "behavior_signal_correlation": evidence.get("behavior_signal_correlation")
+                if evidence
+                else online.get("online_behavior_signal_correlation"),
                 "behavior_return_correlation": evidence.get("behavior_return_correlation"),
-                "behavior_redundancy": evidence.get("behavior_redundancy", "PENDING"),
-                "behavior_cluster_method": evidence.get("behavior_cluster_method"),
+                "behavior_redundancy": evidence.get("behavior_redundancy")
+                or online.get("online_behavior_redundancy", "PENDING"),
+                "behavior_cluster_method": evidence.get("behavior_cluster_method")
+                or online.get("online_behavior_cluster_method"),
+                "behavior_pending_full_recluster": bool(
+                    not evidence and online.get("online_behavior_pending_full_recluster", False)
+                ),
             }
         )
     behavior_progress = behavior.get("progress", {})

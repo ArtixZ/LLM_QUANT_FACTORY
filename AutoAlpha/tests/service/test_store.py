@@ -162,6 +162,108 @@ def test_store_reconciles_orphaned_running_iterations(tmp_path: Path) -> None:
     assert "ServiceRestartInterrupted" in record["error"]
 
 
+def test_direction_reconciliation_isolated_by_run_and_refunds_budget(tmp_path: Path) -> None:
+    store = ServiceStore(tmp_path / "service.sqlite3")
+    for generation_id in ("g-a", "g-b"):
+        store.ensure_generation(
+            generation_id=generation_id,
+            protocol_version="v1",
+            maximum_candidates=10,
+            maximum_holdout_attempts=1,
+        )
+    campaign_a = store.start_direction_campaign(
+        generation_id="g-a",
+        direction="EXPLORE_NEW_MECHANISM",
+        title="a",
+        objective="a",
+        diagnostic_score=1.0,
+        rationale=[],
+        evidence={},
+        baseline={},
+        maximum_attempts=3,
+        started_iteration=1,
+    )
+    campaign_b = store.start_direction_campaign(
+        generation_id="g-b",
+        direction="EXPLORE_NEW_MECHANISM",
+        title="b",
+        objective="b",
+        diagnostic_score=1.0,
+        rationale=[],
+        evidence={},
+        baseline={},
+        maximum_attempts=3,
+        started_iteration=1,
+    )
+    store.begin_iteration("run-a", 1)
+    store.finish_iteration("run-a", 1, status="FAILED")
+    store.begin_iteration("run-b", 1)
+    attempt_a = store.reserve_direction_attempt(
+        campaign_id=campaign_a["id"],
+        run_id="run-a",
+        iteration=1,
+        baseline={},
+    )
+    store.reserve_direction_attempt(
+        campaign_id=campaign_b["id"],
+        run_id="run-b",
+        iteration=1,
+        baseline={},
+    )
+
+    reconciled = store.reconcile_orphaned_direction_attempts(
+        early_stop_consecutive_misses=3
+    )
+
+    assert reconciled == [
+        {
+            "attempt_id": attempt_a["id"],
+            "run_id": "run-a",
+            "iteration": 1,
+            "campaign_id": campaign_a["id"],
+            "budget_refunded": True,
+        }
+    ]
+    assert store.direction_attempt(1, run_id="run-a")["status"] == "CANCELLED_OPERATIONAL"
+    assert store.direction_attempt(1, run_id="run-b")["status"] == "RESERVED"
+    assert store.direction_campaign(campaign_a["id"])["attempts_used"] == 0
+    assert store.direction_campaign(campaign_b["id"])["attempts_used"] == 1
+
+
+def test_store_closes_legacy_active_campaign_with_exhausted_budget(tmp_path: Path) -> None:
+    store = ServiceStore(tmp_path / "service.sqlite3")
+    store.ensure_generation(
+        generation_id="g1",
+        protocol_version="v1",
+        maximum_candidates=10,
+        maximum_holdout_attempts=1,
+    )
+    campaign = store.start_direction_campaign(
+        generation_id="g1",
+        direction="EXPLORE_NEW_MECHANISM",
+        title="legacy",
+        objective="legacy",
+        diagnostic_score=1.0,
+        rationale=[],
+        evidence={},
+        baseline={},
+        maximum_attempts=1,
+        started_iteration=1,
+    )
+    with store.connection() as connection:
+        connection.execute(
+            "UPDATE direction_campaigns SET attempts_used=1 WHERE id=?",
+            (campaign["id"],),
+        )
+
+    recovered = store.reconcile_exhausted_direction_campaigns()
+
+    assert recovered[0]["id"] == campaign["id"]
+    updated = store.direction_campaign(campaign["id"])
+    assert updated["status"] == "EXHAUSTED"
+    assert updated["closure_reason"] == "RECOVERED_EXHAUSTED_CAMPAIGN"
+
+
 def test_iteration_history_returns_proposal_metrics_and_failures(tmp_path: Path) -> None:
     store = ServiceStore(tmp_path / "service.sqlite3")
     store.begin_iteration("run-history", 1)

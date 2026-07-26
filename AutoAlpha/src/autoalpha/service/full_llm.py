@@ -228,17 +228,18 @@ class FullLLMResearchTeam:
         candidate: dict[str, Any],
         library_context: list[dict[str, Any]],
         data_context: dict[str, Any],
+        roles: tuple[str, ...] | None = None,
     ) -> dict[str, RoleOutcome]:
+        selected = roles or (REVIEWER, FALSIFICATION_DESIGNER, FACTOR_LIBRARIAN)
+        allowed = {REVIEWER, FALSIFICATION_DESIGNER, FACTOR_LIBRARIAN}
+        if any(role not in allowed for role in selected):
+            raise ValueError("Invalid pre-evaluation role selection")
         shared = {
             "candidate": _candidate_context(candidate),
             "library_context": _library_context(library_context),
             "data_context": _data_contract_context(data_context),
         }
-        outcomes = await asyncio.gather(
-            self._invoke(REVIEWER, shared),
-            self._invoke(FALSIFICATION_DESIGNER, shared),
-            self._invoke(FACTOR_LIBRARIAN, shared),
-        )
+        outcomes = await asyncio.gather(*(self._invoke(role, shared) for role in selected))
         return {outcome.role: outcome for outcome in outcomes}
 
     async def portfolio_advisory(
@@ -267,7 +268,11 @@ class FullLLMResearchTeam:
         falsification_plan: dict[str, Any],
         falsification_results: list[dict[str, Any]],
         portfolio_advisory: dict[str, Any],
+        roles: tuple[str, ...] | None = None,
     ) -> dict[str, RoleOutcome]:
+        selected = roles or (ROOT_CAUSE_ANALYST, TCA_OBSERVER)
+        if any(role not in {ROOT_CAUSE_ANALYST, TCA_OBSERVER} for role in selected):
+            raise ValueError("Invalid post-evaluation role selection")
         shared = {
             "candidate": _candidate_context(candidate),
             "public_feedback": public_feedback,
@@ -275,10 +280,7 @@ class FullLLMResearchTeam:
             "falsification_results": falsification_results,
             "portfolio_advisory": portfolio_advisory,
         }
-        outcomes = await asyncio.gather(
-            self._invoke(ROOT_CAUSE_ANALYST, shared),
-            self._invoke(TCA_OBSERVER, shared),
-        )
+        outcomes = await asyncio.gather(*(self._invoke(role, shared) for role in selected))
         return {outcome.role: outcome for outcome in outcomes}
 
     async def _invoke(self, role: str, context: dict[str, Any]) -> RoleOutcome:

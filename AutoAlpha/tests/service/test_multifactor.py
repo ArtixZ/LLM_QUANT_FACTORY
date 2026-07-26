@@ -31,6 +31,7 @@ class FakeEvaluator:
         weights=None,
         benchmark_factors=None,
         benchmark_weights=None,
+        bootstrap_samples=500,
     ):
         count = len(factors)
         metrics = {
@@ -63,6 +64,10 @@ class FakeEvaluator:
             "portfolio_weight_method": "equal_risk_cross_sectional_zscore",
             "portfolio_evaluation_protocol": self.protocol_version,
             "portfolio_return_convention": EOD_NEXT_OPEN_RETURN_CONVENTION,
+            "portfolio_bootstrap_samples": bootstrap_samples,
+            "portfolio_evaluation_stage": (
+                "FULL_INFERENCE" if bootstrap_samples else "VECTOR_SCREEN"
+            ),
         }
         return PortfolioEvaluation(metrics, pd.Series([0.0]), {})
 
@@ -80,6 +85,25 @@ class RejectingEvaluator(FakeEvaluator):
             "portfolio_cost_stress_net_ir_change": -0.1,
         }
         return PortfolioEvaluation(metrics, result.net_returns, result.factor_correlations)
+
+
+class InfeasibleBaselineEvaluator(FakeEvaluator):
+    def evaluate_portfolio(self, factors, **kwargs):
+        result = super().evaluate_portfolio(factors, **kwargs)
+        return PortfolioEvaluation(
+            {**result.metrics, "portfolio_coverage": 0.10},
+            result.net_returns,
+            result.factor_correlations,
+        )
+
+
+class CountingRejectingEvaluator(RejectingEvaluator):
+    def __init__(self) -> None:
+        self.bootstrap_samples: list[int] = []
+
+    def evaluate_portfolio(self, factors, **kwargs):
+        self.bootstrap_samples.append(int(kwargs.get("bootstrap_samples", 500)))
+        return super().evaluate_portfolio(factors, **kwargs)
 
 
 def _factor(name: str, field_name: str) -> FactorDefinition:
@@ -232,6 +256,43 @@ def test_hold_preserves_best_rejected_option_and_failed_gates(tmp_path: Path) ->
     assert "best=" in decision.reason
 
 
+def test_rejected_weight_grid_stops_at_vector_screen(tmp_path: Path) -> None:
+    store = ServiceStore(tmp_path / "service.sqlite3")
+    config = ResearchConfig.from_toml(Path("config/research.toml"))
+    incumbent = _factor("incumbent", "adj_close")
+    candidate = _factor("candidate", "amount")
+    for iteration, factor in enumerate((incumbent, candidate), start=1):
+        store.upsert_factor_pool(
+            factor_id=factor.factor_id,
+            source_iteration=iteration,
+            proposal=_proposal(factor),
+            metrics={"sharpe_ratio": 1.0},
+            status="ELIGIBLE",
+            status_reason="passed",
+        )
+    evaluator = CountingRejectingEvaluator()
+    store.record_portfolio_decision(
+        run_id="run-1",
+        iteration=1,
+        action="BOOTSTRAP",
+        candidate_id=incumbent.factor_id,
+        removed_factor_id=None,
+        accepted=True,
+        reason="initial",
+        metrics=evaluator.evaluate_portfolio([incumbent]).metrics,
+        members=[(incumbent.factor_id, 1.0)],
+    )
+    evaluator.bootstrap_samples.clear()
+
+    decision = MultiFactorResearchEngine(store, evaluator, config).decide(
+        candidate, candidate_eligible=True
+    )
+
+    assert not decision.accepted
+    assert evaluator.bootstrap_samples.count(500) == 1  # incumbent only
+    assert evaluator.bootstrap_samples.count(0) == 10
+
+
 def test_unknown_protocol_incumbent_is_not_reused(tmp_path: Path) -> None:
     store = ServiceStore(tmp_path / "service.sqlite3")
     config = ResearchConfig.from_toml(Path("config/research.toml"))
@@ -304,6 +365,91 @@ def test_bootstrap_skips_factor_with_manually_exposed_holdout(tmp_path: Path) ->
 
     assert decision is not None
     assert decision.candidate_id == clean.factor_id
+
+
+def test_bootstrap_records_rehabilitation_without_accepting_infeasible_control(
+    tmp_path: Path,
+) -> None:
+    store = ServiceStore(tmp_path / "service.sqlite3")
+    config = ResearchConfig.from_toml(Path("config/research.toml"))
+    factor = _factor("weak-control", "amount")
+    store.upsert_factor_pool(
+        factor_id=factor.factor_id,
+        source_iteration=1,
+        proposal=_proposal(factor),
+        metrics={
+            "evaluation_protocol": CANONICAL_LIBRARY_PROTOCOL,
+            "long_only_sharpe_ratio": 1.0,
+        },
+        status="ELIGIBLE",
+        status_reason="library only",
+    )
+
+    decision = MultiFactorResearchEngine(
+        store,
+        InfeasibleBaselineEvaluator(),
+        config,
+        run_id="run-1",
+    ).bootstrap_champion("run-1", 2)
+
+    assert decision is None
+    history = store.portfolio_history(run_id="run-1")
+    assert history[0]["action"] == "BASELINE_REHABILITATION"
+    assert not history[0]["accepted"]
+    assert history[0]["metrics"]["portfolio_control_state"] == "NEEDS_REHABILITATION"
+    assert store.active_portfolio(run_id="run-1") is None
+
+
+def test_candidate_registration_uses_task_metrics_for_promotion(tmp_path: Path) -> None:
+    store = ServiceStore(tmp_path / "service.sqlite3")
+    config = ResearchConfig.from_toml(Path("config/research.toml"))
+    factor = _factor("namespace", "amount")
+    canonical = {
+        "evaluation_protocol": CANONICAL_LIBRARY_PROTOCOL,
+        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_sharpe_ratio": 0.25,
+        "long_only_active_information_ratio": 0.15,
+        "long_only_simple_annual_return": 0.04,
+        "long_only_coverage": 0.93,
+        "long_only_annual_turnover": 20.0,
+        "long_only_walk_forward_fold_count": config.walk_forward.minimum_folds,
+    }
+    task = {
+        "evaluation_protocol": config.governance.protocol_version,
+        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_sharpe_ratio": 1.0,
+        "long_only_simple_annual_return": 0.10,
+        "long_only_coverage": 0.95,
+        "long_only_cost_stress_net_ir": 0.8,
+        "long_only_annual_turnover": 10.0,
+        "long_only_annual_return_dispersion": 0.05,
+        "long_only_walk_forward_fold_count": config.walk_forward.minimum_folds,
+        "long_only_walk_forward_positive_fraction": 0.8,
+        "long_only_walk_forward_worst_sharpe": 0.2,
+        "long_only_deflated_sharpe_probability": 0.99,
+        "long_only_net_return_hac_p_value": 0.01,
+        "parameter_stability_positive_fraction": 1.0,
+        "parameter_stability_worst_sharpe": 0.2,
+        "multiple_testing_fdr_passed": True,
+        "probability_backtest_overfitting": 0.1,
+    }
+
+    admitted = MultiFactorResearchEngine(store, FakeEvaluator(), config).register_candidate(
+        factor,
+        1,
+        _proposal(factor),
+        canonical,
+        task_metrics=task,
+    )
+
+    assert admitted
+    stored = store.factor_pool_record(factor.factor_id)["metrics"]
+    assert stored["production_promotion_gate_passed"]
+    assert "stale_evaluation_protocol" not in stored["production_promotion_gate_failures"]
+    assert stored["metric_namespaces"]["task"]["protocol"] == config.governance.protocol_version
+    assert stored["task_research_metrics"]["evaluation_protocol"] == (
+        config.governance.protocol_version
+    )
 
 
 def test_candidate_screen_rejects_extreme_turnover_before_portfolio_search() -> None:

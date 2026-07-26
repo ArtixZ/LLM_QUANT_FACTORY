@@ -5,6 +5,7 @@ from typing import Any
 
 from autoalpha.service.full_llm import (
     FACTOR_LIBRARIAN,
+    FALSIFICATION_DESIGNER,
     FULL_LLM_ROLES,
     FullLLMResearchTeam,
     _data_contract_context,
@@ -142,6 +143,21 @@ def test_unexpected_role_failure_is_audited_and_iteration_can_continue() -> None
     assert len(outcomes) == 3
     assert all(outcome.status == "FAILED" for outcome in outcomes.values())
     assert all(outcome.artifact == {"advisory_available": False} for outcome in outcomes.values())
+
+
+def test_conditional_role_selection_invokes_only_requested_advisers() -> None:
+    team = FullLLMResearchTeam(StubAnalysisClient())  # type: ignore[arg-type]
+
+    outcomes = asyncio.run(
+        team.pre_evaluation(
+            candidate={},
+            library_context=[],
+            data_context={},
+            roles=(FALSIFICATION_DESIGNER,),
+        )
+    )
+
+    assert list(outcomes) == [FALSIFICATION_DESIGNER]
 
 
 def test_llm_roles_receive_field_semantics_and_product_inventory() -> None:

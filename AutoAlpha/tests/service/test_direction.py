@@ -122,7 +122,7 @@ def test_extended_direction_requires_actual_extended_field_usage() -> None:
     assert outcome["required_data_field_used"] is False
 
 
-def test_direction_progress_requires_an_accepted_public_action() -> None:
+def test_direction_progress_learns_from_partial_public_improvement_without_promoting() -> None:
     config = _config()
     baseline = {
         "portfolio_annual_return_dispersion": 0.22,
@@ -151,9 +151,46 @@ def test_direction_progress_requires_an_accepted_public_action() -> None:
         config=config,
     )
 
-    assert rejected["direction_improved"] is False
+    assert rejected["direction_improved"] is True
+    assert rejected["objective_resolved"] is False
     assert accepted["direction_improved"] is True
     assert accepted["objective_resolved"] is False
+
+
+def test_direction_bandit_records_empirical_improvement_rates() -> None:
+    config = _config()
+    history = [
+        {
+            "direction": "DIVERSIFY_FACTOR_LIBRARY",
+            "attempts": [
+                {"status": "COMPLETED", "improved": True},
+                {"status": "CANCELLED_OPERATIONAL", "improved": False},
+            ],
+        },
+        {
+            "direction": "EXPLORE_NEW_MECHANISM",
+            "attempts": [
+                {"status": "COMPLETED", "improved": False},
+                {"status": "COMPLETED", "improved": False},
+            ],
+        },
+    ]
+
+    plan = diagnose_direction(
+        {},
+        [{} for _ in range(config.adaptive_direction.minimum_recent_candidates)],
+        blocked_directions=set(),
+        config=config,
+        campaign_history=history,
+    )
+
+    bandit = plan.evidence["direction_bandit"]
+    assert bandit["DIVERSIFY_FACTOR_LIBRARY"]["research_attempts"] == 1
+    assert bandit["DIVERSIFY_FACTOR_LIBRARY"]["improved_attempts"] == 1
+    assert (
+        bandit["DIVERSIFY_FACTOR_LIBRARY"]["posterior_improvement_probability"]
+        > bandit["EXPLORE_NEW_MECHANISM"]["posterior_improvement_probability"]
+    )
 
 
 def test_direction_campaign_stops_after_two_consecutive_misses(tmp_path: Path) -> None:

@@ -16,7 +16,10 @@ from autoalpha.service.store import ServiceStore
 
 ADD_WEIGHT_GRID = (0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.55, 0.60, 0.70)
 REPLACE_WEIGHT_GRID = (0.20, 0.40, 0.50, 0.60, 0.70)
-OPTION_EVALUATION_WORKERS = min(2, max(1, os.cpu_count() or 1))
+OPTION_EVALUATION_WORKERS = min(
+    max(1, int(os.getenv("AUTOALPHA_OPTION_WORKERS", "4"))),
+    max(1, os.cpu_count() or 1),
+)
 
 
 @dataclass(frozen=True)
@@ -66,7 +69,8 @@ class MultiFactorResearchEngine:
         portfolio = self.store.active_portfolio(run_id=self.run_id)
         if not portfolio:
             return []
-        stored_protocol = portfolio.get("metrics", {}).get("portfolio_evaluation_protocol")
+        stored_metrics = portfolio.get("metrics", {})
+        stored_protocol = stored_metrics.get("portfolio_evaluation_protocol")
         if stored_protocol != self.config.governance.protocol_version:
             return []
         result = []
@@ -80,6 +84,8 @@ class MultiFactorResearchEngine:
     def bootstrap_champion(self, run_id: str, iteration: int) -> PortfolioDecision | None:
         if self.active_components():
             return None
+        if self.store.portfolio_history(limit=1, run_id=run_id):
+            return None
         contaminated = self.store.contaminated_factor_ids()
         eligible = [
             record
@@ -92,23 +98,66 @@ class MultiFactorResearchEngine:
         ]
         if not eligible:
             return None
-        champion = max(eligible, key=lambda record: _single_factor_utility(record["metrics"]))
-        factor = factor_from_pool_record(champion)
-        evaluation = self.evaluator.evaluate_portfolio([factor])
-        decision = PortfolioDecision(
-            action="BOOTSTRAP",
-            accepted=True,
-            reason="Highest deterministic utility among the legacy eligible factor pool",
-            candidate_id=factor.factor_id,
-            removed_factor_id=None,
-            factors=(factor,),
-            weights=(1.0,),
-            evaluation=evaluation,
-            failed_gates=(),
-            utility_change=0.0,
+        ranked = sorted(
+            eligible,
+            key=lambda record: _single_factor_utility(record["metrics"]),
+            reverse=True,
         )
-        self.persist(run_id, iteration, decision)
-        return decision
+        evaluated: list[PortfolioDecision] = []
+        for record in ranked[:12]:
+            factor = factor_from_pool_record(record)
+            evaluation = self.evaluator.evaluate_portfolio([factor])
+            failures = tuple(_absolute_portfolio_gate_failures(evaluation.metrics, self.config))
+            evaluation.metrics.update(
+                {
+                    "portfolio_proposed_absolute_failures": list(failures),
+                    "portfolio_absolute_gate_passed": not failures,
+                    "portfolio_control_state": (
+                        "FEASIBLE_BASELINE" if not failures else "NEEDS_REHABILITATION"
+                    ),
+                }
+            )
+            evaluated.append(
+                PortfolioDecision(
+                    action="BOOTSTRAP",
+                    accepted=not failures,
+                    reason=(
+                        "Highest-ranked deterministic library factor that passed all absolute gates"
+                        if not failures
+                        else "baseline rehabilitation failed: " + ", ".join(failures)
+                    ),
+                    candidate_id=factor.factor_id,
+                    removed_factor_id=None,
+                    factors=(factor,),
+                    weights=(1.0,),
+                    evaluation=evaluation,
+                    failed_gates=failures,
+                    utility_change=0.0,
+                )
+            )
+            if not failures:
+                decision = evaluated[-1]
+                self.persist(run_id, iteration, decision)
+                return decision
+        best = max(evaluated, key=lambda item: _rejected_option_key(item, self.config))
+        rejected = PortfolioDecision(
+            action="BASELINE_REHABILITATION",
+            accepted=False,
+            reason=(
+                "No library factor passed the absolute baseline gates; "
+                f"best={best.candidate_id} failed={','.join(best.failed_gates)}"
+            ),
+            candidate_id=best.candidate_id,
+            removed_factor_id=None,
+            factors=(),
+            weights=(),
+            evaluation=best.evaluation,
+            failed_gates=best.failed_gates,
+            utility_change=0.0,
+            option_diagnostics=tuple(_option_diagnostic(item) for item in evaluated),
+        )
+        self.persist(run_id, iteration, rejected)
+        return None
 
     def register_candidate(
         self,
@@ -116,12 +165,34 @@ class MultiFactorResearchEngine:
         iteration: int,
         proposal: dict[str, Any],
         metrics: dict[str, Any],
+        *,
+        task_metrics: dict[str, Any] | None = None,
     ) -> bool:
-        admission_failures = _library_admission_failures(metrics, self.config)
-        promotion_failures = _candidate_screen_failures(metrics, self.config)
+        library_metrics = dict(metrics)
+        promotion_metrics = task_metrics
+        if promotion_metrics is None:
+            nested = library_metrics.get("task_research_metrics")
+            if not isinstance(nested, dict):
+                nested = library_metrics.get("source_task_metrics")
+            promotion_metrics = nested if isinstance(nested, dict) else library_metrics
+        admission_failures = _library_admission_failures(library_metrics, self.config)
+        promotion_failures = _candidate_screen_failures(promotion_metrics, self.config)
         admitted = not admission_failures
-        metrics.update(
+        library_metrics.update(
             {
+                "task_research_metrics": promotion_metrics,
+                "metric_namespaces": {
+                    "library": {
+                        "protocol": library_metrics.get("evaluation_protocol"),
+                        "scope": "CANONICAL_CROSS_TASK_LIBRARY",
+                        "metrics_location": "root",
+                    },
+                    "task": {
+                        "protocol": promotion_metrics.get("evaluation_protocol"),
+                        "scope": "TASK_RESEARCH_AND_PROMOTION",
+                        "metrics_location": "task_research_metrics",
+                    },
+                },
                 "library_admission_gate_passed": admitted,
                 "library_admission_gate_failures": admission_failures,
                 "production_promotion_gate_passed": not promotion_failures,
@@ -135,7 +206,7 @@ class MultiFactorResearchEngine:
             factor_id=factor.factor_id,
             source_iteration=iteration,
             proposal=proposal,
-            metrics=metrics,
+            metrics=library_metrics,
             status="ELIGIBLE" if admitted else "SCREENED_OUT",
             status_reason=(
                 "library admission passed; production promotion pending"
@@ -231,14 +302,28 @@ class MultiFactorResearchEngine:
 
         def evaluate_option(
             option: tuple[str, list[FactorDefinition], tuple[float, ...], str | None],
+            *,
+            bootstrap_samples: int,
         ) -> PortfolioDecision:
             action, factors, weights, removed_factor_id = option
-            evaluation = self.evaluator.evaluate_portfolio(
-                factors,
-                weights=weights,
-                benchmark_factors=active,
-                benchmark_weights=active_weights,
-            )
+            evaluation_kwargs = {
+                "weights": weights,
+                "benchmark_factors": active,
+                "benchmark_weights": active_weights,
+            }
+            try:
+                evaluation = self.evaluator.evaluate_portfolio(
+                    factors,
+                    **evaluation_kwargs,
+                    bootstrap_samples=bootstrap_samples,
+                )
+            except TypeError as error:
+                if "bootstrap_samples" not in str(error):
+                    raise
+                evaluation = self.evaluator.evaluate_portfolio(
+                    factors,
+                    **evaluation_kwargs,
+                )
             proposed_failures = _absolute_portfolio_gate_failures(evaluation.metrics, self.config)
             feasibility_recovery = _is_feasibility_recovery(
                 evaluation.metrics, current.metrics, self.config
@@ -281,9 +366,37 @@ class MultiFactorResearchEngine:
                 max_workers=min(OPTION_EVALUATION_WORKERS, len(options)),
                 thread_name_prefix="portfolio-option",
             ) as executor:
-                evaluated = list(executor.map(evaluate_option, options))
+                screened = list(
+                    executor.map(
+                        lambda option: evaluate_option(option, bootstrap_samples=0),
+                        options,
+                    )
+                )
         else:
-            evaluated = [evaluate_option(option) for option in options]
+            screened = [
+                evaluate_option(option, bootstrap_samples=0) for option in options
+            ]
+        passing_indexes = [index for index, option in enumerate(screened) if option.accepted]
+        evaluated = list(screened)
+        if passing_indexes:
+            passing_options = [options[index] for index in passing_indexes]
+            if len(passing_options) > 1:
+                with ThreadPoolExecutor(
+                    max_workers=min(OPTION_EVALUATION_WORKERS, len(passing_options)),
+                    thread_name_prefix="portfolio-inference",
+                ) as executor:
+                    full = list(
+                        executor.map(
+                            lambda option: evaluate_option(option, bootstrap_samples=500),
+                            passing_options,
+                        )
+                    )
+            else:
+                full = [
+                    evaluate_option(passing_options[0], bootstrap_samples=500)
+                ]
+            for index, decision in zip(passing_indexes, full, strict=True):
+                evaluated[index] = decision
         passing = [option for option in evaluated if option.accepted]
         diagnostics = tuple(_option_diagnostic(option) for option in evaluated)
         if passing:
@@ -497,7 +610,11 @@ def _library_admission_failures(metrics: dict[str, Any], config: ResearchConfig)
     """Retain bounded weak signals for portfolio tests without relaxing promotion gates."""
     long_sharpe = float(metrics.get("long_only_sharpe_ratio", -100.0))
     active_ir = float(metrics.get("long_only_active_information_ratio", long_sharpe))
-    rank_ic = abs(float(metrics.get("rank_ic_mean", 0.0)))
+    rank_ic = (
+        abs(float(metrics.get("rank_ic_mean", 0.0)))
+        if metrics.get("prediction_diagnostics_available", True)
+        else 0.0
+    )
     checks = {
         "data_basis_incompatible": bool(metrics.get("data_basis_compatible", True)),
         "stale_evaluation_protocol": (
@@ -621,6 +738,13 @@ def _absolute_portfolio_gate_failures(metrics: dict[str, Any], config: ResearchC
         <= policy.maximum_net_return_p_value,
     }
     return [name for name, passed in checks.items() if not passed]
+
+
+def portfolio_absolute_gate_failures(
+    metrics: dict[str, Any], config: ResearchConfig
+) -> list[str]:
+    """Public read-only baseline diagnosis used by the research planner."""
+    return _absolute_portfolio_gate_failures(metrics, config)
 
 
 def _portfolio_action_gate_failures(

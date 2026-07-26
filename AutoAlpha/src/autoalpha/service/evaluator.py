@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import math
+import os
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -41,6 +43,12 @@ from autoalpha.research.statistics import hac_mean_inference
 from autoalpha.service.autocombine_intelligence import signal_independence_metrics
 from autoalpha.service.research_protocol import research_evidence_tier
 
+_SHARED_SIGNAL_CACHE: OrderedDict[
+    tuple[str, str, str, str, int], pd.DataFrame
+] = OrderedDict()
+_SHARED_SIGNAL_CACHE_LOCK = Lock()
+_SHARED_SIGNAL_CACHE_MAX = max(0, int(os.getenv("AUTOALPHA_SHARED_SIGNAL_CACHE_SIZE", "8")))
+
 
 @dataclass(frozen=True)
 class ExploratoryEvaluation:
@@ -55,6 +63,14 @@ class PortfolioEvaluation:
     metrics: dict[str, Any]
     net_returns: pd.Series
     factor_correlations: dict[str, float]
+
+
+@dataclass(frozen=True)
+class CandidatePreflight:
+    passed: bool
+    failures: tuple[str, ...]
+    warnings: tuple[str, ...]
+    metrics: dict[str, Any]
 
 
 class PriceVolumeEvaluator:
@@ -93,6 +109,8 @@ class PriceVolumeEvaluator:
         self._fields: dict[str, pd.DataFrame] | None = None
         self._signal_cache: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._signal_cache_lock = Lock()
+        self._preflight_cache: OrderedDict[str, CandidatePreflight] = OrderedDict()
+        self._preflight_cache_lock = Lock()
         self._portfolio_path_cache: OrderedDict[
             tuple[tuple[str, float], ...], tuple[pd.DataFrame, pd.DataFrame]
         ] = OrderedDict()
@@ -103,10 +121,101 @@ class PriceVolumeEvaluator:
     def set_trial_count(self, value: int) -> None:
         self.trial_count = max(1, int(value))
 
-    def evaluate(self, factor: FactorDefinition) -> ExploratoryEvaluation:
-        fields = self._load_fields(expression_fields(factor.expression))
+    def preflight(self, factor: FactorDefinition) -> CandidatePreflight:
+        """Cheap signal viability checks before inference and parameter perturbations."""
+        cache = getattr(self, "_preflight_cache", None)
+        lock = getattr(self, "_preflight_cache_lock", None)
+        if cache is not None and lock is not None:
+            with lock:
+                cached = cache.get(factor.factor_id)
+                if cached is not None:
+                    cache.move_to_end(factor.factor_id)
+                    return cached
+        started = perf_counter()
         self.validator.validate(factor.expression)
-        signal = self.compiler.evaluate(factor.expression, fields) * factor.expected_direction
+        signal = self._factor_signal(factor)
+        validation = signal.loc[
+            (signal.index >= pd.Timestamp(self.config.splits.validation.start))
+            & (signal.index <= pd.Timestamp(self.config.splits.validation.end))
+        ]
+        if validation.empty:
+            raise ValueError("Candidate preflight has no public validation observations")
+        stride = max(1, len(validation) // 512)
+        sampled = validation.iloc[::stride]
+        effective_names = sampled.notna().sum(axis=1)
+        dispersion = sampled.std(axis=1, skipna=True)
+        valid_dates = effective_names.ge(self.config.minimum_cross_section) & dispersion.gt(1e-12)
+        unique_fraction = sampled.nunique(axis=1, dropna=True).div(
+            effective_names.replace(0, np.nan)
+        )
+        ranked = sampled.rank(axis=1, pct=True)
+        paired = ranked.notna() & ranked.shift(1).notna()
+        changed = ranked.diff().abs().gt(1e-8) & paired
+        paired_count = int(paired.to_numpy().sum())
+        temporal_update_rate = (
+            float(changed.to_numpy().sum() / paired_count) if paired_count else 0.0
+        )
+        coverage = self._dynamic_coverage(signal)
+        median_names = float(effective_names.median()) if not effective_names.empty else 0.0
+        median_unique_fraction = (
+            float(unique_fraction.median()) if unique_fraction.notna().any() else 0.0
+        )
+        median_cross_sectional_std = (
+            float(dispersion.median()) if dispersion.notna().any() else 0.0
+        )
+        failures: list[str] = []
+        warnings: list[str] = []
+        if int(valid_dates.sum()) < 20:
+            failures.append("insufficient_cross_sectional_dates")
+        if median_names < self.config.minimum_cross_section:
+            failures.append("insufficient_effective_names")
+        if coverage < max(0.25, self.config.evaluation.minimum_coverage * 0.5):
+            failures.append("severe_coverage_shortfall")
+        if median_unique_fraction < 0.005 or median_cross_sectional_std <= 1e-12:
+            failures.append("cross_sectionally_degenerate")
+        if int(valid_dates.sum()) < 60:
+            warnings.append("sparse_prediction_diagnostics")
+        if temporal_update_rate < 0.01:
+            warnings.append("low_temporal_update_rate")
+        if median_unique_fraction < 0.02:
+            warnings.append("tie_heavy_cross_section")
+        metrics = {
+            "protocol": "SIGNAL_PREFLIGHT_V1",
+            "factor_id": factor.factor_id,
+            "factor_fields": sorted(expression_fields(factor.expression)),
+            "sample_stride": stride,
+            "sampled_dates": len(sampled),
+            "valid_cross_sectional_dates": int(valid_dates.sum()),
+            "median_effective_names": median_names,
+            "median_unique_fraction": median_unique_fraction,
+            "median_cross_sectional_std": median_cross_sectional_std,
+            "temporal_update_rate": temporal_update_rate,
+            "coverage": coverage,
+            "elapsed_seconds": perf_counter() - started,
+        }
+        outcome = CandidatePreflight(
+            passed=not failures,
+            failures=tuple(failures),
+            warnings=tuple(warnings),
+            metrics=metrics,
+        )
+        if cache is not None and lock is not None:
+            with lock:
+                cache[factor.factor_id] = outcome
+                cache.move_to_end(factor.factor_id)
+                while len(cache) > 64:
+                    cache.popitem(last=False)
+        return outcome
+
+    def evaluate(self, factor: FactorDefinition) -> ExploratoryEvaluation:
+        evaluation_started = perf_counter()
+        preflight = self.preflight(factor)
+        if not preflight.passed:
+            raise ValueError(
+                "Candidate signal preflight failed: " + ", ".join(preflight.failures)
+            )
+        fields = self._load_fields(expression_fields(factor.expression))
+        signal = self._factor_signal(factor)
         path = self._signal_path(signal)
         evaluation_dates = _walk_forward_dates(path.index, self.config)
         path = path.loc[evaluation_dates]
@@ -121,10 +230,9 @@ class PriceVolumeEvaluator:
             method="pearson",
             minimum_names=self.config.minimum_cross_section,
         )
-        if len(rank_ic) < 60:
-            raise ValueError("Insufficient valid dates for exploratory evaluation")
-        rank_ic_hac = hac_mean_inference(rank_ic.to_numpy(), lags=5)
-        pearson_ic_hac = hac_mean_inference(pearson_ic.to_numpy(), lags=5)
+        rank_ic_summary = _ic_diagnostics(rank_ic)
+        pearson_ic_summary = _ic_diagnostics(pearson_ic)
+        prediction_diagnostics_available = len(rank_ic) >= 60 and len(pearson_ic) >= 60
 
         net_return = path["net"]
         stressed = path["stressed"]
@@ -172,12 +280,20 @@ class PriceVolumeEvaluator:
             factor.expression.to_dict(), self.execution_basis
         )
         metrics = {
-            "rank_ic_mean": float(rank_ic.mean()),
-            "rank_ic_ir": _annualized_ir(rank_ic),
-            "rank_ic_hac_p_value": _two_sided_p(rank_ic_hac.t_stat),
-            "pearson_ic_mean": float(pearson_ic.mean()),
-            "pearson_ic_ir": _annualized_ir(pearson_ic),
-            "pearson_ic_hac_p_value": _two_sided_p(pearson_ic_hac.t_stat),
+            "prediction_diagnostics_available": prediction_diagnostics_available,
+            "prediction_diagnostics_reason": (
+                None
+                if prediction_diagnostics_available
+                else "fewer than 60 valid cross-sectional IC dates; long-only evaluation retained"
+            ),
+            "rank_ic_observations": len(rank_ic),
+            "rank_ic_mean": rank_ic_summary["mean"],
+            "rank_ic_ir": rank_ic_summary["ir"],
+            "rank_ic_hac_p_value": rank_ic_summary["p_value"],
+            "pearson_ic_observations": len(pearson_ic),
+            "pearson_ic_mean": pearson_ic_summary["mean"],
+            "pearson_ic_ir": pearson_ic_summary["ir"],
+            "pearson_ic_hac_p_value": pearson_ic_summary["p_value"],
             "incremental_net_ir": increment.incremental_net_ir,
             "incremental_annual_return": increment.incremental_annual_return,
             "simple_annual_return": simple_annual_return,
@@ -187,6 +303,12 @@ class PriceVolumeEvaluator:
             "incremental_max_drawdown": increment.incremental_max_drawdown,
             "return_drawdown_efficiency_change": increment.return_drawdown_efficiency_change,
             "cost_stress_net_ir": float(increment.cost_stress_net_ir or 0.0),
+            "incremental_bootstrap_confidence_interval": (
+                list(increment.bootstrap_confidence_interval)
+                if increment.bootstrap_confidence_interval is not None
+                else None
+            ),
+            "bootstrap_samples": 500,
             "annual_turnover": float(turnover.mean() * 245),
             "capacity_cny": float(path.attrs["capacity_cny"]),
             "coverage": coverage,
@@ -208,6 +330,12 @@ class PriceVolumeEvaluator:
             "return_convention": EOD_NEXT_OPEN_RETURN_CONVENTION,
             "data_basis_compatible": not data_basis_blockers,
             "data_basis_blockers": list(data_basis_blockers),
+            "signal_preflight": {
+                **preflight.metrics,
+                "passed": preflight.passed,
+                "failures": list(preflight.failures),
+                "warnings": list(preflight.warnings),
+            },
             "walk_forward_folds": folds,
             "walk_forward_fold_count": len(folds),
             "walk_forward_positive_fraction": float(
@@ -229,6 +357,7 @@ class PriceVolumeEvaluator:
             **active_metrics,
             **neutral_metrics,
         }
+        metrics["evaluation_elapsed_seconds"] = perf_counter() - evaluation_started
         gate_failures = _exploratory_gate_failures(metrics, self.config)
         metrics["exploratory_gate_passed"] = not gate_failures
         metrics["exploratory_gate_failures"] = gate_failures
@@ -250,10 +379,14 @@ class PriceVolumeEvaluator:
         weights: list[float] | tuple[float, ...] | None = None,
         benchmark_factors: list[FactorDefinition] | None = None,
         benchmark_weights: list[float] | tuple[float, ...] | None = None,
+        bootstrap_samples: int = 500,
     ) -> PortfolioEvaluation:
         """Evaluate alpha diagnostics and the deployable A-share portfolio separately."""
         if not factors:
             raise ValueError("A portfolio requires at least one factor")
+        if bootstrap_samples < 0:
+            raise ValueError("bootstrap_samples must be non-negative")
+        evaluation_started = perf_counter()
         evidence_tier = getattr(self, "research_evidence_tier", research_evidence_tier(self.config))
         normalized_weights = _normalize_weights(factors, weights)
         alpha_all, proposed_all = self._portfolio_paths(factors, normalized_weights)
@@ -281,7 +414,7 @@ class PriceVolumeEvaluator:
             proposed["net"],
             stressed_treatment_net_returns=proposed["stressed"],
             hac_lags=5,
-            bootstrap_samples=500,
+            bootstrap_samples=bootstrap_samples,
             seed=self.config.random_seed,
         )
         annual = annual_robustness(proposed["net"])
@@ -341,6 +474,15 @@ class PriceVolumeEvaluator:
                 increment.return_drawdown_efficiency_change
             ),
             "portfolio_incremental_cost_stress_net_ir": float(increment.cost_stress_net_ir or 0.0),
+            "portfolio_incremental_bootstrap_confidence_interval": (
+                list(increment.bootstrap_confidence_interval)
+                if increment.bootstrap_confidence_interval is not None
+                else None
+            ),
+            "portfolio_bootstrap_samples": bootstrap_samples,
+            "portfolio_evaluation_stage": (
+                "FULL_INFERENCE" if bootstrap_samples > 0 else "VECTOR_SCREEN"
+            ),
             "portfolio_sharpe_change": proposed_sharpe - benchmark_sharpe,
             "portfolio_annual_return_change": (proposed_annual_return - benchmark_annual_return),
             "portfolio_max_drawdown_change": proposed_drawdown - benchmark_drawdown,
@@ -420,6 +562,7 @@ class PriceVolumeEvaluator:
             ),
             "alpha_diagnostic_return_convention": EOD_NEXT_OPEN_RETURN_CONVENTION,
         }
+        metrics["portfolio_evaluation_elapsed_seconds"] = perf_counter() - evaluation_started
         numeric = [value for value in metrics.values() if isinstance(value, int | float)]
         if not all(np.isfinite(value) for value in numeric):
             raise ValueError("Portfolio evaluation produced non-finite metrics")
@@ -449,17 +592,43 @@ class PriceVolumeEvaluator:
         return alpha_path, strategy_path
 
     def _factor_signal(self, factor: FactorDefinition) -> pd.DataFrame:
+        local_key = f"{factor.factor_id}:{factor.expected_direction}"
         lock = getattr(self, "_signal_cache_lock", None)
         if lock is None:
-            cached = self._signal_cache.get(factor.factor_id)
+            cached = self._signal_cache.get(local_key)
+            if cached is None and factor.expected_direction == 1:
+                cached = self._signal_cache.get(factor.factor_id)
             if cached is not None:
                 return cached
         else:
             with lock:
-                cached = self._signal_cache.get(factor.factor_id)
+                cached = self._signal_cache.get(local_key)
+                if cached is None and factor.expected_direction == 1:
+                    cached = self._signal_cache.get(factor.factor_id)
                 if cached is not None:
-                    self._signal_cache.move_to_end(factor.factor_id)
+                    if local_key in self._signal_cache:
+                        self._signal_cache.move_to_end(local_key)
                     return cached
+        shared_key = (
+            _shared_signal_cache_key(self, factor)
+            if _SHARED_SIGNAL_CACHE_MAX
+            and hasattr(self, "workspace")
+            and hasattr(self, "config")
+            else None
+        )
+        if shared_key is not None:
+            with _SHARED_SIGNAL_CACHE_LOCK:
+                cached = _SHARED_SIGNAL_CACHE.get(shared_key)
+                if cached is not None:
+                    _SHARED_SIGNAL_CACHE.move_to_end(shared_key)
+            if cached is not None:
+                if lock is None:
+                    self._signal_cache[local_key] = cached
+                else:
+                    with lock:
+                        self._signal_cache[local_key] = cached
+                        self._signal_cache.move_to_end(local_key)
+                return cached
         fields = self._load_fields(expression_fields(factor.expression))
         raw = self.compiler.evaluate(factor.expression, fields) * factor.expected_direction
         start = pd.Timestamp(self.config.splits.train.start)
@@ -468,13 +637,19 @@ class PriceVolumeEvaluator:
         standard_deviation = raw.std(axis=1).replace(0, np.nan)
         signal = raw.sub(raw.mean(axis=1), axis=0).div(standard_deviation, axis=0)
         if lock is None:
-            self._signal_cache[factor.factor_id] = signal
+            self._signal_cache[local_key] = signal
         else:
             with lock:
-                self._signal_cache[factor.factor_id] = signal
-                self._signal_cache.move_to_end(factor.factor_id)
+                self._signal_cache[local_key] = signal
+                self._signal_cache.move_to_end(local_key)
                 while len(self._signal_cache) > 32:
                     self._signal_cache.popitem(last=False)
+        if shared_key is not None:
+            with _SHARED_SIGNAL_CACHE_LOCK:
+                _SHARED_SIGNAL_CACHE[shared_key] = signal
+                _SHARED_SIGNAL_CACHE.move_to_end(shared_key)
+                while len(_SHARED_SIGNAL_CACHE) > _SHARED_SIGNAL_CACHE_MAX:
+                    _SHARED_SIGNAL_CACHE.popitem(last=False)
         return signal
 
     def prime_factor_signals(self, factors: list[FactorDefinition]) -> None:
@@ -880,6 +1055,19 @@ class PriceVolumeEvaluator:
         return self._fields
 
 
+def _shared_signal_cache_key(
+    evaluator: PriceVolumeEvaluator,
+    factor: FactorDefinition,
+) -> tuple[str, str, str, str, int]:
+    return (
+        evaluator.workspace.fingerprint,
+        evaluator.config.splits.train.start.isoformat(),
+        evaluator.config.splits.validation.end.isoformat(),
+        factor.factor_id,
+        factor.expected_direction,
+    )
+
+
 def _standalone_long_only_metrics(
     path: pd.DataFrame,
     config: ResearchConfig,
@@ -970,6 +1158,25 @@ def _cross_sectional_residual(signal: pd.DataFrame, exposure: pd.DataFrame) -> p
     denominator = x_centered.pow(2).sum(axis=1).replace(0.0, np.nan)
     beta = x_centered.mul(y_centered).sum(axis=1).div(denominator)
     return y_centered.sub(x_centered.mul(beta, axis=0)).where(valid)
+
+
+def _ic_diagnostics(values: pd.Series) -> dict[str, float]:
+    clean = values.replace([np.inf, -np.inf], np.nan).dropna()
+    if clean.empty:
+        return {"mean": 0.0, "ir": 0.0, "p_value": 1.0}
+    mean = float(clean.mean())
+    information_ratio = _annualized_ir(clean)
+    if len(clean) < 2:
+        return {"mean": mean, "ir": information_ratio, "p_value": 1.0}
+    inference = hac_mean_inference(
+        clean.to_numpy(),
+        lags=min(5, len(clean) - 1),
+    )
+    return {
+        "mean": mean,
+        "ir": information_ratio,
+        "p_value": _two_sided_p(inference.t_stat),
+    }
 
 
 def _annualized_ir(values: pd.Series) -> float:

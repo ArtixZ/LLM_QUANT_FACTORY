@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 const labels = {
   base_url: "API Base URL", model: "模型名称", temperature: "生成温度", full_llm_enabled: "完整 LLM 团队",
-  iteration_interval_seconds: "轮次间隔", maximum_active_factors: "冠军组合因子上限", research_concurrency: "并发研究轮次",
+  iteration_interval_seconds: "轮次间隔", proposal_batch_size: "同方向批量提案数", maximum_active_factors: "冠军组合因子上限", research_concurrency: "并发研究轮次",
   data_path: "研究数据工作区", market_data_root: "市场数据下载器", data_auto_update_enabled: "自动增量更新", data_update_hour: "更新时间", data_product_ids: "数据产品",
   autocombine_default_objective: "默认优化目标", autocombine_default_min_factors: "最少因子", autocombine_default_max_factors: "最多因子",
   autocombine_default_minimum_weight: "最小权重", autocombine_default_maximum_weight: "最大权重", autocombine_default_weight_step: "权重步长",

@@ -136,6 +136,33 @@ class CompatibleChatClient:
         ]
         return await self._generate(messages)
 
+    async def propose_batch(
+        self,
+        memories: list[dict[str, Any]],
+        iteration: int,
+        *,
+        batch_size: int,
+        data_context: dict[str, Any] | None = None,
+    ) -> list[GeneratedProposal]:
+        if batch_size < 1 or batch_size > 5:
+            raise ValueError("batch_size must be between 1 and 5")
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": _BATCH_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "iteration": iteration,
+                        "batch_size": batch_size,
+                        "data_context": data_context or {},
+                        "research_memory": memories,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        return await self._generate_batch(messages, batch_size=batch_size)
+
     async def repair(
         self,
         rejected: GeneratedProposal,
@@ -246,14 +273,7 @@ class CompatibleChatClient:
         envelope = await self._request(messages)
         try:
             raw = _parse_json(envelope.content)
-            expression = Expression.from_dict(raw["expression"])
-            factor = FactorDefinition(
-                name=str(raw["name"]),
-                family=canonical_family(str(raw["family"])),
-                hypothesis=str(raw["hypothesis"]),
-                expression=expression,
-                expected_direction=_direction(raw.get("expected_direction", 1)),
-            )
+            return _proposal_from_raw(raw, envelope)
         except (KeyError, TypeError, ValueError) as error:
             if allow_contract_repair:
                 corrected_messages = [
@@ -277,15 +297,79 @@ class CompatibleChatClient:
                 usage=envelope.usage,
                 status_code=envelope.status_code,
             ) from error
-        return GeneratedProposal(
-            factor=factor,
-            change=str(raw["change"]),
-            expected=str(raw["expected"]),
-            raw=raw,
-            usage=envelope.usage,
-            prompt_hash=envelope.prompt_hash,
-            response_hash=envelope.response_hash,
-        )
+
+    async def _generate_batch(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        batch_size: int,
+        allow_contract_repair: bool = True,
+    ) -> list[GeneratedProposal]:
+        envelope = await self._request(messages)
+        try:
+            payload = _parse_json_object(envelope.content)
+            raw_proposals = payload.get("proposals")
+            if not isinstance(raw_proposals, list) or len(raw_proposals) != batch_size:
+                raise ValueError(f"Expected exactly {batch_size} proposals")
+            proposals = [
+                _proposal_from_raw(_validate_proposal(raw), envelope)
+                for raw in raw_proposals
+            ]
+            if len({proposal.factor.factor_id for proposal in proposals}) != len(proposals):
+                raise ValueError("Batch proposals must be structurally distinct")
+        except (KeyError, TypeError, ValueError) as error:
+            if allow_contract_repair:
+                corrected_messages = [
+                    *messages,
+                    {"role": "assistant", "content": envelope.content},
+                    {
+                        "role": "user",
+                        "content": (
+                            "The previous batch violated the proposal contract: "
+                            f"{type(error).__name__}: {error}. Return one JSON object with "
+                            f"proposals containing exactly {batch_size} materially distinct "
+                            "proposal objects using the system DSL contract."
+                        ),
+                    },
+                ]
+                return await self._generate_batch(
+                    corrected_messages,
+                    batch_size=batch_size,
+                    allow_contract_repair=False,
+                )
+            raise ModelInvocationError(
+                f"Proposal batch contract rejected: {type(error).__name__}: {error}",
+                stage="proposal_contract",
+                prompt_hash=envelope.prompt_hash,
+                response_hash=envelope.response_hash,
+                usage=envelope.usage,
+                status_code=envelope.status_code,
+            ) from error
+        result = []
+        for index, proposal in enumerate(proposals):
+            usage = (
+                {**proposal.usage, "batch_size": batch_size, "batch_position": index + 1}
+                if index == 0
+                else {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "batch_size": batch_size,
+                    "batch_position": index + 1,
+                }
+            )
+            result.append(
+                GeneratedProposal(
+                    factor=proposal.factor,
+                    change=proposal.change,
+                    expected=proposal.expected,
+                    raw=proposal.raw,
+                    usage=usage,
+                    prompt_hash=proposal.prompt_hash,
+                    response_hash=proposal.response_hash,
+                )
+            )
+        return result
 
     async def _request(self, messages: list[dict[str, str]]) -> _ChatEnvelope:
         prompt_hash = hashlib.sha256(
@@ -376,6 +460,13 @@ class CompatibleChatClient:
 
 def _parse_json(content: str) -> dict[str, Any]:
     value = _parse_json_object(content)
+    return _validate_proposal(value)
+
+
+def _validate_proposal(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError("Model proposal must be a JSON object")
+    value = dict(value)
     required = {"name", "family", "hypothesis", "change", "expected", "expression"}
     missing = required - value.keys()
     if missing:
@@ -399,6 +490,26 @@ def _direction(value: Any) -> int:
     if value in (-1, -1.0, "-1", "negative", "short", "down", "lower", "bearish"):
         return -1
     raise ValueError(f"Unsupported expected_direction: {value!r}")
+
+
+def _proposal_from_raw(raw: dict[str, Any], envelope: _ChatEnvelope) -> GeneratedProposal:
+    expression = Expression.from_dict(raw["expression"])
+    factor = FactorDefinition(
+        name=str(raw["name"]),
+        family=canonical_family(str(raw["family"])),
+        hypothesis=str(raw["hypothesis"]),
+        expression=expression,
+        expected_direction=_direction(raw.get("expected_direction", 1)),
+    )
+    return GeneratedProposal(
+        factor=factor,
+        change=str(raw["change"]),
+        expected=str(raw["expected"]),
+        raw=raw,
+        usage=envelope.usage,
+        prompt_hash=envelope.prompt_hash,
+        response_hash=envelope.response_hash,
+    )
 
 
 _SYSTEM_PROMPT = """You are the Researcher in an institutional A-share factor platform.
@@ -467,3 +578,14 @@ Use these exact parameter contracts:
 expected_direction must be exactly 1 or -1 and describes the final expression. If the expression
 already uses negate to encode the expected sign, use 1. Never use field/period as parameter names.
 """
+
+_BATCH_SYSTEM_PROMPT = (
+    _SYSTEM_PROMPT
+    + """
+For this request only, return one JSON object with exactly one top-level key named proposals.
+proposals must contain exactly data payload batch_size proposal objects, each satisfying every
+required key and DSL rule above. All proposals must serve the same frozen direction and target
+mechanism, but they must represent materially different economic hypotheses and expression
+structures. Do not return parameter-neighborhood variants of one tree.
+"""
+)

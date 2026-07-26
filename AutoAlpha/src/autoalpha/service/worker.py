@@ -37,11 +37,14 @@ from autoalpha.service.direction import (
     direction_definition,
 )
 from autoalpha.service.evaluator import PriceVolumeEvaluator
+from autoalpha.service.factor_behavior import load_behavior_snapshot
 from autoalpha.service.full_llm import (
     FACTOR_LIBRARIAN,
     FALSIFICATION_DESIGNER,
     PORTFOLIO_RESEARCHER,
     REVIEWER,
+    ROOT_CAUSE_ANALYST,
+    TCA_OBSERVER,
     FullLLMResearchTeam,
     RoleOutcome,
     categorical_research_feedback,
@@ -51,8 +54,13 @@ from autoalpha.service.multifactor import (
     MultiFactorResearchEngine,
     PortfolioDecision,
     factor_from_pool_record,
+    portfolio_absolute_gate_failures,
 )
-from autoalpha.service.openai_client import CompatibleChatClient, ModelInvocationError
+from autoalpha.service.openai_client import (
+    CompatibleChatClient,
+    GeneratedProposal,
+    ModelInvocationError,
+)
 from autoalpha.service.research_protocol import research_evidence_tier, task_research_config
 from autoalpha.service.store import ServiceStore
 
@@ -112,6 +120,8 @@ class ContinuousResearchWorker:
         self._task: asyncio.Task[None] | None = None
         self._evaluator: PriceVolumeEvaluator | None = None
         self._canonical_evaluator: PriceVolumeEvaluator | None = None
+        self._proposal_queue: list[GeneratedProposal] = []
+        self._proposal_queue_key: str | None = None
 
     @property
     def alive(self) -> bool:
@@ -130,6 +140,8 @@ class ContinuousResearchWorker:
             raise RuntimeError(f"缺少服务配置: {', '.join(required)}")
         previous = self._state()
         run_id = str(previous.get("run_id") or f"run-{uuid.uuid4().hex[:12]}")
+        self._proposal_queue.clear()
+        self._proposal_queue_key = None
         self._update_state(
             state="RUNNING",
             phase="MEMORY",
@@ -275,6 +287,7 @@ class ContinuousResearchWorker:
                     iteration,
                     proposal,
                     library_metrics,
+                    task_metrics=result.metrics,
                 )
                 decision = (
                     "CODEX_BASELINE_SINGLE_FACTOR_ELIGIBLE"
@@ -434,7 +447,7 @@ class ContinuousResearchWorker:
                 self.store.finish_iteration(run_id, iteration, status="FAILED", error=message)
                 record = self.store.iteration_record(run_id, iteration)
                 with suppress(KeyError, RuntimeError, ValueError):
-                    self._fail_direction_attempt(run_id, iteration, message, record)
+                    self._fail_direction_attempt(run_id, iteration, error, record)
                 if record and record.get("candidate_id"):
                     with suppress(KeyError):
                         self.store.close_generation_experiment(
@@ -526,6 +539,7 @@ class ContinuousResearchWorker:
         # metrics below; the pool only mutates after register_candidate, so
         # refetching it repeatedly per iteration is waste.
         pool_snapshot = await asyncio.to_thread(self.store.factor_pool, limit=5000)
+        behavior_snapshot = await asyncio.to_thread(self._behavior_snapshot)
         research_program = await asyncio.to_thread(
             self._research_program_context,
             iteration,
@@ -534,6 +548,7 @@ class ContinuousResearchWorker:
             generation_id=generation_id,
             data_capabilities=data_capabilities,
             pool_records=pool_snapshot,
+            behavior_snapshot=behavior_snapshot,
         )
         direction_context = self._prepare_direction_campaign(
             run_id,
@@ -615,7 +630,15 @@ class ContinuousResearchWorker:
         )
         llm_team = FullLLMResearchTeam(client) if self._full_llm_enabled(settings) else None
         try:
-            proposal = await client.propose(memories, iteration, data_context=data_context)
+            proposal = await self._next_proposal(
+                client,
+                memories,
+                iteration,
+                data_context=data_context,
+                direction_context=direction_context,
+                generation_id=generation_id,
+                settings=settings,
+            )
         except ModelInvocationError as error:
             self.store.append_event(
                 "audit",
@@ -632,8 +655,33 @@ class ContinuousResearchWorker:
                 },
             )
             raise
+        batch_size = int(proposal.usage.get("batch_size", 1))
+        if batch_size > 1:
+            batch_position = int(proposal.usage.get("batch_position", 1))
+            self.store.append_event(
+                "action",
+                (
+                    "PROPOSAL_BATCH_GENERATED"
+                    if batch_position == 1
+                    else "PROPOSAL_BATCH_REUSED"
+                ),
+                "批量研究提案已生成" if batch_position == 1 else "复用冻结方向候选",
+                (
+                    f"一次生成 {batch_size} 个相互区分的候选，当前使用第 "
+                    f"{batch_position} 个；方向改变后未消费候选会自动失效。"
+                ),
+                run_id=run_id,
+                iteration=iteration,
+                payload={
+                    "batch_size": batch_size,
+                    "batch_position": batch_position,
+                    "buffered_remaining": len(self._proposal_queue),
+                    "campaign_id": direction_context.get("campaign_id"),
+                },
+            )
         self._update_state(phase="SEMANTICS")
         repair_count = 0
+        preflight = None
         while True:
             factor = proposal.factor
             try:
@@ -656,12 +704,18 @@ class ContinuousResearchWorker:
                 if self.store.candidate_exists(factor.factor_id):
                     raise ValueError(f"Duplicate candidate expression: {factor.factor_id}")
                 duplicate_structure = _matching_structure(
-                    factor.expression.to_dict(), pool_snapshot[:500]
+                    factor.expression.to_dict(), pool_snapshot
                 )
                 if duplicate_structure:
                     raise ValueError(
                         "Parameter-only duplicate of "
                         f"{duplicate_structure['factor_id']} ({duplicate_structure['name']})"
+                    )
+                preflight = await asyncio.to_thread(evaluator.preflight, factor)
+                if not preflight.passed:
+                    raise ValueError(
+                        "Candidate signal preflight failed: "
+                        + ", ".join(preflight.failures)
                     )
                 break
             except (TypeError, ValueError) as error:
@@ -690,6 +744,26 @@ class ContinuousResearchWorker:
                     iteration,
                     data_context=data_context,
                 )
+        assert preflight is not None
+        self.store.append_event(
+            "research",
+            "SIGNAL_PREFLIGHT_COMPLETED",
+            "候选信号预检完成",
+            (
+                "候选通过覆盖、截面有效性和退化检查。"
+                if not preflight.warnings
+                else f"候选通过预检，保留诊断提示：{', '.join(preflight.warnings)}。"
+            ),
+            run_id=run_id,
+            iteration=iteration,
+            payload={
+                **preflight.metrics,
+                "passed": preflight.passed,
+                "failures": list(preflight.failures),
+                "warnings": list(preflight.warnings),
+                "research_budget_consumed": False,
+            },
+        )
         generation = self.store.reserve_generation_experiment(
             candidate_hash=factor.factor_id,
             generation_id=generation_id,
@@ -724,6 +798,10 @@ class ContinuousResearchWorker:
                 "source_products": products_for_fields(candidate_fields),
                 "signal_timing": data_capabilities["signal_timing"],
                 "data_contract_version": data_capabilities["contract_version"],
+                "signal_preflight": {
+                    **preflight.metrics,
+                    "warnings": list(preflight.warnings),
+                },
             },
             "canonical_mechanism": candidate_mechanism,
         }
@@ -758,17 +836,25 @@ class ContinuousResearchWorker:
         )
         evaluation_task = asyncio.create_task(asyncio.to_thread(evaluator.evaluate, factor))
         pre_role_outcomes: dict[str, RoleOutcome] = {}
+        role_routing = _pre_evaluation_role_route(
+            canonical_proposal,
+            research_program=research_program,
+            preflight_warnings=set(preflight.warnings),
+        )
         try:
             if llm_team is not None:
                 self._update_state(phase="LLM_PRE_REVIEW")
+                library_peers = _retrieve_library_peers(
+                    canonical_proposal,
+                    pool_snapshot,
+                    behavior_snapshot.get("factors", {}),
+                    limit=12,
+                )
                 pre_role_outcomes = await llm_team.pre_evaluation(
                     candidate=canonical_proposal,
-                    library_context=[
-                        record
-                        for record in pool_snapshot
-                        if record.get("source_task_id", "legacy-ashare") == self.task_id
-                    ][:500],
+                    library_context=library_peers,
                     data_context=data_context,
+                    roles=tuple(role_routing["roles"]),
                 )
                 self._persist_role_outcomes(
                     pre_role_outcomes.values(),
@@ -783,6 +869,7 @@ class ContinuousResearchWorker:
                     }
                     for role, outcome in pre_role_outcomes.items()
                 }
+                canonical_proposal["full_llm_routing"] = role_routing
             self.store.stage_iteration_candidate(
                 run_id,
                 iteration,
@@ -828,7 +915,25 @@ class ContinuousResearchWorker:
         redundancy_metrics = await asyncio.to_thread(
             evaluator.library_signal_correlation,
             factor,
-            _redundancy_references(pool_snapshot, exclude_id=factor.factor_id),
+            _redundancy_references(
+                pool_snapshot,
+                exclude_id=factor.factor_id,
+                behavior_factors=behavior_snapshot.get("factors", {}),
+                candidate_fields=candidate_fields,
+                candidate_mechanism=candidate_mechanism,
+                limit=48,
+            ),
+            max_references=48,
+        )
+        redundancy_metrics.update(
+            _online_behavior_assignment(
+                redundancy_metrics,
+                behavior_snapshot.get("factors", {}),
+                threshold=min(
+                    config.evaluation.maximum_library_correlation,
+                    float(behavior_snapshot.get("cluster_threshold", 0.74) or 0.74),
+                ),
+            )
         )
         result.metrics.update(redundancy_metrics)
         library_metrics = await asyncio.to_thread(
@@ -864,7 +969,11 @@ class ContinuousResearchWorker:
                 },
             )
         candidate_eligible = engine.register_candidate(
-            factor, iteration, canonical_proposal, library_metrics
+            factor,
+            iteration,
+            canonical_proposal,
+            library_metrics,
+            task_metrics=result.metrics,
         )
         self.store.append_event(
             "research",
@@ -881,7 +990,7 @@ class ContinuousResearchWorker:
             },
         )
         portfolio_role_outcome: RoleOutcome | None = None
-        if llm_team is not None:
+        if llm_team is not None and candidate_eligible:
             self._update_state(phase="LLM_PORTFOLIO_REVIEW")
             portfolio_role_outcome = await llm_team.portfolio_advisory(
                 candidate=canonical_proposal,
@@ -1182,14 +1291,24 @@ class ContinuousResearchWorker:
                 portfolio_action=portfolio_decision.action,
                 portfolio_accepted=portfolio_decision.accepted,
             )
-            post_role_outcomes = await llm_team.post_evaluation(
-                candidate=canonical_proposal,
-                public_feedback=public_feedback,
-                falsification_plan=falsification_plan,
-                falsification_results=falsification_results,
-                portfolio_advisory=(
-                    portfolio_role_outcome.artifact if portfolio_role_outcome else {}
-                ),
+            post_route = _post_evaluation_role_route(
+                combined_metrics,
+                candidate_eligible=candidate_eligible,
+                portfolio_accepted=portfolio_decision.accepted,
+            )
+            post_role_outcomes = (
+                await llm_team.post_evaluation(
+                    candidate=canonical_proposal,
+                    public_feedback=public_feedback,
+                    falsification_plan=falsification_plan,
+                    falsification_results=falsification_results,
+                    portfolio_advisory=(
+                        portfolio_role_outcome.artifact if portfolio_role_outcome else {}
+                    ),
+                    roles=tuple(post_route["roles"]),
+                )
+                if post_route["roles"]
+                else {}
             )
             self._persist_role_outcomes(
                 post_role_outcomes.values(),
@@ -1203,6 +1322,7 @@ class ContinuousResearchWorker:
                     for role, outcome in post_role_outcomes.items()
                 }
             )
+            role_routing["post_evaluation"] = post_route
             reviewer = pre_role_outcomes.get(REVIEWER)
             librarian = pre_role_outcomes.get(FACTOR_LIBRARIAN)
             if librarian is not None and librarian.status == "COMPLETED":
@@ -1239,8 +1359,34 @@ class ContinuousResearchWorker:
         combined_metrics["full_llm"] = {
             "enabled": llm_team is not None,
             "roles": full_llm_summary,
+            "routing": role_routing if llm_team is not None else {},
             "decision_authority": "ADVISORY_ONLY",
             "feedback_policy": "CATEGORICAL_PUBLIC_ONLY_NO_EXACT_METRICS",
+        }
+        combined_metrics["planner_features"] = {
+            "version": "STRUCTURED_RESEARCH_FEEDBACK_V1",
+            "candidate_mechanism": candidate_mechanism,
+            "candidate_fields": sorted(candidate_fields),
+            "extended_fields": extended_fields_used,
+            "signal_preflight": {
+                "passed": preflight.passed,
+                "failures": list(preflight.failures),
+                "warnings": list(preflight.warnings),
+                **preflight.metrics,
+            },
+            "behavior_assignment": {
+                key: value
+                for key, value in redundancy_metrics.items()
+                if key.startswith(("library_signal_", "online_behavior_"))
+            },
+            "single_factor_gate_failures": list(
+                result.metrics.get("exploratory_gate_failures", [])
+            ),
+            "portfolio_gate_failures": list(portfolio_decision.failed_gates),
+            "portfolio_action": portfolio_decision.action,
+            "portfolio_accepted": portfolio_decision.accepted,
+            "adaptive_direction": direction_metrics,
+            "llm_role_routing": role_routing if llm_team is not None else {},
         }
         self.store.close_generation_experiment(
             factor.factor_id,
@@ -1356,6 +1502,53 @@ class ContinuousResearchWorker:
     def _full_llm_enabled(settings: dict[str, str]) -> bool:
         configured = settings.get("full_llm_enabled", os.getenv("AUTOALPHA_FULL_LLM", "1"))
         return str(configured).strip().lower() in {"1", "true", "yes", "on"}
+
+    async def _next_proposal(
+        self,
+        client: CompatibleChatClient,
+        memories: list[dict[str, Any]],
+        iteration: int,
+        *,
+        data_context: dict[str, Any],
+        direction_context: dict[str, Any],
+        generation_id: str,
+        settings: dict[str, str],
+    ) -> GeneratedProposal:
+        campaign_key = ":".join(
+            (
+                generation_id,
+                str(direction_context.get("campaign_id", "UNCONSTRAINED")),
+                str(direction_context.get("direction", "UNCONSTRAINED")),
+            )
+        )
+        if campaign_key != self._proposal_queue_key:
+            self._proposal_queue.clear()
+            self._proposal_queue_key = campaign_key
+        if self._proposal_queue:
+            return self._proposal_queue.pop(0)
+
+        configured = settings.get(
+            "proposal_batch_size",
+            os.getenv("AUTOALPHA_PROPOSAL_BATCH_SIZE", "3"),
+        )
+        try:
+            requested = int(configured)
+        except (TypeError, ValueError):
+            requested = 3
+        remaining = int(direction_context.get("remaining_after_this_attempt", 0) or 0) + 1
+        batch_size = min(max(requested, 1), max(remaining, 1), 3)
+        proposals = (
+            await client.propose_batch(
+                memories,
+                iteration,
+                batch_size=batch_size,
+                data_context=data_context,
+            )
+            if batch_size > 1
+            else [await client.propose(memories, iteration, data_context=data_context)]
+        )
+        self._proposal_queue.extend(proposals)
+        return self._proposal_queue.pop(0)
 
     def _persist_role_outcomes(
         self,
@@ -1479,6 +1672,19 @@ class ContinuousResearchWorker:
             self._canonical_evaluator = PriceVolumeEvaluator(data_path, config=config)
         return self._canonical_evaluator
 
+    def _behavior_snapshot(self) -> dict[str, Any]:
+        root = self.artifacts.root
+        artifacts_root = next(
+            (candidate for candidate in (root, *root.parents) if candidate.name == "artifacts"),
+            None,
+        )
+        behavior_root = (
+            artifacts_root.parent / "factor-behavior"
+            if artifacts_root is not None
+            else root.parent / "factor-behavior"
+        )
+        return load_behavior_snapshot(behavior_root)
+
     def _prepare_direction_campaign(
         self,
         run_id: str,
@@ -1514,6 +1720,7 @@ class ContinuousResearchWorker:
                 blocked_directions=blocked,
                 config=config,
                 data_experiment=research_program.get("data_experiment"),
+                campaign_history=history,
             )
             plan_payload = plan.to_dict()
             campaign = self.store.start_direction_campaign(
@@ -1597,11 +1804,40 @@ class ContinuousResearchWorker:
         self,
         run_id: str,
         iteration: int,
-        error: str,
+        error: Exception,
         record: dict[str, Any] | None,
     ) -> None:
         attempt = self.store.direction_attempt(iteration, run_id=run_id)
         if attempt is None or attempt["status"] != "RESERVED":
+            return
+        error_message = f"{type(error).__name__}: {error}"
+        if _is_operational_failure(error):
+            campaign = self.store.cancel_direction_attempt(
+                attempt_id=int(attempt["id"]),
+                outcome="OPERATIONAL_FAILURE",
+                diagnostics={
+                    "error_category": type(error).__name__,
+                    "error_stage": getattr(error, "stage", None),
+                    "research_budget_charged": False,
+                },
+            )
+            self.store.append_event(
+                "audit",
+                "DIRECTION_ATTEMPT_OPERATIONAL_FAILURE",
+                f"运维故障未计入方向预算：{campaign['title']}",
+                "API、传输、响应封装或本地运行故障不会消耗科研尝试额度。",
+                run_id=run_id,
+                iteration=iteration,
+                level="WARN",
+                payload={
+                    "campaign_id": campaign["id"],
+                    "direction": campaign["direction"],
+                    "attempts_used": campaign["attempts_used"],
+                    "maximum_attempts": campaign["maximum_attempts"],
+                    "error": error_message,
+                    "research_budget_charged": False,
+                },
+            )
             return
         config = self._research_config()
         campaign = self.store.complete_direction_attempt(
@@ -1612,7 +1848,10 @@ class ContinuousResearchWorker:
             outcome="ITERATION_FAILED",
             improved=False,
             objective_resolved=False,
-            diagnostics={"error_category": error.split(":", 1)[0]},
+            diagnostics={
+                "error_category": type(error).__name__,
+                "research_budget_charged": True,
+            },
             early_stop_consecutive_misses=(config.adaptive_direction.early_stop_consecutive_misses),
             run_id=run_id,
         )
@@ -1620,7 +1859,7 @@ class ContinuousResearchWorker:
             "audit",
             "DIRECTION_ATTEMPT_FAILED",
             f"方向尝试已计入预算：{campaign['title']}",
-            "候选执行失败仍消耗一次方向尝试，禁止通过异常重试绕过预算。",
+            "候选语义或研究评价失败仍消耗一次方向尝试，禁止通过无效提案绕过预算。",
             run_id=run_id,
             iteration=iteration,
             level="WARN",
@@ -1654,10 +1893,11 @@ class ContinuousResearchWorker:
         direction_attempt = self.store.direction_attempt(iteration, run_id=run_id)
         if direction_attempt is None:
             raise RuntimeError("Adaptive direction attempt was not reserved")
+        proposed_metrics = _direction_proposed_metrics(portfolio_decision, config)
         direction_outcome = assess_direction_outcome(
             str(direction_context["direction"]),
             direction_attempt["baseline"],
-            portfolio_decision.evaluation.metrics,
+            proposed_metrics,
             accepted=portfolio_decision.accepted,
             candidate_eligible=candidate_eligible,
             config=config,
@@ -1730,6 +1970,7 @@ class ContinuousResearchWorker:
         generation_id: str | None = None,
         data_capabilities: dict[str, Any] | None = None,
         pool_records: list[dict[str, Any]] | None = None,
+        behavior_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         active = self.store.active_portfolio(run_id=run_id)
         stored_protocol = active["metrics"].get("portfolio_evaluation_protocol") if active else None
@@ -1765,6 +2006,23 @@ class ContinuousResearchWorker:
             current_protocol_metrics = evaluator.evaluate_portfolio(
                 active_factors, weights=active_weights
             ).metrics
+            try:
+                control_failures = portfolio_absolute_gate_failures(
+                    current_protocol_metrics, evaluator.config
+                )
+            except (KeyError, TypeError, ValueError):
+                control_failures = ["INCOMPLETE_CONTROL_METRICS"]
+            current_protocol_metrics.update(
+                {
+                    "portfolio_proposed_absolute_failures": control_failures,
+                    "portfolio_absolute_gate_passed": not control_failures,
+                    "portfolio_control_state": (
+                        "FEASIBLE_BASELINE"
+                        if not control_failures
+                        else "NEEDS_REHABILITATION"
+                    ),
+                }
+            )
 
         history = [
             version
@@ -1824,7 +2082,7 @@ class ContinuousResearchWorker:
                 pool_records if pool_records is not None else self.store.factor_pool(limit=5000)
             )
             if item.get("source_task_id", "legacy-ashare") == self.task_id
-        ][:500]
+        ]
         family_counts = Counter(canonical_family(str(item["family"])) for item in pool)
         status_counts = Counter(str(item["status"]) for item in pool)
         capabilities = data_capabilities or build_research_data_capabilities(evaluator.workspace)
@@ -1832,26 +2090,53 @@ class ContinuousResearchWorker:
         recent_pool = pool[:40]
         field_usage: Counter[str] = Counter()
         mechanism_counts: Counter[str] = Counter()
+        mechanism_eligible: Counter[str] = Counter()
+        mechanism_promoted: Counter[str] = Counter()
+        mechanism_clusters: dict[str, set[str]] = {}
         recent_extended_experiments = 0
+        behavior = behavior_snapshot or {}
+        behavior_factors = behavior.get("factors", {})
+        for item in pool:
+            proposal = item.get("proposal", {})
+            used = expression_fields(proposal.get("expression"))
+            mechanism = str(
+                proposal.get("canonical_mechanism")
+                or classify_mechanism(
+                    fields=used,
+                    family=str(item.get("family", "")),
+                    name=str(item.get("name", "")),
+                    hypothesis=str(proposal.get("hypothesis", "")),
+                )
+            )
+            mechanism_counts[mechanism] += 1
+            if item.get("status") in {"ELIGIBLE", "ACTIVE"}:
+                mechanism_eligible[mechanism] += 1
+            if item.get("metrics", {}).get("production_promotion_gate_passed", False):
+                mechanism_promoted[mechanism] += 1
+            cluster_id = behavior_factors.get(str(item["factor_id"]), {}).get(
+                "behavior_cluster_id"
+            )
+            if cluster_id:
+                mechanism_clusters.setdefault(mechanism, set()).add(str(cluster_id))
         for item in recent_pool:
             proposal = item.get("proposal", {})
             used = expression_fields(proposal.get("expression"))
             field_usage.update(used & eligible_extended)
-            mechanism_counts.update(
-                [
-                    str(
-                        proposal.get("canonical_mechanism")
-                        or classify_mechanism(
-                            fields=used,
-                            family=str(item.get("family", "")),
-                            name=str(item.get("name", "")),
-                            hypothesis=str(proposal.get("hypothesis", "")),
-                        )
-                    )
-                ]
-            )
             if used & eligible_extended:
                 recent_extended_experiments += 1
+        mechanism_stats = {
+            mechanism: {
+                "attempted": mechanism_counts[mechanism],
+                "library_eligible": mechanism_eligible[mechanism],
+                "promotion_passed": mechanism_promoted[mechanism],
+                "behavior_clusters": len(mechanism_clusters.get(mechanism, set())),
+                "smoothed_library_yield": (
+                    (mechanism_eligible[mechanism] + 1.0)
+                    / (mechanism_counts[mechanism] + 2.0)
+                ),
+            }
+            for mechanism in sorted(mechanism_counts)
+        }
         active_extended_fields = sorted(
             {
                 field_name
@@ -1869,6 +2154,7 @@ class ContinuousResearchWorker:
             "recent_extended_experiments": recent_extended_experiments,
             "recent_field_usage": dict(sorted(field_usage.items())),
             "mechanism_counts": dict(sorted(mechanism_counts.items())),
+            "mechanism_stats": mechanism_stats,
             "active_portfolio_extended_fields": active_extended_fields,
             "maximum_direction_attempts": (
                 evaluator.config.adaptive_direction.maximum_attempts_per_campaign
@@ -1946,8 +2232,15 @@ class ContinuousResearchWorker:
             },
             "factor_pool": {
                 "count": len(pool),
+                "global_count": len(pool_records or pool),
                 "family_counts": dict(family_counts.most_common()),
                 "status_counts": dict(status_counts.most_common()),
+                "behavior_snapshot": {
+                    "protocol": behavior.get("protocol"),
+                    "evaluated_count": len(behavior_factors),
+                    "cluster_count": int(behavior.get("cluster_count", 0) or 0),
+                    "pending_count": max(0, len(pool_records or pool) - len(behavior_factors)),
+                },
                 "recent_expressions": [
                     {
                         "factor_id": item["factor_id"],
@@ -2079,6 +2372,7 @@ def _memory_summary(
             "feedback_policy": metrics.get("holdout_feedback_policy"),
         },
         "adaptive_direction": metrics.get("adaptive_direction"),
+        "planner_features": metrics.get("planner_features"),
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -2292,6 +2586,43 @@ def _is_public_feasibility_recovery(decision: PortfolioDecision) -> bool:
     )
 
 
+def _direction_proposed_metrics(
+    decision: PortfolioDecision,
+    config: ResearchConfig,
+) -> dict[str, Any]:
+    """Expose the best public candidate option to the planner, even when gates reject it."""
+    if decision.accepted:
+        return dict(decision.evaluation.metrics)
+    candidates = [
+        diagnostic
+        for diagnostic in decision.option_diagnostics
+        if diagnostic.get("action") in {"ADD", "REPLACE"}
+        and isinstance(diagnostic.get("metrics"), dict)
+    ]
+    if not candidates:
+        return dict(decision.evaluation.metrics)
+
+    def key(diagnostic: dict[str, Any]) -> tuple[bool, int, float, float]:
+        violation = diagnostic.get("absolute_violation_score")
+        return (
+            bool(diagnostic.get("feasibility_recovery", False)),
+            -int(diagnostic.get("gate_failure_count", len(diagnostic.get("failed_gates", [])))),
+            -float(violation if isinstance(violation, int | float) else 1_000.0),
+            float(diagnostic.get("utility_change") or -1_000.0),
+        )
+
+    best = max(candidates, key=key)
+    metrics = dict(best["metrics"])
+    metrics.setdefault(
+        "portfolio_proposed_absolute_failures",
+        portfolio_absolute_gate_failures(metrics, config),
+    )
+    metrics["direction_evidence_action"] = best.get("action")
+    metrics["direction_evidence_gate_failures"] = list(best.get("failed_gates", []))
+    metrics["direction_evidence_accepted"] = False
+    return metrics
+
+
 def _expression_signature(expression: dict[str, Any] | None) -> str | None:
     if not expression:
         return None
@@ -2356,27 +2687,304 @@ def _redundancy_references(
     pool_snapshot: list[dict[str, Any]],
     *,
     exclude_id: str,
-    limit: int = 20,
+    behavior_factors: dict[str, dict[str, Any]] | None = None,
+    candidate_fields: set[str] | None = None,
+    candidate_mechanism: str | None = None,
+    limit: int = 48,
 ) -> list[FactorDefinition]:
-    """Reconstruct library reference factors for behavioral redundancy checks.
+    """Build a compact, globally representative redundancy panel.
 
-    Active portfolio members are checked first, then the most recent eligible
-    pool factors (``pool_snapshot`` is ordered by recency). Records whose stored
-    proposals cannot be reconstructed are skipped.
+    The panel keeps every active member, favors offline behavior-cluster leaders,
+    and then covers distinct clusters and candidate-adjacent mechanisms. This is
+    more informative than taking the latest factors from the current task.
     """
-    ordered = [record for record in pool_snapshot if record.get("status") == "ACTIVE"]
-    ordered.extend(record for record in pool_snapshot if record.get("status") == "ELIGIBLE")
+    if limit <= 0:
+        return []
+    behavior = behavior_factors or {}
+    fields = candidate_fields or set()
+
+    def priority(index_record: tuple[int, dict[str, Any]]) -> tuple[float, int]:
+        index, record = index_record
+        factor_id = str(record.get("factor_id", ""))
+        evidence = behavior.get(factor_id, {})
+        proposal = record.get("proposal") or {}
+        record_fields = expression_fields(proposal.get("expression"))
+        mechanism = str(
+            proposal.get("canonical_mechanism")
+            or classify_mechanism(
+                fields=record_fields,
+                family=str(record.get("family", "")),
+                name=str(record.get("name", "")),
+                hypothesis=str(proposal.get("hypothesis", "")),
+            )
+        )
+        status_score = {
+            "ACTIVE": 1_000.0,
+            "ELIGIBLE": 300.0,
+            "SCREENED_OUT": 20.0,
+        }.get(str(record.get("status", "")), 0.0)
+        score = status_score
+        if evidence.get("behavior_cluster_role") == "LEADER":
+            score += 180.0
+        if candidate_mechanism and mechanism == candidate_mechanism:
+            score += 120.0
+        score += 12.0 * len(fields & record_fields)
+        if not evidence:
+            score += 5.0
+        return score, -index
+
+    ranked = [
+        record
+        for _, record in sorted(
+            enumerate(pool_snapshot),
+            key=priority,
+            reverse=True,
+        )
+        if str(record.get("factor_id", "")) != exclude_id
+    ]
+    ordered: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+    selected_clusters: set[str] = set()
+
+    def add(record: dict[str, Any]) -> None:
+        factor_id = str(record.get("factor_id", ""))
+        if not factor_id or factor_id in selected_ids:
+            return
+        ordered.append(record)
+        selected_ids.add(factor_id)
+        cluster_id = behavior.get(factor_id, {}).get("behavior_cluster_id")
+        if cluster_id:
+            selected_clusters.add(str(cluster_id))
+
+    for record in ranked:
+        if record.get("status") == "ACTIVE":
+            add(record)
+    for record in ranked:
+        evidence = behavior.get(str(record.get("factor_id", "")), {})
+        cluster_id = evidence.get("behavior_cluster_id")
+        if evidence.get("behavior_cluster_role") == "LEADER" and (
+            not cluster_id or str(cluster_id) not in selected_clusters
+        ):
+            add(record)
+        if len(ordered) >= limit:
+            break
+    for record in ranked:
+        cluster_id = behavior.get(str(record.get("factor_id", "")), {}).get(
+            "behavior_cluster_id"
+        )
+        if not cluster_id or str(cluster_id) not in selected_clusters:
+            add(record)
+        if len(ordered) >= limit:
+            break
+    for record in ranked:
+        add(record)
+        if len(ordered) >= limit:
+            break
+
     references: list[FactorDefinition] = []
     for record in ordered:
         if len(references) >= limit:
             break
-        if str(record.get("factor_id")) == exclude_id:
-            continue
         try:
             references.append(factor_from_pool_record(record))
         except Exception:
             continue
     return references
+
+
+def _online_behavior_assignment(
+    redundancy_metrics: dict[str, Any],
+    behavior_factors: dict[str, dict[str, Any]],
+    *,
+    threshold: float,
+) -> dict[str, Any]:
+    """Assign a provisional searchable behavior label before the next full clustering run."""
+    peer_id = redundancy_metrics.get("library_signal_correlation_peer")
+    similarity = float(redundancy_metrics.get("library_signal_correlation_max") or 0.0)
+    signed = float(redundancy_metrics.get("library_signal_correlation_signed") or 0.0)
+    peer = behavior_factors.get(str(peer_id), {}) if peer_id else {}
+    related = bool(peer and similarity >= threshold)
+    if related:
+        cluster_id = str(peer.get("behavior_cluster_id") or "PENDING_RELATED_CLUSTER")
+        label = str(peer.get("behavior_cluster_label") or "临时相关行为簇")
+        role = "MEMBER"
+        redundancy = (
+            "NEAR_DUPLICATE"
+            if similarity >= 0.95
+            else "SUBSTITUTE"
+            if similarity >= 0.82
+            else "RELATED"
+        )
+    else:
+        cluster_id = "PENDING_NEW_CLUSTER"
+        label = "待全库复核的新行为簇"
+        role = "PROVISIONAL_LEADER"
+        redundancy = "DISTINCT" if peer_id else "UNASSESSED"
+    return {
+        "online_behavior_cluster_id": cluster_id,
+        "online_behavior_cluster_label": label,
+        "online_behavior_cluster_size": (
+            int(peer.get("behavior_cluster_size", 1) or 1) + 1 if related else 1
+        ),
+        "online_behavior_cluster_role": role,
+        "online_behavior_nearest_factor_id": peer_id,
+        "online_behavior_nearest_similarity": round(similarity, 6),
+        "online_behavior_signal_correlation": round(signed, 6),
+        "online_behavior_redundancy": redundancy,
+        "online_behavior_cluster_method": "ONLINE_NEAREST_SIGNAL_V1",
+        "online_behavior_pending_full_recluster": True,
+        "online_behavior_assignment_threshold": float(threshold),
+    }
+
+
+def _retrieve_library_peers(
+    candidate: dict[str, Any],
+    pool_snapshot: list[dict[str, Any]],
+    behavior_factors: dict[str, dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Retrieve a small mechanism-aware, behavior-diverse context for LLM roles."""
+    if limit <= 0:
+        return []
+    candidate_fields = expression_fields(candidate.get("expression"))
+    candidate_mechanism = str(candidate.get("canonical_mechanism", ""))
+
+    def score(index_record: tuple[int, dict[str, Any]]) -> tuple[float, int]:
+        index, record = index_record
+        proposal = record.get("proposal") or {}
+        fields = expression_fields(proposal.get("expression"))
+        mechanism = str(
+            proposal.get("canonical_mechanism")
+            or classify_mechanism(
+                fields=fields,
+                family=str(record.get("family", "")),
+                name=str(record.get("name", "")),
+                hypothesis=str(proposal.get("hypothesis", "")),
+            )
+        )
+        evidence = behavior_factors.get(str(record.get("factor_id", "")), {})
+        value = 20.0 * len(candidate_fields & fields)
+        if candidate_mechanism and mechanism == candidate_mechanism:
+            value += 80.0
+        if record.get("status") == "ACTIVE":
+            value += 45.0
+        elif record.get("status") == "ELIGIBLE":
+            value += 20.0
+        if evidence.get("behavior_cluster_role") == "LEADER":
+            value += 30.0
+        return value, -index
+
+    ranked = [
+        record
+        for _, record in sorted(enumerate(pool_snapshot), key=score, reverse=True)
+    ]
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+    selected_clusters: set[str] = set()
+    for record in ranked:
+        factor_id = str(record.get("factor_id", ""))
+        cluster_id = behavior_factors.get(factor_id, {}).get("behavior_cluster_id")
+        if cluster_id and str(cluster_id) in selected_clusters:
+            continue
+        selected.append(record)
+        selected_ids.add(factor_id)
+        if cluster_id:
+            selected_clusters.add(str(cluster_id))
+        if len(selected) >= limit:
+            return selected
+    for record in ranked:
+        factor_id = str(record.get("factor_id", ""))
+        if factor_id in selected_ids:
+            continue
+        selected.append(record)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _pre_evaluation_role_route(
+    candidate: dict[str, Any],
+    *,
+    research_program: dict[str, Any],
+    preflight_warnings: set[str],
+) -> dict[str, Any]:
+    """Select only roles that can add evidence for this candidate."""
+    fields = expression_fields(candidate.get("expression"))
+    mechanism = str(candidate.get("canonical_mechanism", "OTHER_INTERPRETABLE"))
+    data_experiment = research_program.get("data_experiment", {})
+    extended = fields & set(data_experiment.get("eligible_extended_fields", []))
+    statistics = data_experiment.get("mechanism_stats", {}).get(mechanism, {})
+    direction = research_program.get("adaptive_direction", {}).get("direction")
+    nodes = _expression_node_count(candidate.get("expression"))
+    roles = [FALSIFICATION_DESIGNER]
+    reasons: dict[str, list[str]] = {
+        FALSIFICATION_DESIGNER: ["每个候选都必须预注册证伪计划"]
+    }
+    if nodes >= 10 or extended or preflight_warnings:
+        roles.insert(0, REVIEWER)
+        reasons[REVIEWER] = [
+            "复杂表达式、扩展字段或预检提示需要独立语义与时序复核"
+        ]
+    under_represented = (
+        int(statistics.get("attempted", 0) or 0) < 3
+        or int(statistics.get("behavior_clusters", 0) or 0) < 2
+        or direction in {"EXPLORE_EXTENDED_DATA", "EXPLORE_NEW_MECHANISM"}
+    )
+    if under_represented:
+        roles.append(FACTOR_LIBRARIAN)
+        reasons[FACTOR_LIBRARIAN] = ["机制覆盖不足，需要规范分类和同业关系"]
+    return {
+        "policy": "CONDITIONAL_ROLE_ROUTING_V1",
+        "roles": roles,
+        "reasons": reasons,
+        "expression_nodes": nodes,
+        "extended_fields": sorted(extended),
+        "preflight_warnings": sorted(preflight_warnings),
+        "candidate_mechanism": mechanism,
+    }
+
+
+def _post_evaluation_role_route(
+    metrics: dict[str, Any],
+    *,
+    candidate_eligible: bool,
+    portfolio_accepted: bool,
+) -> dict[str, Any]:
+    failures = {
+        str(item)
+        for key in ("exploratory_gate_failures", "portfolio_action_gate_failures")
+        for item in metrics.get(key, [])
+    }
+    roles: list[str] = []
+    reasons: dict[str, list[str]] = {}
+    if not portfolio_accepted and (candidate_eligible or len(failures) <= 4):
+        roles.append(ROOT_CAUSE_ANALYST)
+        reasons[ROOT_CAUSE_ANALYST] = ["候选接近可用或失败边界集中，需要归因下一步"]
+    execution_failures = failures & {"turnover", "cost_stress", "capacity", "coverage"}
+    if portfolio_accepted or execution_failures:
+        roles.append(TCA_OBSERVER)
+        reasons[TCA_OBSERVER] = [
+            "组合已晋级或存在明确交易成本、容量与覆盖风险"
+        ]
+    return {
+        "policy": "CONDITIONAL_ROLE_ROUTING_V1",
+        "roles": roles,
+        "reasons": reasons,
+        "failure_categories": sorted(failures),
+        "candidate_eligible": candidate_eligible,
+        "portfolio_accepted": portfolio_accepted,
+    }
+
+
+def _expression_node_count(expression: dict[str, Any] | None) -> int:
+    if not isinstance(expression, dict):
+        return 0
+    return 1 + sum(
+        _expression_node_count(argument)
+        for argument in expression.get("arguments", [])
+        if isinstance(argument, dict)
+    )
 
 
 def _matching_structure(
@@ -2422,6 +3030,17 @@ def _circuit_breaker_reason(
     if consecutive_failures >= 5:
         return "连续失败达到五次"
     return None
+
+
+def _is_operational_failure(error: Exception) -> bool:
+    if isinstance(error, ModelInvocationError):
+        return error.stage in {
+            "transport",
+            "response_envelope",
+            "proposal_contract",
+            "role_contract",
+        }
+    return isinstance(error, TimeoutError | ConnectionError | OSError)
 
 
 def _genesis_baseline() -> FactorDefinition:

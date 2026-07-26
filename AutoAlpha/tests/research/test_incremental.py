@@ -49,6 +49,24 @@ def test_portfolio_comparison_uses_only_common_non_missing_dates() -> None:
     assert result.incremental_returns.index[0] == dates[3]
 
 
+def test_portfolio_screen_can_skip_bootstrap_without_changing_core_metrics() -> None:
+    dates = pd.bdate_range("2024-01-01", periods=40)
+    control = pd.Series(0.0, index=dates)
+    treatment = pd.Series(np.linspace(-0.001, 0.002, len(dates)), index=dates)
+
+    result = compare_portfolios(
+        control,
+        treatment,
+        hac_lags=2,
+        bootstrap_block_size=5,
+        bootstrap_samples=0,
+    )
+
+    assert result.bootstrap_confidence_interval is None
+    assert np.isfinite(result.incremental_net_ir)
+    assert np.isfinite(result.hac.p_value)
+
+
 def test_annual_robustness_reports_raw_year_evidence() -> None:
     dates = pd.bdate_range("2021-01-01", "2023-12-31")
     returns = pd.Series(0.0002, index=dates)

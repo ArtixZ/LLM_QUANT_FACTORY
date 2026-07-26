@@ -8,6 +8,7 @@ RT="$ROOT/runtime-full-llm"
 stop_one() {
   local name="$1" port="$2"
   local pidfile="$RT/pids/$name-$port.pid" pid=""
+  local label="com.autoalpha.local.$name.$port"
 
   [[ -f "$pidfile" ]] && pid="$(cat "$pidfile")"
   # PID 文件失效时按端口兜底查找
@@ -16,12 +17,17 @@ stop_one() {
   fi
 
   if [[ -z "$pid" ]]; then
+    launchctl remove "$label" >/dev/null 2>&1 || true
     echo "[skip] $name 未在运行"
     rm -f "$pidfile"
     return
   fi
 
-  kill "$pid" 2>/dev/null
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
+    launchctl remove "$label" >/dev/null 2>&1 || kill "$pid" 2>/dev/null
+  else
+    kill "$pid" 2>/dev/null
+  fi
   for _ in {1..20}; do
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.5
