@@ -9,7 +9,7 @@ covering data
 governance, LLM-assisted factor discovery, factor knowledge management, constrained portfolio
 search, screening, backtesting, audit trails, and strategy versioning.
 
-[![CI](https://github.com/khakhasshi/MultiFactorAshare/actions/workflows/ci.yml/badge.svg)](https://github.com/khakhasshi/MultiFactorAshare/actions/workflows/ci.yml)
+[![CI](https://github.com/khakhasshi/LLM_QUANT_FACTORY/actions/workflows/ci.yml/badge.svg)](https://github.com/khakhasshi/LLM_QUANT_FACTORY/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-c2413b.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776ab.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![uv](https://img.shields.io/badge/package%20manager-uv-5c4ee5.svg)](https://docs.astral.sh/uv/)
@@ -192,7 +192,7 @@ The system deliberately separates research convenience from production evidence:
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/khakhasshi/MultiFactorAshare.git
+git clone https://github.com/khakhasshi/LLM_QUANT_FACTORY.git
 cd MultiFactorAshare
 
 uv sync --frozen --all-groups

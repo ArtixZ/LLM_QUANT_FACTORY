@@ -17,7 +17,7 @@ By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 ## Development setup
 
 ```bash
-git clone https://github.com/khakhasshi/MultiFactorAshare.git
+git clone https://github.com/khakhasshi/LLM_QUANT_FACTORY.git
 cd MultiFactorAshare
 
 uv sync --frozen --all-groups

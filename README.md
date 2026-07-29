@@ -7,7 +7,7 @@
 一个面向 A 股截面多因子研究的源码可用工作台：从数据治理、LLM 辅助因子发现、因子知识库，
 到受约束组合搜索、选股、回测、审计和策略版本管理。
 
-[![CI](https://github.com/khakhasshi/MultiFactorAshare/actions/workflows/ci.yml/badge.svg)](https://github.com/khakhasshi/MultiFactorAshare/actions/workflows/ci.yml)
+[![CI](https://github.com/khakhasshi/LLM_QUANT_FACTORY/actions/workflows/ci.yml/badge.svg)](https://github.com/khakhasshi/LLM_QUANT_FACTORY/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-c2413b.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776ab.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![uv](https://img.shields.io/badge/package%20manager-uv-5c4ee5.svg)](https://docs.astral.sh/uv/)
@@ -171,7 +171,7 @@ flowchart LR
 ### 1. 克隆与安装
 
 ```bash
-git clone https://github.com/khakhasshi/MultiFactorAshare.git
+git clone https://github.com/khakhasshi/LLM_QUANT_FACTORY.git
 cd MultiFactorAshare
 
 uv sync --frozen --all-groups
