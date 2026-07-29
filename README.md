@@ -1,6 +1,6 @@
 <div align="center">
 
-# AutoAlpha
+# LLM_QUANT_FACTORY
 
 ### 可审计的多智能体 A 股因子研究与组合发现平台
 
@@ -22,7 +22,7 @@
 
 ---
 
-AutoAlpha 的目标不是让大语言模型直接“决定买什么”，而是把模型放在一个可审计、可证伪、
+LLM_QUANT_FACTORY 的目标不是让大语言模型直接“决定买什么”，而是把模型放在一个可审计、可证伪、
 受确定性协议约束的研究系统里。LLM 负责提出机制假设、生成受控表达式和形成结构化研究意见；
 数据时点检查、回测、统计检验、组合权重、风险门禁和策略交付由确定性组件执行。
 
@@ -172,7 +172,7 @@ flowchart LR
 
 ```bash
 git clone https://github.com/khakhasshi/LLM_QUANT_FACTORY.git
-cd MultiFactorAshare
+cd LLM_QUANT_FACTORY
 
 uv sync --frozen --all-groups
 cd AutoAlpha

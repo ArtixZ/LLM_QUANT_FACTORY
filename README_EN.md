@@ -1,6 +1,6 @@
 <div align="center">
 
-# AutoAlpha
+# LLM_QUANT_FACTORY
 
 ### Auditable multi-agent factor research and portfolio discovery for A-shares
 
@@ -24,7 +24,7 @@ search, screening, backtesting, audit trails, and strategy versioning.
 
 ---
 
-AutoAlpha does not ask a language model to directly decide what to buy. Instead, it places LLMs
+LLM_QUANT_FACTORY does not ask a language model to directly decide what to buy. Instead, it places LLMs
 inside an auditable, falsifiable research system governed by deterministic protocols. LLMs propose
 mechanism hypotheses, generate constrained expressions, and produce structured research opinions.
 Data-timing checks, backtests, statistical tests, portfolio weights, risk gates, and strategy
@@ -193,7 +193,7 @@ The system deliberately separates research convenience from production evidence:
 
 ```bash
 git clone https://github.com/khakhasshi/LLM_QUANT_FACTORY.git
-cd MultiFactorAshare
+cd LLM_QUANT_FACTORY
 
 uv sync --frozen --all-groups
 cd AutoAlpha
