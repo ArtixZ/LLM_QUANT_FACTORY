@@ -6,17 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from autoalpha.config import ResearchConfig
-
-MECHANISM_DOMAINS = (
-    "VALUATION",
-    "ORDER_FLOW",
-    "CAPITALIZATION",
-    "TURNOVER_LIQUIDITY",
-    "PRICE_REVERSAL",
-    "MOMENTUM_TREND",
-    "VOLATILITY_RISK",
-    "OTHER_INTERPRETABLE",
-)
+from autoalpha.service.mechanism import MECHANISM_DOMAINS, normalize_mechanism
 
 
 @dataclass(frozen=True)
@@ -477,6 +467,9 @@ def classify_mechanism(
         return "CAPITALIZATION"
     if fields & {"turnover_rate", "turnover_rate_f", "volume_ratio"}:
         return "TURNOVER_LIQUIDITY"
+    explicit = normalize_mechanism(family, default="")
+    if explicit:
+        return explicit
     if any(token in lowered for token in ("reversal", "mean reversion", "反转", "均值回归")):
         return "PRICE_REVERSAL"
     if any(token in lowered for token in ("momentum", "trend", "动量", "趋势")):

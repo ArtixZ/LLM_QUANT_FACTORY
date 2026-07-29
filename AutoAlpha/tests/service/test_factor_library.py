@@ -9,6 +9,7 @@ def _record(
     sharpe: float,
     worst_fold: float,
     turnover: float,
+    canonical_mechanism: str | None = None,
 ) -> dict:
     return {
         "factor_id": factor_id,
@@ -20,6 +21,7 @@ def _record(
         "created_at": "2026-01-01T00:00:00Z",
         "updated_at": "2026-01-01T00:00:00Z",
         "proposal": {
+            **({"canonical_mechanism": canonical_mechanism} if canonical_mechanism else {}),
             "hypothesis": "test hypothesis",
             "expected_direction": 1,
             "expression": {
@@ -45,6 +47,24 @@ def _record(
             "pearson_ic_mean": 0.01,
         },
     }
+
+
+def test_library_exposes_controlled_canonical_mechanism() -> None:
+    library = build_factor_library(
+        [
+            _record(
+                "F_1",
+                status="ELIGIBLE",
+                family="Anything",
+                sharpe=1.0,
+                worst_fold=0.2,
+                turnover=5,
+                canonical_mechanism="liquidity",
+            )
+        ]
+    )
+
+    assert library["factors"][0]["canonical_mechanism"] == "TURNOVER_LIQUIDITY"
 
 
 def test_library_retains_screened_out_factors_as_observation_assets() -> None:
@@ -332,3 +352,74 @@ def test_library_keeps_unavailable_long_only_rankings_null() -> None:
     assert not factor["long_only_score_available"]
     assert factor["ranking_values"]["long_only_overall"] is None
     assert factor["ranking_values"]["long_only_sharpe_ratio"] is None
+
+
+def test_library_default_ranking_uses_recent_long_only_as_tie_breaker() -> None:
+    legacy_strong = _record(
+        "F_1",
+        status="ELIGIBLE",
+        family="Momentum",
+        sharpe=9.0,
+        worst_fold=3.0,
+        turnover=2,
+    )
+    recent_strong = _record(
+        "F_2",
+        status="ELIGIBLE",
+        family="Momentum",
+        sharpe=0.1,
+        worst_fold=-1.0,
+        turnover=30,
+    )
+    common_long_only = {
+        "long_only_sharpe_ratio": 1.0,
+        "long_only_simple_annual_return": 0.10,
+        "long_only_compound_annual_return": 0.09,
+        "long_only_max_drawdown": -0.10,
+        "long_only_worst_year_return": -0.04,
+        "long_only_annual_turnover": 8.0,
+        "long_only_coverage": 0.95,
+        "long_only_capacity_cny": 70_000_000,
+        "long_only_walk_forward_worst_sharpe": 0.4,
+        "long_only_walk_forward_positive_fraction": 0.8,
+        "long_only_deflated_sharpe_probability": 0.85,
+        "long_only_annual_return_dispersion": 0.08,
+    }
+    legacy_strong["metrics"].update(
+        {
+            **common_long_only,
+            "recent_long_only_sharpe_ratio": 0.2,
+            "recent_long_only_simple_annual_return": 0.02,
+            "recent_long_only_compound_annual_return": 0.02,
+            "recent_long_only_max_drawdown": -0.25,
+            "recent_long_only_worst_year_return": -0.12,
+            "recent_long_only_annual_turnover": 18.0,
+            "recent_long_only_coverage": 0.80,
+            "recent_long_only_capacity_cny": 10_000_000,
+            "recent_long_only_walk_forward_worst_sharpe": -0.3,
+            "recent_long_only_walk_forward_positive_fraction": 0.3,
+            "recent_long_only_deflated_sharpe_probability": 0.2,
+            "recent_long_only_annual_return_dispersion": 0.2,
+        }
+    )
+    recent_strong["metrics"].update(
+        {
+            **common_long_only,
+            "recent_long_only_sharpe_ratio": 1.4,
+            "recent_long_only_simple_annual_return": 0.16,
+            "recent_long_only_compound_annual_return": 0.15,
+            "recent_long_only_max_drawdown": -0.08,
+            "recent_long_only_worst_year_return": -0.02,
+            "recent_long_only_annual_turnover": 4.0,
+            "recent_long_only_coverage": 0.98,
+            "recent_long_only_capacity_cny": 90_000_000,
+            "recent_long_only_walk_forward_worst_sharpe": 0.8,
+            "recent_long_only_walk_forward_positive_fraction": 0.9,
+            "recent_long_only_deflated_sharpe_probability": 0.9,
+            "recent_long_only_annual_return_dispersion": 0.04,
+        }
+    )
+
+    library = build_factor_library([legacy_strong, recent_strong])
+
+    assert library["factors"][0]["factor_id"] == "F_2"

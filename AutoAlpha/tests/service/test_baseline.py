@@ -1,6 +1,8 @@
 from autoalpha.dsl.semantics import FieldDefinition, SemanticValidator
 from autoalpha.service.openai_client import ModelInvocationError
 from autoalpha.service.worker import (
+    _candidate_failure_profile,
+    _candidate_level_failure_reason,
     _circuit_breaker_reason,
     _codex_task_baseline,
     _genesis_baseline,
@@ -44,3 +46,81 @@ def test_circuit_breaker_distinguishes_contract_and_transport_failures() -> None
         _circuit_breaker_reason(transport, consecutive_failures=5, same_failure_count=5)
         == "连续失败达到五次"
     )
+
+
+def test_candidate_level_failure_classification_is_conservative() -> None:
+    assert (
+        _candidate_level_failure_reason(ValueError("Evaluation produced non-finite metrics"))
+        == "NON_FINITE_SINGLE_FACTOR_METRICS"
+    )
+    assert (
+        _candidate_level_failure_reason(ValueError("insufficient valid dates for backtest"))
+        == "INSUFFICIENT_VALID_DATES"
+    )
+    assert (
+        _candidate_level_failure_reason(ValueError("Duplicate candidate expression: F_1"))
+        == "DUPLICATE_CANDIDATE_EXPRESSION"
+    )
+    assert (
+        _candidate_level_failure_reason(ValueError("Parameter-only duplicate of F_2"))
+        == "PARAMETER_ONLY_DUPLICATE"
+    )
+    assert (
+        _candidate_level_failure_reason(
+            ValueError("Candidate signal preflight failed: all factor values are missing")
+        )
+        == "EMPTY_FACTOR_SIGNAL"
+    )
+    assert (
+        _candidate_level_failure_reason(
+            ValueError("EXPLORE_EXTENDED_DATA requires at least one eligible extended field")
+        )
+        == "EXTENDED_DATA_FIELD_MISMATCH"
+    )
+    assert (
+        _candidate_level_failure_reason(
+            ValueError(
+                "Frozen mechanism campaign requires LIQUIDITY; proposal classified as MOMENTUM"
+            )
+        )
+        == "MECHANISM_CAMPAIGN_MISMATCH"
+    )
+    transport = ModelInvocationError("timeout", stage="transport", prompt_hash="0" * 64)
+    assert _candidate_level_failure_reason(transport) is None
+    assert _candidate_level_failure_reason(OSError("database is locked")) is None
+
+
+def test_candidate_failure_profile_keeps_bad_candidates_out_of_task_circuit_breaker() -> None:
+    profile = _candidate_failure_profile(
+        {
+            "exploratory_gate_failures": ["coverage", "homogeneity_near_duplicate"],
+            "portfolio_action_gate_failures": ["turnover", "portfolio_max_factor_correlation"],
+        },
+        candidate_eligible=False,
+        portfolio_accepted=False,
+    )
+
+    assert profile["protocol"] == "CANDIDATE_FAILURE_PROFILE_V1"
+    assert profile["severity"] == "HARD_FAIL"
+    assert profile["task_circuit_breaker_eligible"] is False
+    assert profile["operational_failure"] is False
+    assert profile["categories"] == [
+        "COVERAGE",
+        "HOMOGENEITY",
+        "INDEPENDENCE",
+        "PORTFOLIO_GATE",
+        "SINGLE_FACTOR_GATE",
+        "TURNOVER",
+    ]
+
+
+def test_candidate_failure_profile_passes_clean_candidate() -> None:
+    profile = _candidate_failure_profile(
+        {},
+        candidate_eligible=True,
+        portfolio_accepted=True,
+    )
+
+    assert profile["severity"] == "PASS"
+    assert profile["categories"] == []
+    assert profile["failure_count"] == 0

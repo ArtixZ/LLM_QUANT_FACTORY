@@ -143,9 +143,19 @@ function renderTaskDetail() {
   text("taskName", task.name);
   text("taskIdentity", `${task.task_id} · ${task.market} · ${task.snapshot_hash.slice(0, 16)}`);
   text("taskState", STATUS_LABELS[task.status] || task.status);
+  const jobLink = document.getElementById("taskJobCenterLink");
+  if (jobLink) {
+    jobLink.href = `http://127.0.0.1:8788/jobs?queue=quantcombine&job=${encodeURIComponent(task.system_job_id || "")}`;
+    jobLink.title = task.system_job_id ? `查看 ${task.system_job_id}` : "查看 QuantCombine 作业队列";
+  }
   text("taskPhase", task.phase);
   text("evaluationProgress", `${task.evaluation_count} / ${task.budget.maximum_evaluations}`);
-  text("taskCandidateCount", task.candidate_count || 0);
+  const homogeneity = task.homogeneity_summary || {};
+  const rejected = task.homogeneity_rejection_summary?.total || 0;
+  const candidateParts = [`${task.candidate_count || 0}`];
+  if (homogeneity.search_cluster_count) candidateParts.push(`${homogeneity.search_cluster_count} 簇`);
+  if (rejected) candidateParts.push(`跳过 ${rejected} 同质`);
+  text("taskCandidateCount", candidateParts.join(" · "));
   text("qualificationState", QUALIFICATION_LABELS[task.qualification_status] || task.qualification_status);
   text("progressText", `${Math.round(task.progress * 100)}%`);
   document.getElementById("progressFill").style.width = `${task.progress * 100}%`;
@@ -202,7 +212,7 @@ function renderBest(candidate, tiers) {
   });
   if (!candidate) {
     text("bestSubtitle", "等待候选");
-    ["bestSharpe", "bestAnnual", "bestDrawdown", "bestWorstFold", "bestBets", "bestMechanisms", "bestCorrelation", "bestTurnover"].forEach(id => text(id, "--"));
+    ["bestSharpe", "bestAnnual", "bestDrawdown", "bestWorstFold", "bestBets", "bestMechanisms", "bestCorrelation", "bestStrategyCorrelation", "bestTurnover", "bestNearestStrategy"].forEach(id => text(id, "--"));
     document.getElementById("bestComposition").replaceChildren();
     text("bestGates", "等待评价");
     return;
@@ -216,7 +226,9 @@ function renderBest(candidate, tiers) {
   text("bestBets", number(metrics.portfolio_effective_factor_bets));
   text("bestMechanisms", number(metrics.portfolio_effective_mechanisms));
   text("bestCorrelation", number(metrics.portfolio_max_factor_correlation, 3));
+  text("bestStrategyCorrelation", number(metrics.portfolio_max_strategy_active_correlation, 3));
   text("bestTurnover", number(metrics.portfolio_annual_turnover, 1));
+  text("bestNearestStrategy", metrics.portfolio_nearest_strategy_id ? `${metrics.portfolio_nearest_strategy_id} · ${number(metrics.portfolio_nearest_strategy_observations, 0)}日` : "--");
   const names = factorMap();
   const composition = document.getElementById("bestComposition");
   composition.replaceChildren(...candidate.factor_ids.map((factorId, index) => {
@@ -273,12 +285,13 @@ function renderScreen() {
   rows.replaceChildren();
   const factors = factorMap();
   const screen = quantState.detail.factor_screen || [];
-  text("screenSummary", `${screen.length} 已评价 · ${new Set(screen.map(item => item.cluster_id).filter(Boolean)).size} 个收益簇`);
+  const homogeneity = quantState.detail.task?.homogeneity_summary || {};
+  text("screenSummary", `${screen.length} 已评价 · ${new Set(screen.map(item => item.cluster_id).filter(Boolean)).size} 个收益簇 · ${homogeneity.search_cluster_count || "--"} 个搜索簇`);
   screen.forEach((item, index) => {
     const factor = factors[item.factor_id] || {};
     const metrics = item.metrics || {};
     const row = element("tr");
-    row.innerHTML = `<td>#${index + 1}</td><td><strong>${escapeHtml(factor.name || item.factor_id)}</strong><br><code>${escapeHtml(item.factor_id)}</code></td><td>${escapeHtml(factor.mechanism || "OTHER")}</td><td><code>${escapeHtml(item.cluster_id || "--")}</code></td><td><span class="role-pill ${item.cluster_leader ? "leader" : "member"}">${item.cluster_leader ? "LEADER" : "MEMBER"}</span></td><td>${number(item.stability_score, 3)}</td><td>${number(metrics.portfolio_sharpe_ratio)}</td><td>${percent(metrics.portfolio_simple_annual_return)}</td><td>${percent(metrics.portfolio_max_drawdown)}</td><td>${number(metrics.portfolio_walk_forward_worst_sharpe)}</td><td>${number(metrics.portfolio_annual_turnover, 1)}</td><td>${escapeHtml(item.exclusion_reason || "保留")}</td>`;
+    row.innerHTML = `<td>#${index + 1}</td><td><strong>${escapeHtml(factor.name || item.factor_id)}</strong><br><code>${escapeHtml(item.factor_id)}</code></td><td>${escapeHtml(factor.mechanism || "OTHER")}</td><td><code>${escapeHtml(item.cluster_id || "--")}</code><br><small>${escapeHtml(factor.search_cluster_id || factor.behavior_cluster_id || factor.semantic_cluster_id || "--")}</small></td><td><span class="role-pill ${item.cluster_leader ? "leader" : "member"}">${item.cluster_leader ? "LEADER" : "MEMBER"}</span></td><td>${number(item.stability_score, 3)}</td><td>${number(metrics.portfolio_sharpe_ratio)}</td><td>${percent(metrics.portfolio_simple_annual_return)}</td><td>${percent(metrics.portfolio_max_drawdown)}</td><td>${number(metrics.portfolio_walk_forward_worst_sharpe)}</td><td>${number(metrics.portfolio_annual_turnover, 1)}</td><td>${escapeHtml(item.exclusion_reason || "保留")}</td>`;
     rows.append(row);
   });
   if (!screen.length) rows.append(tableEmpty(12, "等待稳定性筛选"));
@@ -295,10 +308,10 @@ function renderCandidates() {
     const algorithmClass = candidate.algorithm === "NSGA2" ? "evolution" : candidate.algorithm === "BAYESIAN_INCLUSION" ? "adaptive" : "";
     const composition = candidate.factor_ids.map((factorId, index) => `${escapeHtml(names[factorId]?.name || factorId)} <b>${percent(candidate.weights[index])}</b>`).join(" · ");
     const row = element("tr");
-    row.innerHTML = `<td><strong>#${String(candidate.iteration).padStart(3, "0")}</strong></td><td><span class="algorithm-tag ${algorithmClass}">${escapeHtml(candidate.algorithm)}</span><br><small>${escapeHtml(candidate.action)}</small></td><td class="factor-cell">${composition}</td><td>${candidate.pareto_rank === 0 ? `<span class="pareto-pill">FRONTIER</span>` : candidate.pareto_rank ?? "--"}</td><td><span class="gate-pill ${candidate.gate_status === "PASSED" ? "passed" : "failed"}">${candidate.gate_status}</span><br><small>${candidate.failed_gates.length} 项</small></td><td>${number(candidate.score, 3)}</td><td>${number(metrics.portfolio_sharpe_ratio)}</td><td>${percent(metrics.portfolio_simple_annual_return)}</td><td>${percent(metrics.portfolio_max_drawdown)}</td><td>${number(metrics.portfolio_walk_forward_worst_sharpe)}</td><td>${number(metrics.portfolio_effective_factor_bets)}</td><td>${number(metrics.portfolio_effective_mechanisms)}</td><td>${number(metrics.portfolio_max_factor_correlation, 3)}</td><td>${number(metrics.portfolio_annual_turnover, 1)}</td>`;
+    row.innerHTML = `<td><strong>#${String(candidate.iteration).padStart(3, "0")}</strong></td><td><span class="algorithm-tag ${algorithmClass}">${escapeHtml(candidate.algorithm)}</span><br><small>${escapeHtml(candidate.action)}</small></td><td class="factor-cell">${composition}</td><td>${candidate.pareto_rank === 0 ? `<span class="pareto-pill">FRONTIER</span>` : candidate.pareto_rank ?? "--"}</td><td><span class="gate-pill ${candidate.gate_status === "PASSED" ? "passed" : "failed"}">${candidate.gate_status}</span><br><small>${candidate.failed_gates.length} 项</small></td><td>${number(candidate.score, 3)}</td><td>${number(metrics.portfolio_sharpe_ratio)}</td><td>${percent(metrics.portfolio_simple_annual_return)}</td><td>${percent(metrics.portfolio_max_drawdown)}</td><td>${number(metrics.portfolio_walk_forward_worst_sharpe)}</td><td>${number(metrics.portfolio_effective_factor_bets)}</td><td>${number(metrics.portfolio_effective_mechanisms)}</td><td>${number(metrics.portfolio_max_factor_correlation, 3)}</td><td title="${escapeHtml(metrics.portfolio_nearest_strategy_id || "")}">${number(metrics.portfolio_max_strategy_active_correlation, 3)}</td><td>${number(metrics.portfolio_annual_turnover, 1)}</td>`;
     rows.append(row);
   });
-  if (!candidates.length) rows.append(tableEmpty(14, "等待组合搜索"));
+  if (!candidates.length) rows.append(tableEmpty(15, "等待组合搜索"));
 }
 
 function renderEvents() {
@@ -319,6 +332,7 @@ function renderConfig() {
     ["聚类阈值", task.engine.cluster_correlation_threshold], ["SFFS 束宽", task.engine.sffs_beam_width],
     ["进化预算", `${task.engine.evolution_population} × ${task.engine.evolution_generations}`],
     ["自适应试验", task.engine.adaptive_trials], ["协方差收缩", task.engine.covariance_shrinkage],
+    ["策略参考数", task.engine.strategy_reference_limit ?? "--"], ["相似度最少样本", task.engine.strategy_reference_minimum_observations ?? "--"],
     ["目标预设", task.objective.profile], ["评价预算", task.budget.maximum_evaluations],
   ];
   const list = document.getElementById("configList");
@@ -354,8 +368,29 @@ function hydrateForm() {
   const objective = document.getElementById("formObjective"); objective.replaceChildren(...quantState.bootstrap.objective_presets.map(preset => option(preset.profile, preset.label))); objective.value = defaults.objective.profile;
   const sources = document.getElementById("formSourceTasks"); sources.replaceChildren(...quantState.bootstrap.research_tasks.map(task => option(task.task_id, `${task.name} · ${task.status}`)));
   applyObjectivePreset();
+  renderGateFeedbackSummary();
   const fromUrl = new URLSearchParams(window.location.search).get("factors"); if (fromUrl) fromUrl.split(",").filter(Boolean).forEach(value => quantState.selectedFactors.add(value));
   renderFactorPicker();
+}
+
+function renderGateFeedbackSummary() {
+  const node = document.getElementById("gateFeedbackSummary");
+  if (!node) return;
+  const policy = quantState.bootstrap?.gate_feedback_policy || {};
+  if (!policy.active) {
+    node.textContent = "门禁反馈未启用，使用系统默认统计组合参数。";
+    return;
+  }
+  const roots = Object.entries(policy.root_cause_intensity || {})
+    .sort((left, right) => Number(right[1]) - Number(left[1]))
+    .slice(0, 3)
+    .map(([key, count]) => `${key} ${count}`)
+    .join(" · ");
+  const recommendations = (policy.recommendations || [])
+    .slice(0, 2)
+    .map(item => item.action)
+    .join(" · ");
+  node.textContent = `门禁反馈已介入默认值：${policy.profile_override || "KEEP_PROFILE"}。${policy.recommended_profile_reason || ""} 主根因：${roots || "暂无"}。建议：${recommendations || "查看策略生产漏斗"}。`;
 }
 
 function openTaskDialog() {
@@ -401,7 +436,47 @@ async function createTask(event) {
     budget: { maximum_evaluations: integer("formEvaluations"), maximum_runtime_minutes: integer("formRuntime"), weight_candidates_per_subset: integer("formWeightCandidates"), iteration_interval_seconds: 0 },
   };
   delete body.objective.label; delete body.objective.description;
+  const validationErrors = validateTaskPayload(body);
+  if (validationErrors.length) {
+    toast(validationErrors.join("；"), true);
+    return;
+  }
   try { const task = await api("/api/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); closeTaskDialog(); toast("统计组合任务已创建"); await loadBootstrap(); await selectTask(task.task_id, true); } catch (error) { toast(error.message, true); }
+}
+
+function validateTaskPayload(body) {
+  const errors = [];
+  const selectedCount = body.scope.factor_ids.length;
+  const minFactors = body.construction.min_factors;
+  const maxFactors = body.construction.max_factors;
+  if (body.scope.mode === "MANUAL" && selectedCount < minFactors) {
+    errors.push(`手动指定模式至少需要选择 ${minFactors} 个因子`);
+  }
+  if (body.scope.mode === "HYBRID" && selectedCount < 1) {
+    errors.push("必选 + 智能补足模式至少需要选择 1 个必选因子");
+  }
+  if (body.scope.mode === "HYBRID" && selectedCount > maxFactors) {
+    errors.push(`必选因子数量不能超过最多因子数 ${maxFactors}`);
+  }
+  if (minFactors > maxFactors) errors.push("最少因子不能大于最多因子");
+  if (body.construction.minimum_weight > body.construction.maximum_weight) {
+    errors.push("最小权重不能大于最大权重");
+  }
+  if (body.construction.minimum_weight * maxFactors > 1 + 1e-9) {
+    errors.push("最小权重过高，最多因子数无法配满 100% 权重");
+  }
+  if (body.construction.maximum_weight * minFactors < 1 - 1e-9) {
+    errors.push("最大权重过低，最少因子数无法配满 100% 权重");
+  }
+  const requiredEvaluations = Math.max(body.construction.candidate_pool_limit, selectedCount);
+  if (body.budget.maximum_evaluations <= requiredEvaluations) {
+    errors.push(`最大真实评价必须大于候选池规模 ${requiredEvaluations}`);
+  }
+  if (!body.data_path) errors.push("数据工作区不能为空");
+  if (!body.protocol.exploration_start || !body.protocol.validation_start || !body.protocol.holdout_start) {
+    errors.push("时间协议不能为空");
+  }
+  return errors;
 }
 
 async function command(action) {
@@ -420,7 +495,17 @@ function renderStrategies() {
 }
 
 function factorMap() { return Object.fromEntries((quantState.detail?.factor_snapshot || []).map(item => [item.factor_id, item])); }
-async function api(path, options = {}) { const response = await fetch(path, options); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : `HTTP ${response.status}`); return data; }
+async function api(path, options = {}) { const response = await fetch(path, options); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(apiErrorMessage(data, response.status)); return data; }
+function apiErrorMessage(data, status) {
+  if (typeof data.detail === "string") return data.detail;
+  if (Array.isArray(data.detail)) {
+    return data.detail.map(item => {
+      const location = Array.isArray(item.loc) ? item.loc.filter(part => part !== "body").join(".") : "";
+      return location ? `${location}: ${item.msg}` : item.msg;
+    }).join("；");
+  }
+  return `HTTP ${status}`;
+}
 function text(id, value) { const node = document.getElementById(id); if (node) node.textContent = value ?? "--"; }
 function value(id) { return document.getElementById(id).value.trim(); } function numeric(id) { return Number(document.getElementById(id).value); } function integer(id) { return Math.trunc(numeric(id)); }
 function selectedOptions(id) { return [...document.getElementById(id).selectedOptions].map(item => item.value); }

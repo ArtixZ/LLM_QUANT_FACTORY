@@ -48,9 +48,18 @@ class DataSyncWorker:
         market_data_root = Path(
             settings.get("market_data_root", str(self.market_data_root))
         ).expanduser()
+        sync_jobs = self._market_data_sync_jobs()
+        active_job = sync_jobs[0] if sync_jobs else None
         return {
             **self._status,
-            "running": self.alive,
+            "running": self.alive or bool(
+                active_job and active_job.get("status") == "RUNNING"
+            ),
+            "job_active": bool(active_job),
+            "active_job": active_job,
+            "queued_job_count": sum(
+                1 for job in sync_jobs if job.get("status") in {"QUEUED", "PAUSED"}
+            ),
             "download_progress": _download_progress(market_data_root),
         }
 
@@ -59,6 +68,23 @@ class DataSyncWorker:
 
     def set_token(self, value: str) -> None:
         self.token_store.set(value)
+
+    def _market_data_sync_jobs(self) -> list[dict[str, Any]]:
+        active_statuses = {"QUEUED", "RUNNING", "PAUSED", "PAUSE_REQUESTED", "CANCEL_REQUESTED"}
+        jobs: list[dict[str, Any]] = []
+        for status in active_statuses:
+            jobs.extend(
+                job
+                for job in self.store.system_jobs(status=status, limit=20)
+                if job.get("job_type") == "market_data_sync"
+            )
+        return sorted(
+            jobs,
+            key=lambda item: (
+                0 if item.get("status") == "RUNNING" else 1,
+                str(item.get("updated_at") or ""),
+            ),
+        )
 
     async def start(
         self,
@@ -81,6 +107,73 @@ class DataSyncWorker:
             name="autoalpha-market-data-sync",
         )
         return self.status()
+
+    def run_system_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        payload = job.get("payload") or {}
+        trigger = str(payload.get("trigger") or "system_job")
+        dataset_ids = payload.get("dataset_ids")
+        selected = list(dataset_ids) if isinstance(dataset_ids, list) else None
+        start_date = _parse_iso_date(payload.get("start_date"))
+        end_date = _parse_iso_date(payload.get("end_date"))
+        if self.is_busy():
+            raise RuntimeError("Stop research and manual backtests before refreshing market data")
+        if not self.token_configured():
+            raise RuntimeError("Tushare Token is not configured")
+        selected = selected or _configured_product_ids(self.store.settings())
+        resolve_products(selected)
+        self._status = {
+            "state": "RUNNING",
+            "updated_at": _now(),
+            "trigger": trigger,
+            "dataset_ids": selected,
+            "system_job_id": job.get("job_id"),
+        }
+        self.store.append_event(
+            "action",
+            "MARKET_DATA_SYNC_STARTED",
+            "市场数据增量同步开始",
+            "Job Center 已领取市场数据同步作业；覆盖检查后原子重建研究面板。",
+            payload={
+                "trigger": trigger,
+                "mode": "NON_PIT_PROXY",
+                "dataset_ids": selected,
+                "system_job_id": job.get("job_id"),
+            },
+        )
+        try:
+            result = self._sync_blocking(
+                selected,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            status = self._apply_sync_result(trigger=trigger, result=result)
+            return {
+                "protocol": "AUTOALPHA_MARKET_DATA_SYNC_JOB_V1",
+                "trigger": trigger,
+                "dataset_ids": selected,
+                "status": status["state"],
+                "panel_rebuilt": bool(status.get("panel_rebuilt")),
+                "download_returncode": int(status.get("download_returncode", -1)),
+                "updated_at": status["updated_at"],
+            }
+        except Exception as error:
+            self._status = {
+                "state": "FAILED",
+                "updated_at": _now(),
+                "trigger": trigger,
+                "dataset_ids": selected,
+                "system_job_id": job.get("job_id"),
+                "message": f"{type(error).__name__}: {error}",
+            }
+            self.store.append_event(
+                "audit",
+                "MARKET_DATA_SYNC_FAILED",
+                "市场数据同步失败",
+                self._status["message"],
+                level="ERROR",
+                payload={"trigger": trigger, "system_job_id": job.get("job_id")},
+            )
+            raise
 
     async def start_scheduler(self) -> None:
         if self._scheduler is None or self._scheduler.done():
@@ -156,31 +249,7 @@ class DataSyncWorker:
                 start_date=start_date,
                 end_date=end_date,
             )
-            sync_ok = result["download_returncode"] == 0
-            panel_rebuilt = bool(result.get("panel_rebuilt"))
-            status = (
-                "COMPLETED"
-                if sync_ok and panel_rebuilt
-                else "MIGRATION_PENDING"
-                if sync_ok
-                else "DEGRADED"
-            )
-            self._status = {"state": status, "updated_at": _now(), **result}
-            completed_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
-            self.store.save_settings({"last_data_sync_date": completed_date})
-            self.store.append_event(
-                "delivery",
-                "MARKET_DATA_SYNC_COMPLETED",
-                "市场数据面板已更新" if panel_rebuilt else "市场原始层已更新",
-                (
-                    "原始行情与复权因子已通过覆盖检查，研究面板已原子替换。"
-                    if panel_rebuilt
-                    else result.get("migration_message", "下载器仍报告部分失败，未替换研究面板。")
-                ),
-                level="INFO" if sync_ok else "WARN",
-                payload=self._status,
-            )
-            return self._status
+            return self._apply_sync_result(trigger=trigger, result=result)
         except Exception as error:
             self._status = {
                 "state": "FAILED",
@@ -196,6 +265,33 @@ class DataSyncWorker:
                 payload={"trigger": trigger},
             )
             raise
+
+    def _apply_sync_result(self, *, trigger: str, result: dict[str, Any]) -> dict[str, Any]:
+        sync_ok = result["download_returncode"] == 0
+        panel_rebuilt = bool(result.get("panel_rebuilt"))
+        status = (
+            "COMPLETED"
+            if sync_ok and panel_rebuilt
+            else "MIGRATION_PENDING"
+            if sync_ok
+            else "DEGRADED"
+        )
+        self._status = {"state": status, "updated_at": _now(), "trigger": trigger, **result}
+        completed_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        self.store.save_settings({"last_data_sync_date": completed_date})
+        self.store.append_event(
+            "delivery",
+            "MARKET_DATA_SYNC_COMPLETED",
+            "市场数据面板已更新" if panel_rebuilt else "市场原始层已更新",
+            (
+                "原始行情与复权因子已通过覆盖检查，研究面板已原子替换。"
+                if panel_rebuilt
+                else result.get("migration_message", "下载器仍报告部分失败，未替换研究面板。")
+            ),
+            level="INFO" if sync_ok else "WARN",
+            payload=self._status,
+        )
+        return self._status
 
     def _sync_blocking(
         self,
@@ -586,6 +682,14 @@ def _configured_product_ids(settings: dict[str, str]) -> list[str]:
     if not isinstance(value, list):
         return list(DEFAULT_PRODUCT_IDS)
     return [str(item) for item in value]
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if value in {None, ""}:
+        return None
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
 
 
 def _panel_start_date(settings: dict[str, str]) -> str:

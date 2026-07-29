@@ -641,6 +641,11 @@ def _library_admission_failures(metrics: dict[str, Any], config: ResearchConfig)
             or float(metrics.get("long_only_sharpe_ratio", -100.0))
             >= config.evaluation.redundancy_override_net_ir
         ),
+        "behavior_novelty": (
+            bool(metrics.get("homogeneity_gate_passed", True))
+            or float(metrics.get("long_only_sharpe_ratio", -100.0))
+            >= config.evaluation.redundancy_override_net_ir
+        ),
     }
     return [name for name, passed in checks.items() if not passed]
 

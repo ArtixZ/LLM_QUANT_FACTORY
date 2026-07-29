@@ -6,7 +6,7 @@
   <title>QuantCombine · 统计组合优化</title>
   <link rel="stylesheet" href="/static/styles.css">
   <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v3">
-  <link rel="stylesheet" href="/static/quantcombine.css?v=20260720-workflows-v2">
+  <link rel="stylesheet" href="/static/quantcombine.css?v=20260720-workflows-v3">
 </head>
 <body class="quant-body">
   <header class="app-header">
@@ -47,6 +47,7 @@
           <div><span>QUANTCOMBINE TASK</span><h2 id="taskName">--</h2><code id="taskIdentity">--</code></div>
           <div class="task-actions">
             <span class="state-pill" id="taskState">--</span>
+            <a class="button" id="taskJobCenterLink" href="http://127.0.0.1:8788/jobs?queue=quantcombine" target="_blank" rel="noreferrer"><i data-lucide="list-checks"></i>Job Center</a>
             <button class="button" id="headerQuickScreenButton" type="button" disabled title="使用当前最佳组合在最新交易日快速选股"><i data-lucide="list-filter"></i>便捷选股</button>
             <button class="button" id="headerQuickBacktestButton" type="button" disabled title="将当前最佳组合及任务协议带入手动回测"><i data-lucide="chart-no-axes-combined"></i>便捷回测</button>
             <button class="button primary" id="startButton"><i data-lucide="play"></i>启动</button>
@@ -103,14 +104,16 @@
               <div><span>有效下注</span><strong id="bestBets">--</strong></div>
               <div><span>有效机制</span><strong id="bestMechanisms">--</strong></div>
               <div><span>最大相关</span><strong id="bestCorrelation">--</strong></div>
+              <div><span>策略相关</span><strong id="bestStrategyCorrelation">--</strong></div>
               <div><span>年化换手</span><strong id="bestTurnover">--</strong></div>
+              <div><span>最近相似</span><strong id="bestNearestStrategy">--</strong></div>
             </div>
             <div class="best-composition" id="bestComposition"></div>
             <div class="gate-summary" id="bestGates">等待评价</div>
           </section>
 
           <section class="panel trajectory-panel">
-            <div class="panel-header chart-heading"><div><h2>多目标搜索轨迹</h2><p>每个点是一组实际回测过的因子和权重</p></div><label>指标<select id="chartMetric"><option value="portfolio_sharpe_ratio">纯多夏普</option><option value="portfolio_simple_annual_return">简单年化</option><option value="portfolio_max_drawdown">最大回撤</option><option value="portfolio_walk_forward_worst_sharpe">最差折夏普</option><option value="portfolio_annual_turnover">年化换手</option><option value="portfolio_effective_factor_bets">有效下注</option><option value="portfolio_effective_mechanisms">有效机制</option><option value="gate_distance">门禁距离</option></select></label></div>
+            <div class="panel-header chart-heading"><div><h2>多目标搜索轨迹</h2><p>每个点是一组实际回测过的因子和权重</p></div><label>指标<select id="chartMetric"><option value="portfolio_sharpe_ratio">纯多夏普</option><option value="portfolio_simple_annual_return">简单年化</option><option value="portfolio_max_drawdown">最大回撤</option><option value="portfolio_walk_forward_worst_sharpe">最差折夏普</option><option value="portfolio_annual_turnover">年化换手</option><option value="portfolio_effective_factor_bets">有效下注</option><option value="portfolio_effective_mechanisms">有效机制</option><option value="portfolio_max_strategy_active_correlation">策略相关</option><option value="gate_distance">门禁距离</option></select></label></div>
             <div class="chart-wrap"><canvas id="trajectoryChart"></canvas><p id="chartEmpty">等待组合评价</p></div>
             <div class="chart-legend"><span class="sffs">SFFS</span><span class="evolution">NSGA-II</span><span class="adaptive">Adaptive</span><span class="pareto">Pareto</span></div>
           </section>
@@ -123,7 +126,7 @@
 
         <section class="panel candidate-panel">
           <div class="panel-header"><div><h2>候选组合档案</h2><p>SFFS、进化与自适应搜索结果统一比较</p></div><span id="candidateSummary">0 个候选</span></div>
-          <div class="table-scroll"><table><thead><tr><th>#</th><th>阶段 / 算法</th><th>因子与权重</th><th>Pareto</th><th>门禁</th><th>得分</th><th>夏普</th><th>年化</th><th>回撤</th><th>最差折</th><th>下注</th><th>机制</th><th>相关</th><th>换手</th></tr></thead><tbody id="candidateRows"></tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>#</th><th>阶段 / 算法</th><th>因子与权重</th><th>Pareto</th><th>门禁</th><th>得分</th><th>夏普</th><th>年化</th><th>回撤</th><th>最差折</th><th>下注</th><th>机制</th><th>因子相关</th><th>策略相关</th><th>换手</th></tr></thead><tbody id="candidateRows"></tbody></table></div>
         </section>
 
         <div class="quant-bottom-grid">
@@ -147,14 +150,14 @@
         <section><h3>时间协议</h3><label>探索起始<input id="formExplorationStart" type="date" required></label><label>探索结束<input id="formExplorationEnd" type="date" required></label><label>验证起始<input id="formValidationStart" type="date" required></label><label>验证结束<input id="formValidationEnd" type="date" required></label><label>隐藏起始<input id="formHoldoutStart" type="date" required></label><label>隐藏结束<input id="formHoldoutEnd" type="date" required></label><label>最少验证折<input id="formMinimumFolds" type="number" min="1" max="20" value="3"></label></section>
         <section><h3>组合约束</h3><label>最少因子<input id="formMinFactors" type="number" min="1" max="12" value="2"></label><label>最多因子<input id="formMaxFactors" type="number" min="1" max="12" value="5"></label><label>最小权重<input id="formMinWeight" type="number" min="0.01" max="0.5" step="0.01" value="0.05"></label><label>最大权重<input id="formMaxWeight" type="number" min="0.1" max="1" step="0.05" value="0.5"></label><label>权重步长<input id="formWeightStep" type="number" min="0.01" max="0.25" step="0.01" value="0.05"></label></section>
         <section><h3>统计搜索引擎</h3><label>引擎模式<select id="formEngineMode"><option value="ENSEMBLE">集成优化（推荐）</option><option value="DETERMINISTIC">仅 SFFS</option><option value="EVOLUTIONARY">SFFS + NSGA-II</option><option value="BAYESIAN">SFFS + 自适应采样</option></select></label><label>聚类阈值<input id="formClusterThreshold" type="number" min="0.3" max="0.99" step="0.01" value="0.78"></label><label>SFFS束宽<input id="formBeamWidth" type="number" min="1" max="10" value="3"></label><label>进化种群<input id="formPopulation" type="number" min="4" max="100" value="12"></label><label>进化代数<input id="formGenerations" type="number" min="1" max="100" value="4"></label><label>自适应试验<input id="formAdaptiveTrials" type="number" min="0" max="1000" value="16"></label><label>协方差收缩<input id="formShrinkage" type="number" min="0" max="1" step="0.05" value="0.35"></label><label>权重正则<input id="formRegularization" type="number" min="0" max="10" step="0.01" value="0.08"></label></section>
-        <section><h3>目标与硬门禁</h3><label class="wide">优化预设<select id="formObjective"></select></label><p class="wide preset-note" id="presetNote"></p><label>最低覆盖率<input id="formCoverage" type="number" min="0" max="1" step="0.05"></label><label>正折比例<input id="formPositiveFolds" type="number" min="0" max="1" step="0.05"></label><label>最差折夏普<input id="formWorstFold" type="number" min="-10" max="10" step="0.1"></label><label>最大回撤<input id="formMaxDrawdown" type="number" min="0.01" max="1" step="0.01"></label><label>最大换手<input id="formTurnover" type="number" min="0.1" max="1000" step="1"></label><label>最大因子相关<input id="formCorrelation" type="number" min="0" max="1" step="0.01"></label><label>最低有效下注<input id="formBets" type="number" min="1" max="12" step="0.05"></label><label>最低有效机制<input id="formMechanisms" type="number" min="1" max="12" step="0.05"></label><label>最大机制权重<input id="formMechanismWeight" type="number" min="0.1" max="1" step="0.05"></label><label>最低 DSR<input id="formDsr" type="number" min="0" max="1" step="0.05"></label></section>
+        <section><h3>目标与硬门禁</h3><label class="wide">优化预设<select id="formObjective"></select></label><p class="wide preset-note" id="presetNote"></p><div class="wide budget-note" id="gateFeedbackSummary">门禁反馈未启用。</div><label>最低覆盖率<input id="formCoverage" type="number" min="0" max="1" step="0.05"></label><label>正折比例<input id="formPositiveFolds" type="number" min="0" max="1" step="0.05"></label><label>最差折夏普<input id="formWorstFold" type="number" min="-10" max="10" step="0.1"></label><label>最大回撤<input id="formMaxDrawdown" type="number" min="0.01" max="1" step="0.01"></label><label>最大换手<input id="formTurnover" type="number" min="0.1" max="1000" step="1"></label><label>最大因子相关<input id="formCorrelation" type="number" min="0" max="1" step="0.01"></label><label>最低有效下注<input id="formBets" type="number" min="1" max="12" step="0.05"></label><label>最低有效机制<input id="formMechanisms" type="number" min="1" max="12" step="0.05"></label><label>最大机制权重<input id="formMechanismWeight" type="number" min="0.1" max="1" step="0.05"></label><label>最低 DSR<input id="formDsr" type="number" min="0" max="1" step="0.05"></label></section>
         <section><h3>计算预算</h3><label>最大真实评价<input id="formEvaluations" type="number" min="10" max="100000" value="180"></label><label>最长分钟<input id="formRuntime" type="number" min="1" max="10080" value="240"></label><label>每子集权重方案<input id="formWeightCandidates" type="number" min="1" max="50" value="8"></label><p class="wide budget-note">预算包含单因子筛选、权重候选、留一法诊断；所有评价均使用同一纯多A股代理回测协议。</p></section>
       </div>
       <div class="dialog-actions"><button type="button" class="button" id="cancelDialog">取消</button><button type="submit" class="button primary"><i data-lucide="binary"></i>冻结并创建</button></div>
     </form>
   </dialog>
   <div id="toast" role="status"></div>
-  <script src="/static/quantcombine.js?v=20260720-workflows-v2"></script>
+  <script src="/static/quantcombine.js?v=20260720-workflows-v3"></script>
   <script async src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" onload="window.lucide&&window.lucide.createIcons()"></script>
 </body>
 </html>

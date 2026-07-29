@@ -482,6 +482,41 @@ def test_factor_reevaluation_batch_is_atomic(tmp_path: Path) -> None:
     assert store.factor_pool_record("F_1")["metrics"]["evaluation_protocol"] == "current"
 
 
+def test_factor_pool_metric_merge_preserves_existing_evidence(tmp_path: Path) -> None:
+    store = ServiceStore(tmp_path / "service.sqlite3")
+    proposal = {
+        "name": "factor",
+        "family": "reversal",
+        "hypothesis": "test",
+        "expected_direction": 1,
+        "expression": {
+            "operator": "field",
+            "arguments": [],
+            "parameters": {"name": "adj_close"},
+        },
+    }
+    store.upsert_factor_pool(
+        factor_id="F_1",
+        source_iteration=1,
+        proposal=proposal,
+        metrics={"long_only_sharpe_ratio": 1.2},
+        status="ELIGIBLE",
+        status_reason="passed",
+    )
+
+    merged = store.merge_factor_pool_metrics(
+        "F_1",
+        {
+            "homogeneity_cluster_id": "B001",
+            "homogeneity_nearest_similarity": 0.83,
+        },
+    )
+
+    assert merged["long_only_sharpe_ratio"] == 1.2
+    assert merged["homogeneity_cluster_id"] == "B001"
+    assert store.factor_pool_record("F_1")["metrics"]["homogeneity_nearest_similarity"] == 0.83
+
+
 def test_manual_backtest_records_are_persistent_and_isolated(tmp_path: Path) -> None:
     store = ServiceStore(tmp_path / "service.sqlite3")
     request = {

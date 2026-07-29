@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoAlpha 策略库</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity">
+      <h1>AutoAlpha 策略库</h1>
+      <p id="strategyLibrarySummary">正式策略版本、晋级证据与生产边界</p>
+    </div>
+    <div class="header-actions">
+      <span class="state-pill small">STRATEGY CONTROL</span>
+      <button class="button" id="syncStrategyBus"><i data-lucide="git-branch-plus"></i>同步总线</button>
+      <button class="button" id="refreshStrategies"><i data-lucide="refresh-cw"></i>刷新</button>
+    </div>
+  </header>
+  <script src="/static/platform_header.js?v=20260728-strategy-v1"></script>
+
+  <main class="research-page strategy-library-page">
+    <section class="strategy-summary-band">
+      <div><span>正式策略版本</span><strong id="strategyCount">--</strong><small>不可变 StrategySpec</small></div>
+      <div><span>可入库候选</span><strong id="candidateCount">--</strong><small>来自组合候选</small></div>
+      <div><span>可自动推进</span><strong id="readyCount">--</strong><small>证据已齐全</small></div>
+      <div><span>生产候选</span><strong id="productionCount">--</strong><small>最终门禁</small></div>
+    </section>
+
+    <section class="panel strategy-control-panel">
+      <div class="panel-header">
+        <div>
+          <h2>策略生产漏斗</h2>
+          <p>从因子证据到可执行策略版本的转化链路与当前瓶颈。</p>
+        </div>
+        <div class="header-actions">
+          <span class="state-pill small" id="funnelProtocol">--</span>
+          <button class="button" id="seedGateRepairJob"><i data-lucide="wrench"></i>生成修复任务</button>
+        </div>
+      </div>
+      <div id="productionFunnel" class="strategy-funnel-list"></div>
+      <div id="funnelBottlenecks" class="strategy-bottleneck-list"></div>
+    </section>
+
+    <section class="panel strategy-control-panel">
+      <div class="panel-header">
+        <div>
+          <h2>正式策略版本</h2>
+          <p>策略必须依次经过公开验证、冻结、隐藏盲测、影子交易、模拟交易和生产候选。</p>
+        </div>
+        <button class="button" id="freezeReadyStrategies"><i data-lucide="snowflake"></i>冻结可冻结</button>
+      </div>
+      <div id="strategyList" class="formal-strategy-list"></div>
+    </section>
+
+    <section class="panel strategy-control-panel">
+      <div class="panel-header">
+        <div>
+          <h2>可入库研究候选</h2>
+          <p>仅创建 RESEARCH 策略版本；是否冻结由生命周期 readiness 决定。</p>
+        </div>
+        <button class="button" id="seedStrategyCandidates"><i data-lucide="package-plus"></i>入库候选</button>
+      </div>
+      <div id="candidateList" class="formal-strategy-list"></div>
+    </section>
+  </main>
+
+  <dialog class="factor-detail-dialog" id="executionPackageDialog">
+    <article class="factor-detail-sheet">
+      <header>
+        <div>
+          <span>EXECUTION PACKAGE</span>
+          <h2 id="packageTitle">策略执行包</h2>
+          <p id="packageSubtitle">--</p>
+        </div>
+        <button class="icon-button" id="closePackageDialog" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </header>
+      <div class="factor-detail-grid" id="packageBody"></div>
+    </article>
+  </dialog>
+
+  <dialog class="factor-detail-dialog" id="releaseDossierDialog">
+    <article class="factor-detail-sheet">
+      <header>
+        <div>
+          <span>RELEASE DOSSIER</span>
+          <h2 id="dossierTitle">策略发布档案</h2>
+          <p id="dossierSubtitle">--</p>
+        </div>
+        <button class="icon-button" id="closeDossierDialog" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </header>
+      <div class="factor-detail-grid" id="dossierBody"></div>
+    </article>
+  </dialog>
+
+  <dialog class="factor-detail-dialog" id="lineageDialog">
+    <article class="factor-detail-sheet">
+      <header>
+        <div>
+          <span>EXPERIMENT LINEAGE</span>
+          <h2 id="lineageTitle">实验血缘</h2>
+          <p id="lineageSubtitle">--</p>
+        </div>
+        <button class="icon-button" id="closeLineageDialog" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </header>
+      <div class="factor-detail-grid" id="lineageBody"></div>
+    </article>
+  </dialog>
+
+  <div id="toast" role="status"></div>
+  <script src="/static/formal_strategies.js?v=20260728-strategy-v1"></script>
+  <script async src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" onload="window.lucide&&window.lucide.createIcons()"></script>
+</body>
+</html>

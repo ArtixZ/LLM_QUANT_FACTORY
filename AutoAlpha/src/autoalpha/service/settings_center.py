@@ -16,6 +16,7 @@ from autoalpha.data.tushare_catalog import (
 )
 from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.service.autocombine import DEFAULT_BUDGET, DEFAULT_CONSTRUCTION, OBJECTIVE_PRESETS
+from autoalpha.service.database_backend import database_runtime_config
 
 OBJECTIVE_OPTIONS = tuple(OBJECTIVE_PRESETS)
 RESTART_KEYS = {"research_concurrency", "autocombine_concurrency"}
@@ -422,6 +423,7 @@ def runtime_snapshot(
     autocombine_health: dict[str, Any] | None,
 ) -> dict[str, Any]:
     config = ResearchConfig.from_toml(config_path)
+    database_config = database_runtime_config()
     autoalpha_address = (
         f"http://{os.getenv('AUTOALPHA_HOST', '127.0.0.1')}:"
         f"{os.getenv('AUTOALPHA_PORT', '8787')}"
@@ -446,6 +448,18 @@ def runtime_snapshot(
             ),
             _runtime("运行目录", str(runtime_root.resolve()), "AUTOALPHA_RUNTIME", "重启服务"),
             _runtime("研究配置", str(config_path.resolve()), "AUTOALPHA_CONFIG", "重启服务"),
+            _runtime(
+                "数据库后端",
+                database_config.backend,
+                "AUTOALPHA_DATABASE_BACKEND",
+                "重启服务",
+            ),
+            _runtime(
+                "PostgreSQL 迁移阶段",
+                database_config.migration_stage,
+                "AUTOALPHA_DATABASE_URL",
+                "重启服务",
+            ),
             _runtime("AutoAlpha 并发", str(research_concurrency), "当前进程", "重启服务"),
             _runtime(
                 "AutoCombine 并发",

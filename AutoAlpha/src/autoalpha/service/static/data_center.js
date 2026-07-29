@@ -40,7 +40,8 @@ function renderDataCenter(snapshot) {
   const sync = snapshot.sync || {};
   const hasWorkspace = Boolean(workspace);
   text("dataState", sync.state || (hasWorkspace ? "READY" : "FAILED"));
-  text("dataCenterSummary", hasWorkspace ? `${formatNumber(workspace.rows)} 行 · ${workspace.symbols || "--"} 只股票 · 指纹 ${workspace.fingerprint.slice(0, 12)}` : snapshot.workspace_error || "数据工作区不可用");
+  const fingerprint = workspace?.fingerprint ? String(workspace.fingerprint).slice(0, 12) : "--";
+  text("dataCenterSummary", hasWorkspace ? `${formatNumber(workspace.rows)} 行 · ${workspace.symbols || "--"} 只股票 · 指纹 ${fingerprint}` : snapshot.workspace_error || "数据工作区不可用");
   renderReadiness("research", hasWorkspace && workspace.price_research_ready, hasWorkspace ? "价格研究可用" : "不可用", hasWorkspace ? `${workspace.columns.length} 个字段` : "请检查目录");
   renderReadiness("proxy", Boolean(basis?.capital_ledger_proxy_ready), basis?.capital_ledger_proxy_ready ? "READY" : "BLOCKED", basis?.capital_ledger_proxy_ready ? "原始成交代理可用" : "缺少成交条件");
   renderReadiness("pit", Boolean(basis?.capital_ledger_ready), basis?.capital_ledger_ready ? "READY" : "BLOCKED", basis?.capital_ledger_ready ? "严格状态可用" : "需 PIT 市场状态");
@@ -52,12 +53,13 @@ function renderDataCenter(snapshot) {
   text("syncUpdatedAt", formatDate(sync.updated_at));
   renderSettings(snapshot);
   renderWorkspace(snapshot);
+  renderCapabilityMatrix(snapshot.capability_matrix);
   renderProducts();
   renderDownloader(snapshot.downloader);
   renderEvents(snapshot.recent_events || []);
   renderSyncProgress(sync.download_progress, Boolean(sync.running));
-  document.getElementById("startDataSync").disabled = Boolean(sync.running) || !snapshot.credentials.tushare_token_configured || !snapshot.downloader.sync_cli_available;
-  text("syncActionNote", sync.running ? "同步正在运行；研究与手动回测会在同步期间保持隔离。" : sync.migration_message || sync.message || "增量下载不复权截面与复权因子；历史覆盖完整后原子重建研究面板。");
+  document.getElementById("startDataSync").disabled = Boolean(sync.running || sync.job_active) || !snapshot.credentials.tushare_token_configured || !snapshot.downloader.sync_cli_available;
+  text("syncActionNote", sync.job_active ? `同步作业已进入 Job Center：${sync.active_job?.job_id || "--"} · ${sync.active_job?.status || "--"}` : sync.running ? "同步正在运行；研究与手动回测会在同步期间保持隔离。" : sync.migration_message || sync.message || "增量下载不复权截面与复权因子；历史覆盖完整后原子重建研究面板。");
   if (window.lucide) window.lucide.createIcons();
 }
 
@@ -162,6 +164,40 @@ function renderWorkspace(snapshot) {
   renderMessageList("executionWarnings", basis ? [...basis.proxy_blockers, ...basis.blockers] : []);
 }
 
+function renderCapabilityMatrix(matrix) {
+  const rows = matrix?.rows || [];
+  const summary = matrix?.summary || {};
+  text("capabilityPolicy", summary.production_allowed ? "PRODUCTION READY" : "PROXY / RESEARCH");
+  text("capabilitySummary", matrix?.production_policy || "数据能力矩阵不可用");
+  const root = document.getElementById("capabilityRows");
+  if (!rows.length) {
+    root.replaceChildren(element("p", "empty-data-state", "暂无模块级数据能力信息。"));
+    return;
+  }
+  root.replaceChildren(...rows.map(row => {
+    const item = element("article", `data-capability-row ${row.allowed ? "allowed" : "blocked"}`);
+    const blockers = row.blockers || [];
+    const caveats = row.caveats || [];
+    item.append(
+      element("strong", "", row.label || row.module_id),
+      element("span", `capability-level ${String(row.level || "").toLowerCase()}`, row.level || "--"),
+      element("code", "", row.data_mode || "--"),
+      element("p", "", row.summary || "--"),
+    );
+    if (blockers.length || caveats.length) {
+      const list = element("ul", "");
+      blockers.slice(0, 5).forEach(message => list.append(element("li", "blocked", message)));
+      caveats.slice(0, 3).forEach(message => list.append(element("li", "caveat", message)));
+      item.append(list);
+    }
+    if ((row.required_fields || []).length) {
+      const fields = element("p", "required-fields", `必需字段：${row.required_fields.slice(0, 12).join(", ")}`);
+      item.append(fields);
+    }
+    return item;
+  }));
+}
+
 function renderDownloader(downloader) {
   text("downloaderPath", downloader.root_path || "--");
   text("downloaderState", downloader.sync_cli_available && downloader.cross_sectional_available ? "READY" : "CHECK SETUP");
@@ -207,7 +243,7 @@ async function startSync() {
   button.disabled = true;
   try {
     const selected = (dataCenterState.snapshot?.data_products?.products || []).filter(product => product.selected).map(product => product.dataset_id);
-    await api("/api/data-sync/start", { method: "POST", body: JSON.stringify({ dataset_ids: selected, start_date: document.getElementById("featureStartDate").value || null, end_date: document.getElementById("featureEndDate").value || null }) }); toast("多数据产品增量同步已启动"); await loadDataCenter();
+    const result = await api("/api/data-sync/start", { method: "POST", body: JSON.stringify({ dataset_ids: selected, start_date: document.getElementById("featureStartDate").value || null, end_date: document.getElementById("featureEndDate").value || null }) }); toast(result.job ? `同步作业已入队：${result.job.job_id}` : "多数据产品增量同步已启动"); await loadDataCenter();
   }
   catch (error) { toast(error.message, true); button.disabled = false; }
 }

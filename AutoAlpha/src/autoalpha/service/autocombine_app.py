@@ -27,6 +27,12 @@ from autoalpha.service.autocombine import (
 from autoalpha.service.autocombine_intelligence import enrich_factor_record
 from autoalpha.service.autocombine_store import AutoCombineStore
 from autoalpha.service.credentials import SystemCredentialStore
+from autoalpha.service.external_jobs import external_job_id, mirror_external_research_job
+from autoalpha.service.gate_feedback import (
+    append_gate_feedback_notes,
+    apply_gate_feedback,
+    gate_feedback_policy,
+)
 from autoalpha.service.research_protocol import (
     default_task_protocol,
     panel_validation_fold_capacity,
@@ -378,6 +384,25 @@ async def bootstrap() -> dict[str, Any]:
             )
         ),
     }
+    feedback = gate_feedback_policy(base_store)
+    construction_defaults = apply_gate_feedback(
+        construction_defaults,
+        feedback["adjustments"]["construction"],
+    )
+    if feedback.get("profile_override") in OBJECTIVE_PRESETS:
+        objective_defaults = {
+            key: value
+            for key, value in OBJECTIVE_PRESETS[str(feedback["profile_override"])].items()
+            if key not in {"label", "description"}
+        }
+    objective_defaults = apply_gate_feedback(
+        objective_defaults,
+        feedback["adjustments"]["objective"],
+    )
+    budget_defaults = apply_gate_feedback(
+        budget_defaults,
+        feedback["adjustments"]["budget"],
+    )
     return {
         "tasks": [
             {**_task_view(task), "favorite": task["task_id"] in favorite_tasks}
@@ -404,6 +429,7 @@ async def bootstrap() -> dict[str, Any]:
             "objective": objective_defaults,
             "budget": budget_defaults,
         },
+        "gate_feedback_policy": feedback,
         "provider_configured": vault.configured(),
         "maximum_concurrent_tasks": manager.maximum_concurrent_tasks,
     }
@@ -423,6 +449,33 @@ async def create_task(payload: CombineTaskRequest) -> dict[str, Any]:
         blockers.extend(protocol_data_blockers(protocol, Path(workspace.panel_path)))
         if blockers:
             raise ValueError("；".join(blockers))
+        feedback = gate_feedback_policy(base_store)
+        profile = (
+            str(feedback["profile_override"])
+            if "profile" not in payload.objective.model_fields_set
+            and feedback.get("profile_override") in OBJECTIVE_PRESETS
+            else payload.objective.profile
+        )
+        objective = {**payload.objective.model_dump(), "profile": profile}
+        preset = OBJECTIVE_PRESETS[profile]
+        for key, value in preset.items():
+            if key in ObjectiveSpec.model_fields and key not in payload.objective.model_fields_set:
+                objective[key] = value
+        objective = apply_gate_feedback(
+            objective,
+            feedback["adjustments"]["objective"],
+            explicit_fields=set(payload.objective.model_fields_set),
+        )
+        construction = apply_gate_feedback(
+            payload.construction.model_dump(),
+            feedback["adjustments"]["construction"],
+            explicit_fields=set(payload.construction.model_fields_set),
+        )
+        budget = apply_gate_feedback(
+            payload.budget.model_dump(),
+            feedback["adjustments"]["budget"],
+            explicit_fields=set(payload.budget.model_fields_set),
+        )
         record = create_task_record(
             base_store,
             name=payload.name,
@@ -430,10 +483,10 @@ async def create_task(payload: CombineTaskRequest) -> dict[str, Any]:
             data_path=str(data_path),
             protocol=protocol,
             scope=payload.scope.model_dump(),
-            construction=payload.construction.model_dump(),
-            objective=payload.objective.model_dump(),
-            budget=payload.budget.model_dump(),
-            notes=payload.notes,
+            construction=construction,
+            objective=objective,
+            budget=budget,
+            notes=append_gate_feedback_notes(payload.notes, feedback),
         )
         task = combine_store.create_task(record)
     except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError) as error:
@@ -445,22 +498,31 @@ async def create_task(payload: CombineTaskRequest) -> dict[str, Any]:
     for item in task["factor_snapshot"]:
         mechanism = str(item.get("mechanism", "OTHER"))
         mechanism_counts[mechanism] = mechanism_counts.get(mechanism, 0) + 1
+    homogeneity_summary = task.get("homogeneity_summary") or {}
     combine_store.event(
         task["task_id"],
         "action",
         "COMBINE_TASK_CREATED",
         "AutoCombine 任务已创建",
-        f"已冻结 {task['factor_count']} 个可见因子，快照 {task['snapshot_hash'][:12]}。"
+        f"已冻结 {task['factor_count']} 个可见因子，压缩为 "
+        f"{homogeneity_summary.get('search_cluster_count', task['factor_count'])} 个搜索簇，"
+        f"快照 {task['snapshot_hash'][:12]}。"
         + (f" 其中 {contaminated_count} 个因子带隐藏期污染标记。" if contaminated_count else ""),
         payload={
             "snapshot_hash": task["snapshot_hash"],
             "factor_count": task["factor_count"],
             "mechanism_counts": mechanism_counts,
+            "homogeneity_summary": homogeneity_summary,
             "semantic_cluster_count": len(
                 {item.get("semantic_cluster_id") for item in task["factor_snapshot"]}
             ),
+            "search_cluster_count": homogeneity_summary.get("search_cluster_count"),
+            "duplicate_search_cluster_factor_count": homogeneity_summary.get(
+                "duplicate_search_cluster_factor_count"
+            ),
         },
     )
+    _mirror_task_job(task, event="COMBINE_TASK_CREATED", message="AutoCombine task created")
     return _task_view(task)
 
 
@@ -508,14 +570,16 @@ async def task_detail(task_id: str) -> dict[str, Any]:
     if task is None:
         raise HTTPException(status_code=404, detail="AutoCombine task not found")
     experiments = combine_store.experiments(task_id)
+    events = combine_store.events(task_id)
     task_view = _task_view(task)
     task_view["favorite"] = base_store.favorite("combine_task", task_id) is not None
+    task_view["homogeneity_rejection_summary"] = _homogeneity_rejection_summary(events)
     return {
         "task": task_view,
         "experiments": experiments,
         "frontier": _pareto_frontier(experiments),
         "memories": combine_store.memories(task_id),
-        "events": combine_store.events(task_id),
+        "events": events,
         "best": (
             combine_store.experiment(int(task["best_experiment_id"]))
             if task.get("best_experiment_id")
@@ -567,6 +631,7 @@ async def start_task(task_id: str) -> dict[str, Any]:
         task = await manager.start(task_id)
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    _mirror_task_job(task, event="COMBINE_TASK_STARTED", message="AutoCombine task started")
     return _task_view(task)
 
 
@@ -574,7 +639,9 @@ async def start_task(task_id: str) -> dict[str, Any]:
 async def stop_task(task_id: str) -> dict[str, Any]:
     if combine_store.task(task_id) is None:
         raise HTTPException(status_code=404, detail="AutoCombine task not found")
-    return _task_view(await manager.stop(task_id))
+    task = await manager.stop(task_id)
+    _mirror_task_job(task, event="COMBINE_TASK_STOPPED", message="AutoCombine task stopped")
+    return _task_view(task)
 
 
 @app.post("/api/tasks/{task_id}/promote")
@@ -613,7 +680,48 @@ def _task_view(task: dict[str, Any]) -> dict[str, Any]:
     item["worker_alive"] = manager.alive(task["task_id"])
     maximum = max(1, int(task["budget"]["maximum_experiments"]))
     item["progress"] = min(1.0, int(task["iteration"]) / maximum)
+    item["system_job_id"] = external_job_id("autocombine", str(task["task_id"]))
+    item["job_center_url"] = "http://127.0.0.1:8788/jobs?queue=autocombine"
     return item
+
+
+def _homogeneity_rejection_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    relevant = [
+        item
+        for item in events
+        if item.get("event") == "COMBINE_HOMOGENEITY_CANDIDATE_REJECTED"
+    ]
+    by_dimension: dict[str, int] = {}
+    by_label: dict[str, int] = {}
+    for item in relevant:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        dimension = str(payload.get("dimension") or "UNKNOWN")
+        by_dimension[dimension] = by_dimension.get(dimension, 0) + 1
+        crowded = payload.get("crowded_labels")
+        if isinstance(crowded, dict):
+            for label, count in crowded.items():
+                key = f"{dimension}:{label}"
+                by_label[key] = by_label.get(key, 0) + int(count)
+    return {
+        "total": len(relevant),
+        "by_dimension": by_dimension,
+        "crowded_label_counts": by_label,
+    }
+
+
+def _mirror_task_job(task: dict[str, Any], *, event: str, message: str) -> dict[str, Any]:
+    maximum = max(1, int((task.get("budget") or {}).get("maximum_experiments") or 1))
+    return mirror_external_research_job(
+        base_store,
+        system="autocombine",
+        task=task,
+        queue="autocombine",
+        job_type="external_autocombine_research",
+        progress_current=int(task.get("iteration") or 0),
+        progress_total=maximum,
+        event=event,
+        message=message,
+    )
 
 
 def _pareto_frontier(experiments: list[dict[str, Any]]) -> list[int]:

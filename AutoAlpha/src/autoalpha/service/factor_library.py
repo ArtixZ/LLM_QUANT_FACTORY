@@ -4,6 +4,8 @@ import math
 from collections import Counter
 from typing import Any
 
+from autoalpha.service.mechanism import normalize_mechanism
+
 CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("价格反转与均值回归", ("reversal", "mean reversion", "mean_reversion", "反转")),
     ("趋势与动量", ("momentum", "trend", "breakout", "动量", "趋势")),
@@ -17,6 +19,8 @@ CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("多周期与路径结构", ("multi-horizon", "path", "lead-lag", "asymmetry")),
 )
 
+# Legacy long-short dimensions are retained as diagnostic scores only. Default
+# ranking and strategy-bus leader selection must use the long-only dimensions.
 SCORE_DIMENSIONS: dict[str, list[tuple[str, bool, float]]] = {
     "return": [
         ("sharpe_ratio", True, 0.55),
@@ -110,6 +114,7 @@ SUMMARY_KEYS = (
     "long_only_worst_year_return",
     "long_only_annual_return_dispersion",
     "long_only_walk_forward_positive_fraction",
+    "long_only_walk_forward_folds",
     "long_only_walk_forward_median_sharpe",
     "long_only_walk_forward_worst_sharpe",
     "long_only_walk_forward_worst_drawdown",
@@ -139,9 +144,19 @@ SUMMARY_KEYS = (
     "recent_long_only_worst_year_return",
     "recent_long_only_annual_return_dispersion",
     "recent_long_only_walk_forward_positive_fraction",
+    "recent_long_only_walk_forward_folds",
     "recent_long_only_walk_forward_median_sharpe",
     "recent_long_only_walk_forward_worst_sharpe",
     "recent_long_only_deflated_sharpe_probability",
+    "homogeneity_gate_passed",
+    "homogeneity_gate_failure",
+    "homogeneity_novelty_score",
+    "homogeneity_cluster_id",
+    "homogeneity_cluster_size",
+    "homogeneity_nearest_factor_id",
+    "homogeneity_nearest_similarity",
+    "homogeneity_crowded_cluster",
+    "homogeneity_redundancy_label",
     "canonical_main_start",
     "canonical_main_end",
     "canonical_recent_start",
@@ -624,6 +639,9 @@ def build_factor_library(
                 "source_iteration": int(record["source_iteration"]),
                 "name": str(record.get("name", factor_id)),
                 "family": str(record.get("family", "unknown")),
+                "canonical_mechanism": normalize_mechanism(
+                    proposal.get("canonical_mechanism") or record.get("family")
+                ),
                 "status": str(record.get("status", "SCREENED_OUT")),
                 "status_reason": str(record.get("status_reason", "")),
                 "created_at": record.get("created_at"),
@@ -692,7 +710,7 @@ def build_factor_library(
         key=lambda item: (
             not item["long_only_score_available"],
             -item["scores"]["long_only_overall"],
-            -item["scores"]["overall"],
+            -item["scores"]["recent_long_only_overall"],
             item["source_iteration"],
         )
     )

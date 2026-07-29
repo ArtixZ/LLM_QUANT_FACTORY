@@ -15,7 +15,7 @@ from autoalpha.data.research_fields import (
 )
 from autoalpha.data.tushare_catalog import DEFAULT_PRODUCT_IDS, PRODUCT_BY_ID
 from autoalpha.dsl.expression import field, operation
-from autoalpha.service.data_center import inspect_data_products
+from autoalpha.service.data_center import build_data_capability_matrix, inspect_data_products
 
 
 class FakePro:
@@ -110,6 +110,56 @@ def test_catalog_status_and_dynamic_research_fields(tmp_path: Path) -> None:
     definitions = field_definitions(fields, include_open=False)
     assert {definition.name for definition in definitions} == set(fields)
     assert PRODUCT_BY_ID["daily_basic"].documentation_id == 32
+
+
+def test_data_capability_matrix_separates_proxy_from_production() -> None:
+    matrix = build_data_capability_matrix(
+        workspace={
+            "price_research_ready": True,
+            "institutional_pit_ready": False,
+            "warnings": [],
+            "blockers": [],
+        },
+        execution_basis={
+            "capital_ledger_proxy_ready": True,
+            "capital_ledger_ready": False,
+            "proxy_blockers": [],
+            "blockers": ["missing ST history"],
+        },
+    )
+    by_module = {item["module_id"]: item for item in matrix["rows"]}
+
+    assert matrix["summary"]["research_ready"] is True
+    assert matrix["summary"]["non_pit_proxy_ready"] is True
+    assert matrix["summary"]["strict_pit_ready"] is False
+    assert by_module["manual_backtest_proxy"]["level"] == "PROXY_BACKTEST_READY"
+    assert by_module["paper_trading"]["level"] == "PROXY_PAPER_READY"
+    assert by_module["strict_capital_ledger"]["level"] == "PRODUCTION_BLOCKED"
+    assert "missing ST history" in by_module["strict_capital_ledger"]["blockers"]
+
+
+def test_data_capability_matrix_allows_strict_pit_when_market_state_is_ready() -> None:
+    matrix = build_data_capability_matrix(
+        workspace={
+            "price_research_ready": True,
+            "institutional_pit_ready": True,
+            "warnings": [],
+            "blockers": [],
+        },
+        execution_basis={
+            "capital_ledger_proxy_ready": True,
+            "capital_ledger_ready": True,
+            "proxy_blockers": [],
+            "blockers": [],
+        },
+    )
+    production = next(
+        item for item in matrix["rows"] if item["module_id"] == "strict_capital_ledger"
+    )
+
+    assert matrix["summary"]["production_allowed"] is True
+    assert production["allowed"] is True
+    assert production["level"] == "STRICT_PIT_READY"
 
 
 def test_llm_data_contract_exposes_staged_fields_without_unlocking_them(tmp_path: Path) -> None:

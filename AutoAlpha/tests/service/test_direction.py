@@ -8,6 +8,7 @@ from autoalpha.service.direction import (
     classify_mechanism,
     diagnose_direction,
 )
+from autoalpha.service.mechanism import normalize_mechanism
 from autoalpha.service.store import ServiceStore
 
 
@@ -75,6 +76,33 @@ def test_mechanism_classifier_uses_economic_data_domain_before_factor_label() ->
         == "ORDER_FLOW"
     )
     assert classify_mechanism(fields={"pb"}, family="Liquidity") == "VALUATION"
+
+
+def test_mechanism_normalization_collapses_label_variants() -> None:
+    variants = {
+        "Liquidity",
+        "liquidity",
+        "TURNOVER_LIQUIDITY",
+        "turnover-liquidity",
+        "Dollar Volume",
+    }
+
+    assert {normalize_mechanism(value) for value in variants} == {"TURNOVER_LIQUIDITY"}
+    assert normalize_mechanism("mean reversion") == "PRICE_REVERSAL"
+    assert normalize_mechanism("LIQUIDITY_ACTIVITY") == "TURNOVER_LIQUIDITY"
+    assert normalize_mechanism("VALUE") == "VALUATION"
+    assert normalize_mechanism("PRICE_TREND") == "MOMENTUM_TREND"
+    assert normalize_mechanism("CAPITAL_SUPPLY") == "CAPITALIZATION"
+    assert normalize_mechanism("VOLATILITY") == "VOLATILITY_RISK"
+    assert normalize_mechanism("QUALITY") == "QUALITY_PROFITABILITY"
+    assert normalize_mechanism("not-real") == "OTHER_INTERPRETABLE"
+
+
+def test_mechanism_classifier_normalizes_family_alias_after_field_priority() -> None:
+    assert classify_mechanism(fields=set(), family="Liquidity Activity") == (
+        "TURNOVER_LIQUIDITY"
+    )
+    assert classify_mechanism(fields={"pb"}, family="Liquidity Activity") == "VALUATION"
 
 
 def test_exploration_campaign_counts_library_admission_without_portfolio_promotion() -> None:

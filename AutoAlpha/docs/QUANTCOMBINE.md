@@ -25,9 +25,13 @@ workspace, evaluation protocol and SQLite audit database as AutoAlpha and AutoCo
 8. Rank candidates by hard gates first and the configured objective second.
 9. Maintain a Pareto frontier across return, Sharpe, drawdown, worst fold, turnover,
    correlation, effective factor bets and effective mechanisms.
-10. Run leave-one-out marginal contribution diagnostics for the leading candidate.
-11. Submit a public-gate-passing candidate once to the isolated holdout evaluator.
-12. Promote only a passing production candidate to the versioned QuantCombine strategy registry.
+10. Compare each candidate's active return against recent QuantCombine task leaders and promoted
+   AutoCombine/QuantCombine strategy versions. High active-return similarity is recorded as
+   `portfolio_max_strategy_active_correlation`, linked to the nearest reference, penalized in the
+   objective, and can fail the `strategy_independence` gate.
+11. Run leave-one-out marginal contribution diagnostics for the leading candidate.
+12. Submit a public-gate-passing candidate once to the isolated holdout evaluator.
+13. Promote only a passing production candidate to the versioned QuantCombine strategy registry.
 
 ## Engine modes
 

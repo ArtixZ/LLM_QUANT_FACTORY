@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from autoalpha.data.execution_basis import inspect_execution_data_basis
 from autoalpha.data.research_fields import field_definitions
@@ -114,6 +115,7 @@ class CrossSectionalScreener:
                     "composite_score": _finite_float(row["composite_score"]),
                     "score_percentile": _finite_float(row["score_percentile"]),
                     "research_close": _finite_float(row["close"]),
+                    "raw_open": _finite_float(row.get("raw_open")),
                     "raw_close": _finite_float(row["raw_close"]),
                     "amount_cny": _finite_float(row["amount"]),
                     "volume_shares": _finite_float(row["vol"]),
@@ -143,6 +145,7 @@ class CrossSectionalScreener:
         requested = pd.Timestamp(requested_date)
         load_start = requested - pd.Timedelta(days=500)
         factor_fields = list(self.workspace.factor_fields)
+        workspace_columns = set(getattr(self.workspace, "columns", ()))
         columns = list(
             dict.fromkeys(
                 [
@@ -151,16 +154,22 @@ class CrossSectionalScreener:
                     "name",
                     "open",
                     *factor_fields,
+                    "raw_open",
                     "raw_close",
                     "is_valid_ohlc",
                     "is_tradable_observation",
                 ]
             )
         )
+        columns = [
+            column for column in columns if not workspace_columns or column in workspace_columns
+        ]
         frames = []
         for year in range(load_start.year, requested.year + 1):
             for path in sorted((self.panel_path / f"trade_year={year}").glob("*.parquet")):
-                frames.append(pd.read_parquet(path, columns=columns))
+                available_columns = set(pq.read_schema(path).names)
+                read_columns = [column for column in columns if column in available_columns]
+                frames.append(pd.read_parquet(path, columns=read_columns))
         if not frames:
             raise FileNotFoundError(
                 f"No panel partitions found before {requested_date.isoformat()}"

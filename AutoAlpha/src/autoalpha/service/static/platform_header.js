@@ -5,19 +5,19 @@
   const alphaOrigin = `${window.location.protocol}//${window.location.hostname}:8788`;
   const combineOrigin = `${window.location.protocol}//${window.location.hostname}:8888`;
   const quantOrigin = `${window.location.protocol}//${window.location.hostname}:8889`;
-  const strategyOrigin = window.location.port === "8889" ? quantOrigin : combineOrigin;
   const items = [
     ["research", `${alphaOrigin}/`, "activity", "自动研究"],
     ["tasks", `${alphaOrigin}/research-tasks`, "list-tree", "任务总表"],
     ["combine", `${combineOrigin}/`, "network", "组合任务"],
     ["quantcombine", `${quantOrigin}/`, "binary", "统计组合"],
-    ["strategies", `${strategyOrigin}/strategies`, "archive", "策略库"],
+    ["strategies", `${alphaOrigin}/strategies`, "archive", "策略库"],
     ["llm", `${alphaOrigin}/llm-team`, "brain-circuit", "LLM 团队"],
     ["factors", `${alphaOrigin}/factors`, "library", "因子库"],
     ["screener", `${alphaOrigin}/screener`, "list-filter", "选股器"],
     ["paper", `${alphaOrigin}/paper-trading`, "wallet-cards", "模拟交易"],
     ["backtest", `${alphaOrigin}/backtest`, "chart-no-axes-combined", "手动回测"],
     ["data", `${alphaOrigin}/data`, "database-zap", "数据中心"],
+    ["jobs", `${alphaOrigin}/jobs`, "server-cog", "作业中心"],
     ["guide", `${alphaOrigin}/guide`, "map", "系统导览"],
     ["settings", `${alphaOrigin}/settings`, "settings-2", "系统设置"],
   ];
@@ -70,6 +70,7 @@
     if (port === "8888") return path.startsWith("/strategies") ? "strategies" : "combine";
     if (port === "8889") return path.startsWith("/strategies") ? "strategies" : "quantcombine";
     if (port === "8789" || port === "8790") return "backtest";
+    if (path.startsWith("/strategies")) return "strategies";
     if (path.startsWith("/research-tasks")) return "tasks";
     if (path.startsWith("/llm-team")) return "llm";
     if (path.startsWith("/factors")) return "factors";
@@ -77,6 +78,7 @@
     if (path.startsWith("/paper-trading")) return "paper";
     if (path.startsWith("/backtest")) return "backtest";
     if (path.startsWith("/data")) return "data";
+    if (path.startsWith("/jobs")) return "jobs";
     if (path.startsWith("/guide")) return "guide";
     if (path.startsWith("/settings")) return "settings";
     return "research";

@@ -3,7 +3,7 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AutoAlpha 模拟交易</title><link rel="stylesheet" href="/static/styles.css"><link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2"></head>
 <body>
   <header class="app-header">
-    <div class="identity"><h1>AutoAlpha 模拟交易台</h1><p id="paperSummary">日频 EOD 模拟组合</p></div>
+    <div class="identity"><h1>AutoAlpha 模拟交易台</h1><p id="paperSummary">EOD 信号 · 次日开盘代理成交</p></div>
     <div class="header-actions"><nav class="app-nav" aria-label="研究工作台">
       <a href="/"><i data-lucide="activity"></i>自动研究</a><a href="/research-tasks"><i data-lucide="list-tree"></i>任务总表</a><a href="/llm-team"><i data-lucide="brain-circuit"></i>LLM 团队</a><a href="/factors"><i data-lucide="library"></i>因子库</a><a href="/screener"><i data-lucide="list-filter"></i>选股器</a><a class="active" href="/paper-trading"><i data-lucide="wallet-cards"></i>模拟交易</a><a href="/backtest"><i data-lucide="chart-no-axes-combined"></i>手动回测</a><a href="/data"><i data-lucide="database-zap"></i>数据中心</a><a href="/settings"><i data-lucide="settings-2"></i>系统设置</a>
     </nav><span class="state-pill small" id="paperDataState">EOD</span></div>
@@ -25,7 +25,7 @@
         <div class="paper-weights" id="paperWeights" hidden><div class="factor-picker-header"><h3>因子权重</h3><button class="text-button" id="paperEqualWeights" type="button">等权</button></div><div id="paperWeightEditor"></div></div>
         <button class="button primary paper-create-button" id="createPaperPortfolio" type="submit"><i data-lucide="plus"></i>创建并建仓</button>
       </form>
-      <div class="isolation-note"><i data-lucide="info"></i><span>模型以未复权收盘价成交和盯市，不是实盘下单或实时行情。</span></div>
+      <div class="isolation-note"><i data-lucide="info"></i><span>模型以收盘后信号生成目标，下一交易日未复权开盘价代理成交，并用收盘价盯市；不是实盘下单或实时行情。</span></div>
     </aside>
     <section class="paper-workspace">
       <section class="panel paper-overview"><div class="panel-header"><div><h2>策略组合</h2><p id="portfolioOverview">暂无模拟组合</p></div><div class="button-row"><label class="favorite-toggle"><input id="favoritePaperFilter" type="checkbox">仅收藏</label><button class="button" id="markPortfolios"><i data-lucide="refresh-cw"></i>收盘盯市</button></div></div><div class="paper-card-grid" id="paperPortfolioCards"></div></section>

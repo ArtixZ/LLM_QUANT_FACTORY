@@ -12,6 +12,7 @@
     <div class="identity"><h1 id="pageHeading">全因子批量回测</h1><p id="headerSummary">正在读取独立计算队列</p></div>
     <div class="header-actions">
       <a class="button" href="http://127.0.0.1:8788/research-tasks"><i data-lucide="arrow-left"></i>自动研究</a>
+      <a class="button" href="http://127.0.0.1:8788/jobs?queue=batch"><i data-lucide="list-checks"></i>Job Center</a>
       <button class="button" id="newJobBtn"><i data-lucide="plus"></i>新建任务</button>
       <button class="button primary" id="startJobBtn"><i data-lucide="play"></i>启动</button>
       <button class="button danger" id="pauseJobBtn"><i data-lucide="pause"></i>暂停</button>
@@ -25,6 +26,7 @@
       <label>批量任务<select id="jobSelect"></select></label>
       <div><span>任务状态</span><strong id="jobStatus">--</strong></div>
       <div><span>当前阶段</span><strong id="jobPhase">--</strong></div>
+      <div><span>Job Center 镜像</span><strong id="systemJobId">--</strong></div>
       <div class="job-path"><span>结果数据库</span><code id="batchDatabase">--</code></div>
     </section>
 
@@ -52,7 +54,7 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>排名</th><th>因子</th><th>状态</th><th>全期夏普</th><th>简单年化</th><th>最大回撤</th><th>最差窗口夏普</th><th>稳健通过</th><th>MC正收益</th><th>耗时</th></tr></thead>
+            <thead><tr><th>排名</th><th>因子</th><th>状态</th><th>纯多全期夏普</th><th>纯多简单年化</th><th>纯多最大回撤</th><th>纯多最差窗口夏普</th><th>稳健通过</th><th>MC正收益</th><th>耗时</th></tr></thead>
             <tbody id="factorRows"></tbody>
           </table>
         </div>

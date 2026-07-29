@@ -23,6 +23,7 @@ from autoalpha.service.realistic_batch_engine import (
     RealisticAshareBatchConfig,
     RealisticAshareBatchEngine,
 )
+from autoalpha.service.store import ServiceStore
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = Path.cwd()
@@ -79,6 +80,7 @@ class BatchJobRequest(BaseModel):
     monte_carlo_block_days: int = Field(default=20, ge=5, le=120)
     parameter_multipliers: list[float] = Field(default_factory=lambda: [0.5, 2.0])
     holding_period_tests: list[int] = Field(default_factory=lambda: [1, 20])
+    bridge_to_job_center: bool = True
 
     @field_validator("name", "data_path")
     @classmethod
@@ -210,6 +212,8 @@ async def create_job(payload: BatchJobRequest) -> dict[str, Any]:
             config=config.to_dict(),
             source_database=SOURCE_DATABASE.resolve(),
         )
+        if payload.bridge_to_job_center:
+            _mirror_batch_system_job(job, "CREATED")
     except (FileNotFoundError, KeyError, RuntimeError, TypeError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return _job_view(job)
@@ -231,7 +235,9 @@ async def job_detail(job_id: str) -> dict[str, Any]:
 @app.post("/api/jobs/{job_id}/start")
 async def start_job(job_id: str) -> dict[str, Any]:
     try:
-        return _job_view(runner.start(job_id))
+        job = runner.start(job_id)
+        _mirror_batch_system_job(job, "START_REQUESTED")
+        return _job_view(job)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except RuntimeError as error:
@@ -241,7 +247,9 @@ async def start_job(job_id: str) -> dict[str, Any]:
 @app.post("/api/jobs/{job_id}/pause")
 async def pause_job(job_id: str) -> dict[str, Any]:
     try:
-        return _job_view(runner.pause(job_id))
+        job = runner.pause(job_id)
+        _mirror_batch_system_job(job, "PAUSE_REQUESTED")
+        return _job_view(job)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except RuntimeError as error:
@@ -261,6 +269,7 @@ async def factor_detail(job_id: str, factor_id: str) -> dict[str, Any]:
 
 def _job_view(job: dict[str, Any]) -> dict[str, Any]:
     item = dict(job)
+    item["system_job_id"] = _external_system_job_id(str(item["job_id"]))
     total = int(item["factor_count"])
     completed = int(item["completed_count"])
     item["progress"] = completed / total if total else 0.0
@@ -282,19 +291,136 @@ def _job_view(job: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _external_system_job_id(batch_job_id: str) -> str:
+    return f"external-{batch_job_id}"
+
+
+def _mirror_batch_system_job(job: dict[str, Any], event: str) -> dict[str, Any] | None:
+    try:
+        service_store = ServiceStore(SOURCE_DATABASE)
+        job_id = _external_system_job_id(str(job["job_id"]))
+        try:
+            system_job = service_store.system_job(job_id)
+        except KeyError:
+            system_job = service_store.enqueue_system_job(
+                job_id=job_id,
+                queue="batch",
+                job_type="external_batch_backtest",
+                payload={
+                    "batch_job_id": job["job_id"],
+                    "batch_mode": BATCH_MODE,
+                    "batch_database": str(store.path),
+                    "source_database": str(SOURCE_DATABASE),
+                    "service_port": int(DEFAULT_PORT),
+                    "protocol": (job.get("config") or {}).get("protocol"),
+                },
+                priority=60,
+                resource_group="batch-backtest",
+                max_workers=max(1, int((job.get("config") or {}).get("workers", 1))),
+                progress_total=max(0, int(job.get("factor_count") or 0)),
+                max_attempts=1,
+            )
+        mirrored_status = _mirror_status(str(job.get("status") or "READY"))
+        updated = service_store.update_system_job(
+            str(system_job["job_id"]),
+            status=mirrored_status,
+            progress_current=max(0, int(job.get("completed_count") or 0)),
+            progress_total=max(0, int(job.get("factor_count") or 0)),
+            checkpoint={
+                "batch_job_id": job["job_id"],
+                "phase": job.get("phase"),
+                "completed_count": int(job.get("completed_count") or 0),
+                "failed_count": int(job.get("failed_count") or 0),
+                "active": runner.active_job_id == job.get("job_id"),
+            },
+            result={
+                "batch_job_id": job["job_id"],
+                "batch_status": job.get("status"),
+                "batch_phase": job.get("phase"),
+                "completed_count": int(job.get("completed_count") or 0),
+                "failed_count": int(job.get("failed_count") or 0),
+                "batch_database": str(store.path),
+                "artifact_root": str(BATCH_RUNTIME / "artifacts"),
+            },
+            error=job.get("last_error"),
+            started_at=job.get("started_at"),
+            finished_at=job.get("finished_at"),
+            lease_owner="external-batch-service"
+            if mirrored_status == "EXTERNAL_RUNNING"
+            else None,
+            lease_expires_at=None,
+            heartbeat_at=job.get("updated_at"),
+        )
+        service_store.append_system_job_log(
+            str(system_job["job_id"]),
+            level="ERROR" if mirrored_status == "EXTERNAL_FAILED" else "INFO",
+            event=f"BATCH_{event}",
+            message=(
+                f"Batch job {job['job_id']} mirrored as {mirrored_status}; "
+                f"{job.get('completed_count', 0)}/{job.get('factor_count', 0)} factors."
+            ),
+            payload={
+                "batch_job_id": job["job_id"],
+                "batch_status": job.get("status"),
+                "batch_phase": job.get("phase"),
+                "batch_mode": BATCH_MODE,
+            },
+        )
+        return updated
+    except Exception:
+        return None
+
+
+def _mirror_batch_system_job_from_callback(job: dict[str, Any], event: str) -> None:
+    _mirror_batch_system_job(job, event)
+
+
+def _mirror_status(batch_status: str) -> str:
+    return {
+        "READY": "EXTERNAL_READY",
+        "RUNNING": "EXTERNAL_RUNNING",
+        "PAUSING": "EXTERNAL_PAUSE_REQUESTED",
+        "PAUSED": "EXTERNAL_PAUSED",
+        "COMPLETED": "EXTERNAL_COMPLETED",
+        "FAILED": "EXTERNAL_FAILED",
+    }.get(batch_status, f"EXTERNAL_{batch_status}")
+
+
 def _rank_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def score(item: dict[str, Any]) -> tuple[int, float, float]:
         metrics = item.get("metrics") or {}
         return (
             int(item["status"] == "SUCCESS"),
-            float(metrics.get("large_window_worst_sharpe", -100.0)),
-            float(metrics.get("sharpe_ratio", -100.0)),
+            _metric_value(
+                metrics,
+                "long_only_walk_forward_worst_sharpe",
+                "recent_long_only_walk_forward_worst_sharpe",
+                "large_window_worst_sharpe",
+            ),
+            _metric_value(
+                metrics,
+                "long_only_sharpe_ratio",
+                "recent_long_only_sharpe_ratio",
+                "sharpe_ratio",
+            ),
         )
 
     ranked = sorted(results, key=score, reverse=True)
     for index, item in enumerate(ranked, 1):
         item["rank"] = index if item["status"] == "SUCCESS" else None
     return ranked
+
+
+def _metric_value(metrics: dict[str, Any], *keys: str, default: float = -100.0) -> float:
+    for key in keys:
+        value = metrics.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return default
 
 
 def _curve_payload(path_value: str | None, maximum_points: int = 700) -> list[dict[str, Any]]:
@@ -326,6 +452,9 @@ def _monte_carlo_histogram(path_value: str | None) -> dict[str, Any]:
         counts, edges = np.histogram(values, bins=36)
         result[column] = {"counts": counts.tolist(), "edges": edges.tolist()}
     return result
+
+
+runner.status_callback = _mirror_batch_system_job_from_callback
 
 
 def main() -> None:

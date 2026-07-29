@@ -9,8 +9,9 @@ import os
 import urllib.error
 import urllib.request
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -43,14 +44,25 @@ from autoalpha.service.autocombine import (
 from autoalpha.service.autocombine_store import AutoCombineStore
 from autoalpha.service.canonical_evaluation import CANONICAL_LIBRARY_PROTOCOL
 from autoalpha.service.credentials import SystemCredentialStore
-from autoalpha.service.data_center import build_data_center_snapshot
+from autoalpha.service.data_center import (
+    build_data_capability_matrix,
+    build_data_center_snapshot,
+)
 from autoalpha.service.data_sync import DataSyncWorker
+from autoalpha.service.database_backend import database_runtime_config
 from autoalpha.service.factor_behavior import load_behavior_snapshot
+from autoalpha.service.factor_homogeneity import (
+    build_homogeneity_report,
+    factor_homogeneity_integrity,
+)
 from autoalpha.service.factor_library import build_factor_library
-from autoalpha.service.full_llm import role_catalog
+from autoalpha.service.full_llm import role_catalog, summarize_research_team_domains
+from autoalpha.service.gate_feedback import gate_feedback_policy
 from autoalpha.service.manual_backtest import ManualBacktestSpec, ManualFactorBacktester
+from autoalpha.service.metric_convention import check_long_only_metric_convention
 from autoalpha.service.multifactor import factor_from_pool_record
 from autoalpha.service.paper_trading import PaperStrategySpec, PaperTradingEngine
+from autoalpha.service.quantcombine_store import QuantCombineStore
 from autoalpha.service.research_manager import ResearchTaskManager
 from autoalpha.service.research_protocol import (
     CUSTOM_PROTOCOL_DESIGN,
@@ -77,12 +89,79 @@ from autoalpha.service.settings_center import (
     validate_operational_paths,
 )
 from autoalpha.service.store import ServiceStore
+from autoalpha.service.strategy_bus import (
+    advance_formal_strategy_lifecycle,
+    approve_formal_strategy_transition,
+    build_strategy_bus_snapshot,
+    create_formal_strategy_from_experiment,
+    factor_knowledge_map,
+    formal_strategy_library,
+    promote_formal_strategy_lifecycle,
+    publish_strategy_release_dossier,
+    strategy_execution_package,
+    strategy_experiment_lineage,
+    strategy_lifecycle_readiness,
+    strategy_production_funnel,
+    strategy_promotion_candidates,
+    strategy_release_dossier,
+)
+from autoalpha.service.system_jobs import (
+    SUPPORTED_SYSTEM_JOB_TYPES,
+    SystemJobRunner,
+    build_gate_funnel_diagnostics,
+)
 from autoalpha.service.worker import SecretVault
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOT = Path(os.getenv("AUTOALPHA_RUNTIME", PROJECT_ROOT / "runtime-full-llm"))
 CONFIG_PATH = Path(os.getenv("AUTOALPHA_CONFIG", PROJECT_ROOT / "config/research.toml"))
+SNAPSHOT_TTLS = {
+    "factor_library": 900,
+    "factor_knowledge_map": 1800,
+    "strategy_bus": 300,
+    "gate_funnel_diagnostics": 900,
+    "gate_feedback_policy": 900,
+    "factor_homogeneity_backfill": 3600,
+}
+CRITICAL_MATERIALIZED_SNAPSHOTS = {
+    "factor_library": {
+        "label": "因子库主榜",
+        "refresh_job_type": "factor_library_refresh",
+        "refresh_endpoint": "POST /api/factors/refresh",
+        "resource_group": "sqlite-writer",
+    },
+    "factor_knowledge_map": {
+        "label": "因子知识地图",
+        "refresh_job_type": "factor_knowledge_map_sync",
+        "refresh_endpoint": "POST /api/jobs",
+        "resource_group": "sqlite-writer",
+    },
+    "strategy_bus": {
+        "label": "策略实验总线",
+        "refresh_job_type": "strategy_bus_sync",
+        "refresh_endpoint": "POST /api/strategy-bus/sync",
+        "resource_group": "strategy_bus",
+    },
+    "gate_funnel_diagnostics": {
+        "label": "门禁漏斗诊断",
+        "refresh_job_type": "gate_funnel_diagnostics",
+        "refresh_endpoint": "POST /api/jobs",
+        "resource_group": "sqlite-writer",
+    },
+    "gate_feedback_policy": {
+        "label": "门禁反馈策略",
+        "refresh_job_type": "gate_feedback_policy_sync",
+        "refresh_endpoint": "POST /api/jobs",
+        "resource_group": "sqlite-writer",
+    },
+    "factor_homogeneity_backfill": {
+        "label": "因子同质化回填",
+        "refresh_job_type": "factor_homogeneity_backfill",
+        "refresh_endpoint": "POST /api/jobs",
+        "resource_group": "sqlite-writer",
+    },
+}
 TRADE_STATEMENT_FIELDS = (
     "trade_id",
     "trade_date",
@@ -162,6 +241,9 @@ class DataSyncRequest(BaseModel):
     dataset_ids: list[str] | None = None
     start_date: date | None = None
     end_date: date | None = None
+    run_now: bool = False
+    queue: str = Field(default="system", min_length=2, max_length=80)
+    priority: int = Field(default=30, ge=0, le=10_000)
 
     @field_validator("dataset_ids")
     @classmethod
@@ -383,8 +465,156 @@ class PaperPortfolioRequest(FactorScreenRequest):
     slippage_bps_each_side: float = Field(default=5.0, ge=0, le=500)
 
 
+class StrategyPaperPortfolioRequest(BaseModel):
+    initial_cash_cny: float = Field(default=1_000_000, ge=10_000, le=10_000_000_000)
+    as_of_date: date
+    name: str | None = Field(default=None, max_length=80)
+    gross_exposure: float | None = Field(default=None, gt=0.05, le=1.0)
+    slippage_bps_each_side: float | None = Field(default=None, ge=0, le=500)
+    selection_count: int | None = Field(default=None, ge=1, le=500)
+
+
 class PaperPortfolioStatusRequest(BaseModel):
     status: Literal["ACTIVE", "PAUSED", "CLOSED"]
+
+
+class FormalStrategyCreateRequest(BaseModel):
+    experiment_id: str
+    name: str | None = Field(default=None, max_length=120)
+    lifecycle: Literal["RESEARCH"] = "RESEARCH"
+
+
+class FormalStrategyPromotionRequest(BaseModel):
+    target_lifecycle: Literal[
+        "FROZEN",
+        "HIDDEN_HOLDOUT",
+        "SHADOW",
+        "PAPER",
+        "PRODUCTION_CANDIDATE",
+    ]
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class FormalStrategyApprovalRequest(BaseModel):
+    target_lifecycle: Literal[
+        "FROZEN",
+        "HIDDEN_HOLDOUT",
+        "SHADOW",
+        "PAPER",
+        "PRODUCTION_CANDIDATE",
+    ] | None = None
+    approval_type: Literal[
+        "PUBLIC_VALIDATION_REVIEW",
+        "HIDDEN_HOLDOUT_REVIEW",
+        "SHADOW_EXECUTION_REVIEW",
+        "PAPER_TRADING_REVIEW",
+        "RISK_APPROVAL",
+    ]
+    approver: str = Field(default="local-operator", min_length=2, max_length=80)
+    notes: str = Field(default="", max_length=1000)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class SystemJobRequest(BaseModel):
+    queue: str = Field(min_length=2, max_length=80)
+    job_type: str = Field(min_length=2, max_length=120)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    priority: int = Field(default=100, ge=0, le=10_000)
+    resource_group: str = Field(default="default", min_length=1, max_length=80)
+    max_workers: int = Field(default=1, ge=1, le=128)
+    progress_total: int = Field(default=0, ge=0, le=10_000_000)
+    max_attempts: int = Field(default=3, ge=1, le=20)
+
+
+class StrategyBusSyncRequest(BaseModel):
+    run_now: bool = False
+    force_new: bool = False
+    queue: str = Field(default="system", min_length=2, max_length=80)
+    priority: int = Field(default=35, ge=0, le=10_000)
+
+
+class FactorLibraryRefreshRequest(BaseModel):
+    run_now: bool = False
+    force_new: bool = False
+    queue: str = Field(default="system", min_length=2, max_length=80)
+    priority: int = Field(default=40, ge=0, le=10_000)
+
+
+class FactorKnowledgeMapSyncRequest(BaseModel):
+    run_now: bool = False
+    force_new: bool = False
+    queue: str = Field(default="system", min_length=2, max_length=80)
+    priority: int = Field(default=45, ge=0, le=10_000)
+
+
+class GateFeedbackRepairSeedRequest(BaseModel):
+    data_path: str | None = Field(default=None, max_length=1000)
+    protocol: dict[str, Any] | None = None
+    name: str = Field(default="Gate feedback repair · QuantCombine", max_length=120)
+    notes: str = Field(default="Seeded from strategy gate feedback policy.", max_length=2000)
+    queue: str = Field(default="system", min_length=2, max_length=80)
+    priority: int = Field(default=40, ge=0, le=10_000)
+    run_immediately: bool = False
+    auto_start_task: bool = True
+
+    @field_validator("data_path", "name", "notes", "queue")
+    @classmethod
+    def clean_optional_text(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value
+
+
+class StrategyLibrarySeedJobRequest(BaseModel):
+    limit: int = Field(default=20, ge=1, le=100)
+    candidate_classes: list[str] = Field(
+        default_factory=lambda: ["QUALIFIED", "RESEARCH_LEADER"],
+        max_length=8,
+    )
+    queue: str = Field(default="system", min_length=2, max_length=80)
+    priority: int = Field(default=45, ge=0, le=10_000)
+    run_immediately: bool = False
+
+    @field_validator("candidate_classes")
+    @classmethod
+    def clean_candidate_classes(cls, value: list[str]) -> list[str]:
+        cleaned = sorted({item.strip() for item in value if item.strip()})
+        if not cleaned:
+            raise ValueError("candidate_classes cannot be empty")
+        return cleaned
+
+
+class StrategyFreezeReadyJobRequest(BaseModel):
+    limit: int = Field(default=100, ge=1, le=1000)
+    queue: str = Field(default="system", min_length=2, max_length=80)
+    priority: int = Field(default=50, ge=0, le=10_000)
+    run_immediately: bool = False
+
+
+class SystemJobClaimRequest(BaseModel):
+    queue: str = Field(min_length=2, max_length=80)
+    worker_id: str = Field(min_length=2, max_length=120)
+    lease_seconds: int = Field(default=300, ge=30, le=86_400)
+    resource_group: str | None = Field(default=None, max_length=80)
+    max_queue_running: int | None = Field(default=None, ge=1, le=256)
+    max_global_running: int | None = Field(default=None, ge=1, le=512)
+
+
+class SystemJobHeartbeatRequest(BaseModel):
+    worker_id: str = Field(min_length=2, max_length=120)
+    lease_seconds: int = Field(default=300, ge=30, le=86_400)
+    progress_current: int | None = Field(default=None, ge=0, le=10_000_000)
+    checkpoint: dict[str, Any] | None = None
+
+
+class SystemJobCommandRequest(BaseModel):
+    actor: str = Field(default="local-operator", min_length=2, max_length=80)
+    reason: str = Field(default="", max_length=500)
+
+
+class SystemJobRunNextRequest(BaseModel):
+    queue: str = Field(default="system", min_length=2, max_length=80)
+    lease_seconds: int = Field(default=900, ge=30, le=86_400)
+    max_queue_running: int | None = Field(default=None, ge=1, le=256)
+    max_global_running: int | None = Field(default=None, ge=1, le=512)
 
 
 class ManualBacktestMetadataRequest(BaseModel):
@@ -410,6 +640,9 @@ FavoriteEntityType = Literal[
     "screener_preset",
     "combine_task",
     "strategy",
+    "strategy_experiment",
+    "strategy_version",
+    "system_job",
 ]
 
 
@@ -437,6 +670,7 @@ class LifecycleTransitionRequest(BaseModel):
 
 store = ServiceStore(RUNTIME_ROOT / "autoalpha.sqlite3")
 combine_store = AutoCombineStore(store)
+quant_store = QuantCombineStore(store)
 vault = SecretVault(credential_store=SystemCredentialStore())
 research_manager = ResearchTaskManager(
     store,
@@ -458,6 +692,36 @@ data_sync_worker = DataSyncWorker(
     project_root=PROJECT_ROOT.parent,
     is_busy=lambda: research_manager.alive or manual_backtest_lock.locked(),
 )
+system_job_runner = SystemJobRunner(
+    store,
+    autocombine_store=combine_store,
+    quantcombine_store=quant_store,
+    runtime_root=RUNTIME_ROOT,
+    market_data_sync_runner=data_sync_worker.run_system_job,
+)
+system_job_scheduler_task: asyncio.Task[None] | None = None
+
+
+def _system_job_scheduler_status() -> dict[str, Any]:
+    enabled = os.getenv("AUTOALPHA_SYSTEM_JOB_WORKER_ENABLED", "true").casefold() == "true"
+    alive = system_job_scheduler_task is not None and not system_job_scheduler_task.done()
+    status = "running" if alive else ("disabled" if not enabled else "not_started")
+    failure: str | None = None
+    if system_job_scheduler_task is not None and system_job_scheduler_task.done():
+        with suppress(asyncio.CancelledError):
+            error = system_job_scheduler_task.exception()
+            if error is not None:
+                status = "failed"
+                failure = f"{type(error).__name__}: {error}"
+    return {
+        "enabled": enabled,
+        "alive": alive,
+        "status": status,
+        "queue": "system",
+        "poll_seconds": {"claimed": 2, "idle": 15, "after_error": 30},
+        "supported_job_types": sorted(SUPPORTED_SYSTEM_JOB_TYPES),
+        "failure": failure,
+    }
 
 
 def _ensure_legacy_research_task() -> None:
@@ -680,6 +944,7 @@ def _backfill_task_protocols() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    global system_job_scheduler_task
     settings = store.settings()
     managed_defaults = GlobalSettingsValues.model_validate(
         default_settings(PROJECT_ROOT)
@@ -768,7 +1033,16 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         )
     await research_manager.restore()
     await data_sync_worker.start_scheduler()
+    if os.getenv("AUTOALPHA_SYSTEM_JOB_WORKER_ENABLED", "true").casefold() == "true":
+        system_job_scheduler_task = asyncio.create_task(
+            _system_job_scheduler_loop(),
+            name="autoalpha-system-job-scheduler",
+        )
     yield
+    if system_job_scheduler_task and not system_job_scheduler_task.done():
+        system_job_scheduler_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await system_job_scheduler_task
     await data_sync_worker.shutdown()
     await research_manager.shutdown()
 
@@ -777,11 +1051,435 @@ app = FastAPI(title="AutoAlpha Control Plane", version="0.7.0-full-llm", lifespa
 app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
 
 
+async def _system_job_scheduler_loop() -> None:
+    while True:
+        try:
+            result = await asyncio.to_thread(system_job_runner.run_next, queue="system")
+            await asyncio.sleep(2 if result.get("claimed") else 15)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            store.append_event(
+                "audit",
+                "SYSTEM_JOB_SCHEDULER_ERROR",
+                "系统作业调度器异常",
+                f"{type(error).__name__}: {error}",
+                level="ERROR",
+            )
+            await asyncio.sleep(30)
+
+
+def _runtime_database_health() -> dict[str, Any]:
+    backend_config = database_runtime_config()
+    database_path = (RUNTIME_ROOT / "autoalpha.sqlite3").resolve()
+    required_tables = {
+        "factor_pool",
+        "research_tasks",
+        "strategy_experiment_objects",
+        "formal_strategy_versions",
+        "system_jobs",
+        "materialized_snapshots",
+        "paper_portfolios",
+    }
+    with store.connection() as connection:
+        rows = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+        tables = {str(row["name"]) for row in rows}
+        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()
+        user_version = connection.execute("PRAGMA user_version").fetchone()
+        busy_timeout = connection.execute("PRAGMA busy_timeout").fetchone()
+        synchronous = connection.execute("PRAGMA synchronous").fetchone()
+        wal_autocheckpoint = connection.execute("PRAGMA wal_autocheckpoint").fetchone()
+        locking_mode = connection.execute("PRAGMA locking_mode").fetchone()
+    missing = sorted(required_tables - tables)
+    wal_path = database_path.with_name(f"{database_path.name}-wal")
+    shm_path = database_path.with_name(f"{database_path.name}-shm")
+    snapshot_summary = store.materialized_snapshot_summary()
+    job_summary = store.system_job_summary()
+    return {
+        "runtime_root": str(RUNTIME_ROOT.resolve()),
+        "backend": backend_config.to_dict(),
+        "database_path": str(database_path),
+        "schema_ready": not missing,
+        "missing_tables": missing,
+        "table_count": len(tables),
+        "journal_mode": str(journal_mode[0]) if journal_mode else "unknown",
+        "busy_timeout_ms": int(busy_timeout[0]) if busy_timeout else 0,
+        "synchronous": int(synchronous[0]) if synchronous else None,
+        "wal_autocheckpoint_pages": (
+            int(wal_autocheckpoint[0]) if wal_autocheckpoint else None
+        ),
+        "locking_mode": str(locking_mode[0]) if locking_mode else "unknown",
+        "database_size_bytes": _file_size(database_path),
+        "wal_size_bytes": _file_size(wal_path),
+        "shm_size_bytes": _file_size(shm_path),
+        "materialized_snapshots": {
+            "total": snapshot_summary["total"],
+            "states": snapshot_summary["states"],
+            "stale_count": snapshot_summary["stale_count"],
+            "no_ttl_count": snapshot_summary["no_ttl_count"],
+            "stale_keys": snapshot_summary["stale_keys"],
+            "no_ttl_keys": snapshot_summary["no_ttl_keys"],
+            "snapshots": snapshot_summary["snapshots"],
+        },
+        "system_jobs": {
+            "total": job_summary["total"],
+            "expired_running_count": job_summary["expired_running_count"],
+            "expired_running": job_summary["expired_running"],
+        },
+        "user_version": int(user_version[0]) if user_version else 0,
+        "service_variant": os.getenv("AUTOALPHA_VARIANT", "FULL LLM"),
+    }
+
+
+def _materialized_snapshot_policy(summary: dict[str, Any] | None = None) -> dict[str, Any]:
+    summary = summary or store.materialized_snapshot_summary()
+    snapshot_by_key = {
+        str(item["key"]): item for item in summary.get("snapshots", [])
+    }
+    rows = []
+    missing_keys = []
+    stale_keys = []
+    for key, policy in CRITICAL_MATERIALIZED_SNAPSHOTS.items():
+        snapshot = snapshot_by_key.get(key)
+        cache_state = (snapshot or {}).get("cache_state") or {}
+        state = "MISSING" if snapshot is None else str(cache_state.get("status") or "UNKNOWN")
+        if state == "MISSING":
+            missing_keys.append(key)
+        elif state == "STALE":
+            stale_keys.append(key)
+        rows.append(
+            {
+                "key": key,
+                "label": policy["label"],
+                "state": state,
+                "present": snapshot is not None,
+                "updated_at": (snapshot or {}).get("updated_at"),
+                "expires_at": (snapshot or {}).get("expires_at"),
+                "source": (snapshot or {}).get("source"),
+                "refresh_job_type": policy["refresh_job_type"],
+                "refresh_endpoint": policy["refresh_endpoint"],
+                "resource_group": policy["resource_group"],
+                "read_policy": (
+                    "GET endpoints must read cached snapshots or return cache-miss metadata"
+                ),
+            }
+        )
+    return {
+        "protocol": "AUTOALPHA_MATERIALIZED_SNAPSHOT_POLICY_V1",
+        "status": "READY" if not missing_keys and not stale_keys else "ATTENTION",
+        "critical_count": len(rows),
+        "missing_keys": missing_keys,
+        "stale_keys": stale_keys,
+        "rows": rows,
+        "policy": (
+            "large derived views are materialized; refresh through Job Center or explicit POST; "
+            "GET requests remain read-only"
+        ),
+    }
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+def _pid_file_status(name: str, port: int) -> dict[str, Any]:
+    pid_path = RUNTIME_ROOT / "pids" / f"{name}-{port}.pid"
+    raw_pid = ""
+    pid: int | None = None
+    alive = False
+    try:
+        raw_pid = pid_path.read_text().strip()
+        pid = int(raw_pid)
+        os.kill(pid, 0)
+        alive = True
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
+        alive = False
+    return {
+        "name": name,
+        "port": port,
+        "pid_file": str(pid_path),
+        "pid": pid,
+        "pid_file_present": pid_path.exists(),
+        "alive": alive,
+        "status": "ALIVE" if alive else ("STALE_PID" if raw_pid else "MISSING_PID"),
+    }
+
+
+def _platform_doctor_snapshot() -> dict[str, Any]:
+    expected_routes = {
+        "/health",
+        "/ready",
+        "/api/platform/doctor",
+        "/api/jobs",
+        "/api/factors",
+        "/api/factor-knowledge-map",
+        "/api/factor-knowledge-map/sync",
+        "/api/strategy-bus",
+        "/api/strategy-bus/sync",
+        "/api/strategy-library",
+        "/api/manual-backtests",
+        "/api/paper-portfolios",
+    }
+    route_paths = {getattr(route, "path", "") for route in app.routes}
+    missing_routes = sorted(expected_routes - route_paths)
+    database_health = _runtime_database_health()
+    snapshot_policy = _materialized_snapshot_policy(
+        database_health.get("materialized_snapshots") or None
+    )
+    scheduler = _system_job_scheduler_status()
+    processes = [
+        _pid_file_status("autoalpha", int(os.getenv("AUTOALPHA_PORT", "8788"))),
+        _pid_file_status("autocombine", int(os.getenv("AUTOCOMBINE_PORT", "8888"))),
+        _pid_file_status("quantcombine", int(os.getenv("QUANTCOMBINE_PORT", "8889"))),
+    ]
+    blockers = []
+    if missing_routes:
+        blockers.append("missing_expected_routes")
+    if not database_health.get("schema_ready"):
+        blockers.append("database_schema_not_ready")
+    if snapshot_policy["status"] != "READY":
+        blockers.append("materialized_snapshot_attention")
+    if scheduler["enabled"] and scheduler["status"] == "failed":
+        blockers.append("system_job_scheduler_failed")
+    stale_or_missing_pids = [
+        item["name"] for item in processes if item["status"] != "ALIVE"
+    ]
+    if stale_or_missing_pids:
+        blockers.append("stale_or_missing_service_pid_files")
+    return {
+        "protocol": "AUTOALPHA_PLATFORM_DOCTOR_V1",
+        "status": "OK" if not blockers else "ATTENTION",
+        "blockers": blockers,
+        "runtime_root": str(RUNTIME_ROOT.resolve()),
+        "expected_routes": sorted(expected_routes),
+        "missing_routes": missing_routes,
+        "route_count": len(route_paths),
+        "processes": processes,
+        "stale_or_missing_pids": stale_or_missing_pids,
+        "database": database_health,
+        "snapshot_policy": snapshot_policy,
+        "job_summary": store.system_job_summary(),
+        "system_job_scheduler": scheduler,
+        "recommendations": _platform_doctor_recommendations(
+            missing_routes=missing_routes,
+            snapshot_policy=snapshot_policy,
+            stale_or_missing_pids=stale_or_missing_pids,
+            scheduler=scheduler,
+        ),
+    }
+
+
+def _platform_doctor_recommendations(
+    *,
+    missing_routes: list[str],
+    snapshot_policy: dict[str, Any],
+    stale_or_missing_pids: list[str],
+    scheduler: dict[str, Any],
+) -> list[dict[str, Any]]:
+    recommendations = []
+    if missing_routes:
+        recommendations.append(
+            {
+                "action": "RESTART_AUTOALPHA_SERVICE",
+                "reason": "当前进程缺少预期 API 路由，可能运行了旧版本代码。",
+                "command": "./stop-services.sh && ./start-services.sh --no-resume",
+            }
+        )
+    if stale_or_missing_pids:
+        recommendations.append(
+            {
+                "action": "REFRESH_PID_FILES",
+                "reason": "PID 文件缺失或失效，服务管理脚本无法可靠判断运行态。",
+                "affected_services": stale_or_missing_pids,
+            }
+        )
+    for key in snapshot_policy.get("missing_keys", []) + snapshot_policy.get("stale_keys", []):
+        row = next(
+            (item for item in snapshot_policy.get("rows", []) if item["key"] == key),
+            None,
+        )
+        if row and row.get("refresh_job_type"):
+            recommendations.append(
+                {
+                    "action": "QUEUE_MATERIALIZED_SNAPSHOT_REFRESH",
+                    "snapshot_key": key,
+                    "job_type": row["refresh_job_type"],
+                    "endpoint": row["refresh_endpoint"],
+                }
+            )
+    if scheduler.get("enabled") and scheduler.get("status") == "failed":
+        recommendations.append(
+            {
+                "action": "RESTART_SYSTEM_JOB_SCHEDULER",
+                "reason": scheduler.get("failure") or "scheduler task is not alive",
+            }
+        )
+    return recommendations
+
+
+@app.get("/health")
+async def health() -> dict[str, Any]:
+    try:
+        state = store.state()
+        job_summary = store.system_job_summary()
+        runtime = _runtime_database_health()
+    except Exception as error:
+        return {"status": "error", "database": "unavailable", "error": str(error)}
+    return {
+        "status": "ok",
+        "database": "ok",
+        "runtime": runtime,
+        "state": state.get("state"),
+        "phase": state.get("phase"),
+        "jobs": job_summary,
+        "system_job_scheduler": _system_job_scheduler_status(),
+        "service": "autoalpha",
+    }
+
+
+@app.get("/ready")
+async def ready() -> dict[str, Any]:
+    settings = store.settings()
+    data_path = Path(settings.get("data_path", PROJECT_ROOT.parent / "data")).expanduser()
+    blockers: list[str] = []
+    workspace_summary: dict[str, Any] = {"data_path": str(data_path)}
+    data_capability_matrix: dict[str, Any]
+    try:
+        workspace = inspect_data_workspace(data_path)
+        execution_basis = inspect_execution_data_basis(Path(workspace.panel_path))
+        workspace_summary.update(
+            {
+                "price_research_ready": workspace.price_research_ready,
+                "institutional_pit_ready": workspace.institutional_pit_ready,
+                "first_trade_date": workspace.first_trade_date,
+                "last_trade_date": workspace.last_trade_date,
+                "execution_basis": execution_basis.to_dict(),
+            }
+        )
+        production_data = _production_data_readiness(
+            institutional_pit_ready=workspace.institutional_pit_ready,
+            execution_basis=execution_basis.to_dict(),
+        )
+        data_capability_matrix = build_data_capability_matrix(
+            workspace=workspace.to_dict(),
+            execution_basis=execution_basis.to_dict(),
+        )
+        if not workspace.price_research_ready:
+            blockers.append("price_research_workspace_not_ready")
+    except Exception as error:
+        workspace_summary["error"] = str(error)
+        production_data = {
+            "production_trading_allowed": False,
+            "strict_pit_capital_ledger_ready": False,
+            "non_pit_proxy_allowed": False,
+            "blockers": [f"data_workspace_unavailable: {error}"],
+            "proxy_blockers": [f"data_workspace_unavailable: {error}"],
+            "policy": "research_service_may_degrade_but_production_trading_is_blocked",
+        }
+        data_capability_matrix = build_data_capability_matrix(
+            workspace=None,
+            execution_basis=None,
+            workspace_error=str(error),
+        )
+        blockers.append("data_workspace_unavailable")
+    if research_manager.alive and not vault.configured():
+        blockers.append("research_running_without_configured_llm_credentials")
+    scheduler_status = _system_job_scheduler_status()
+    if scheduler_status["enabled"] and scheduler_status["status"] == "failed":
+        blockers.append("system_job_scheduler_failed")
+    runtime_database = _runtime_database_health()
+    snapshot_policy = _materialized_snapshot_policy(
+        runtime_database.get("materialized_snapshots") or None
+    )
+    backend_blockers = list((runtime_database.get("backend") or {}).get("blockers") or [])
+    if backend_blockers:
+        blockers.extend(f"database_backend: {blocker}" for blocker in backend_blockers)
+    if runtime_database["system_jobs"]["expired_running_count"]:
+        blockers.append("system_jobs_have_expired_leases")
+    metric_convention = check_long_only_metric_convention(PROJECT_ROOT)
+    return {
+        "status": "ready" if not blockers else "degraded",
+        "blockers": blockers,
+        "workspace": workspace_summary,
+        "production_data": production_data,
+        "data_capability_matrix": data_capability_matrix,
+        "research_alive": research_manager.alive,
+        "data_sync": data_sync_worker.status(),
+        "runtime": runtime_database,
+        "snapshot_policy": snapshot_policy,
+        "system_job_scheduler": scheduler_status,
+        "metric_convention": metric_convention,
+    }
+
+
+def _production_data_readiness(
+    *, institutional_pit_ready: bool, execution_basis: dict[str, Any]
+) -> dict[str, Any]:
+    strict_blockers = []
+    if not institutional_pit_ready:
+        strict_blockers.append("institutional_pit_workspace_not_ready")
+    if not bool(execution_basis.get("capital_ledger_ready")):
+        strict_blockers.extend(
+            str(blocker) for blocker in execution_basis.get("blockers", ())
+        )
+    proxy_blockers = [str(blocker) for blocker in execution_basis.get("proxy_blockers", ())]
+    return {
+        "production_trading_allowed": not strict_blockers,
+        "strict_pit_capital_ledger_ready": (
+            institutional_pit_ready and bool(execution_basis.get("capital_ledger_ready"))
+        ),
+        "non_pit_proxy_allowed": bool(execution_basis.get("capital_ledger_proxy_ready")),
+        "blockers": list(dict.fromkeys(strict_blockers)),
+        "proxy_blockers": list(dict.fromkeys(proxy_blockers)),
+        "policy": (
+            "strict_pit_required_for_production; "
+            "non_pit_proxy_is_research_and_paper_trading_only"
+        ),
+    }
+
+
+def _materialized_response_fields(cached: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "materialized": True,
+        "materialized_at": cached["updated_at"],
+        "materialized_fingerprint": cached["fingerprint"],
+        "materialized_source": cached.get("source") or "unknown",
+        "materialized_status": cached.get("status") or "READY",
+        "cache_state": cached.get("cache_state")
+        or {
+            "status": "UNKNOWN",
+            "stale": False,
+            "age_seconds": None,
+            "expires_at": cached.get("expires_at"),
+            "source": cached.get("source") or "unknown",
+            "snapshot_status": cached.get("status") or "READY",
+        },
+    }
+
+
 def _authorized(session: Annotated[str | None, Cookie(alias="autoalpha_session")] = None) -> None:
     required = os.getenv("AUTOALPHA_SERVICE_TOKEN")
     expected = _session_value(required) if required else "local"
     if required and (not session or not hmac.compare_digest(session, expected)):
         raise HTTPException(status_code=401, detail="Authentication required")
+
+
+@app.get("/api/platform/doctor", dependencies=[Depends(_authorized)])
+async def platform_doctor() -> dict[str, Any]:
+    try:
+        return _platform_doctor_snapshot()
+    except Exception as error:
+        return {
+            "protocol": "AUTOALPHA_PLATFORM_DOCTOR_V1",
+            "status": "ERROR",
+            "blockers": ["doctor_snapshot_failed"],
+            "error": f"{type(error).__name__}: {error}",
+        }
 
 
 @app.get("/", include_in_schema=False)
@@ -816,9 +1514,19 @@ async def paper_trading_page() -> FileResponse:
     return FileResponse(PACKAGE_ROOT / "static/paper_trading.html")
 
 
+@app.get("/strategies", include_in_schema=False)
+async def formal_strategies_page() -> FileResponse:
+    return FileResponse(PACKAGE_ROOT / "static/formal_strategies.html")
+
+
 @app.get("/data", include_in_schema=False)
 async def data_center_page() -> FileResponse:
     return FileResponse(PACKAGE_ROOT / "static/data_center.html")
+
+
+@app.get("/jobs", include_in_schema=False)
+async def jobs_page() -> FileResponse:
+    return FileResponse(PACKAGE_ROOT / "static/jobs.html")
 
 
 @app.get("/research-tasks", include_in_schema=False)
@@ -1074,6 +1782,7 @@ async def llm_team_snapshot(task_id: str | None = None) -> dict[str, Any]:
         "enabled": store.settings().get("full_llm_enabled", "true") == "true",
         "task_id": task_id,
         "roles": role_catalog(),
+        "domain_matrix": summarize_research_team_domains(artifacts),
         "summary": store.llm_role_summary(task_id=task_id),
         "artifacts": artifacts,
         "knowledge": store.factor_knowledge_catalog(task_id=task_id, limit=500),
@@ -1102,6 +1811,995 @@ async def factor_intelligence(factor_id: str) -> dict[str, Any]:
         "role_artifacts": store.llm_role_artifacts(candidate_id=factor_id, limit=100),
         "decision_authority": "ADVISORY_ONLY",
     }
+
+
+@app.get("/api/strategy-bus", dependencies=[Depends(_authorized)])
+async def strategy_bus_snapshot(sync: bool = False) -> dict[str, Any]:
+    cached = store.materialized_snapshot("strategy_bus")
+    if cached:
+        snapshot = {
+            **cached["payload"],
+            **_materialized_response_fields(cached),
+            "read_only": True,
+        }
+        if sync:
+            snapshot["sync_ignored"] = True
+            snapshot["sync_hint"] = "Use POST /api/strategy-bus/sync to refresh materialized state."
+        return snapshot
+    snapshot = build_strategy_bus_snapshot(
+        store,
+        autocombine_store=combine_store,
+        quantcombine_store=quant_store,
+        behavior_snapshot=load_behavior_snapshot(RUNTIME_ROOT / "factor-behavior"),
+        sync=False,
+    )
+    snapshot["materialized"] = False
+    snapshot["read_only"] = True
+    if sync:
+        snapshot["sync_ignored"] = True
+        snapshot["sync_hint"] = "Use POST /api/strategy-bus/sync to refresh materialized state."
+    return snapshot
+
+
+@app.post("/api/strategy-bus/sync", dependencies=[Depends(_authorized)])
+async def sync_strategy_bus_snapshot(
+    request: StrategyBusSyncRequest | None = None,
+) -> dict[str, Any]:
+    request = request or StrategyBusSyncRequest()
+    if not request.run_now:
+        existing = None if request.force_new else _existing_system_job_by_type(
+            "strategy_bus_sync",
+            queue=request.queue,
+            statuses=("QUEUED", "RUNNING"),
+        )
+        if existing is not None:
+            return {
+                "queued": True,
+                "deduplicated": True,
+                "job": existing,
+                "message": "Strategy bus sync is already queued or running.",
+            }
+        job = store.enqueue_system_job(
+            job_id=f"job-strategy-bus-{uuid.uuid4().hex[:12]}",
+            queue=request.queue,
+            job_type="strategy_bus_sync",
+            payload={"source": "api.strategy_bus_sync"},
+            priority=request.priority,
+            resource_group="strategy_bus",
+            max_workers=1,
+            progress_total=1,
+        )
+        store.append_event(
+            "audit",
+            "STRATEGY_BUS_SYNC_QUEUED",
+            "策略实验总线同步已进入 Job Center",
+            f"{job['job_id']} · queue={job['queue']} · priority={job['priority']}",
+            payload={"job_id": job["job_id"], "job_type": job["job_type"]},
+        )
+        return {
+            "queued": True,
+            "deduplicated": False,
+            "job": job,
+            "message": "Strategy bus sync queued in Job Center.",
+        }
+    snapshot = build_strategy_bus_snapshot(
+        store,
+        autocombine_store=combine_store,
+        quantcombine_store=quant_store,
+        behavior_snapshot=load_behavior_snapshot(RUNTIME_ROOT / "factor-behavior"),
+        sync=True,
+    )
+    cached = store.upsert_materialized_snapshot(
+        "strategy_bus",
+        snapshot,
+        ttl_seconds=SNAPSHOT_TTLS["strategy_bus"],
+        source="api.run_now",
+    )
+    store.append_event(
+        "audit",
+        "STRATEGY_BUS_SYNCED",
+        "策略实验总线已同步",
+        "因子候选、组合候选、策略版本和模拟组合索引已刷新。",
+        payload={"summary": snapshot["summary"]},
+    )
+    return {
+        **snapshot,
+        **_materialized_response_fields(cached),
+        "run_now": True,
+    }
+
+
+def _existing_system_job_by_type(
+    job_type: str,
+    *,
+    queue: str,
+    statuses: tuple[str, ...],
+) -> dict[str, Any] | None:
+    for status in statuses:
+        for job in store.system_jobs(queue=queue, status=status, limit=200):
+            if str(job.get("job_type")) == job_type:
+                return job
+    return None
+
+
+@app.get("/api/factor-knowledge-map", dependencies=[Depends(_authorized)])
+async def factor_knowledge_map_snapshot(refresh: bool = False) -> dict[str, Any]:
+    cached = store.materialized_snapshot("factor_knowledge_map")
+    if cached and not refresh:
+        return {
+            **cached["payload"],
+            **_materialized_response_fields(cached),
+        }
+    if refresh:
+        return {
+            "research_map_protocol": "FACTOR_KNOWLEDGE_RESEARCH_MAP_V2",
+            "protocol": "MATERIALIZED_FACTOR_KNOWLEDGE_MAP_V1",
+            "materialized": False,
+            "read_only": True,
+            "cache_status": "MISSING" if cached is None else cached["cache_state"]["status"],
+            "refresh_ignored": True,
+            "refresh_hint": (
+                "Use POST /api/factor-knowledge-map/sync or enqueue "
+                "factor_knowledge_map_sync in Job Center."
+            ),
+        }
+    snapshot = factor_knowledge_map(
+        store,
+        behavior_snapshot=load_behavior_snapshot(RUNTIME_ROOT / "factor-behavior"),
+    )
+    snapshot["materialized"] = False
+    snapshot["read_only"] = True
+    return snapshot
+
+
+@app.post("/api/factor-knowledge-map/sync", dependencies=[Depends(_authorized)])
+async def sync_factor_knowledge_map_snapshot(
+    request: FactorKnowledgeMapSyncRequest | None = None,
+) -> dict[str, Any]:
+    request = request or FactorKnowledgeMapSyncRequest()
+    if not request.run_now:
+        existing = None if request.force_new else _existing_system_job_by_type(
+            "factor_knowledge_map_sync",
+            queue=request.queue,
+            statuses=("QUEUED", "RUNNING"),
+        )
+        if existing is not None:
+            return {
+                "queued": True,
+                "deduplicated": True,
+                "job": existing,
+                "message": "Factor knowledge map sync is already queued or running.",
+            }
+        job = store.enqueue_system_job(
+            job_id=f"job-factor-knowledge-{uuid.uuid4().hex[:12]}",
+            queue=request.queue,
+            job_type="factor_knowledge_map_sync",
+            payload={"source": "api.factor_knowledge_map_sync"},
+            priority=request.priority,
+            resource_group="sqlite-writer",
+            max_workers=1,
+            progress_total=1,
+        )
+        store.append_event(
+            "audit",
+            "FACTOR_KNOWLEDGE_MAP_SYNC_QUEUED",
+            "因子知识地图同步已进入 Job Center",
+            f"{job['job_id']} · queue={job['queue']} · priority={job['priority']}",
+            payload={"job_id": job["job_id"], "job_type": job["job_type"]},
+        )
+        return {
+            "queued": True,
+            "deduplicated": False,
+            "job": job,
+            "message": "Factor knowledge map sync queued in Job Center.",
+        }
+    snapshot = factor_knowledge_map(
+        store,
+        behavior_snapshot=load_behavior_snapshot(RUNTIME_ROOT / "factor-behavior"),
+    )
+    snapshot = {
+        **snapshot,
+        "protocol": "MATERIALIZED_FACTOR_KNOWLEDGE_MAP_V1",
+        "processed_count": snapshot.get("factor_count", 0),
+    }
+    cached = store.upsert_materialized_snapshot(
+        "factor_knowledge_map",
+        snapshot,
+        ttl_seconds=SNAPSHOT_TTLS["factor_knowledge_map"],
+        source="api.run_now",
+    )
+    store.append_event(
+        "audit",
+        "FACTOR_KNOWLEDGE_MAP_SYNCED",
+        "因子知识地图已同步",
+        "行为簇、机制簇、参数家族和年度画像已刷新。",
+        payload={"factor_count": snapshot.get("factor_count", 0)},
+    )
+    return {
+        **cached["payload"],
+        **_materialized_response_fields(cached),
+        "run_now": True,
+    }
+
+
+@app.get("/api/strategy-library", dependencies=[Depends(_authorized)])
+async def strategy_library_snapshot() -> dict[str, Any]:
+    return formal_strategy_library(store)
+
+
+@app.get("/api/strategy-production-funnel", dependencies=[Depends(_authorized)])
+async def strategy_production_funnel_snapshot() -> dict[str, Any]:
+    return strategy_production_funnel(store)
+
+
+@app.get(
+    "/api/strategy-experiments/{experiment_id}/lineage",
+    dependencies=[Depends(_authorized)],
+)
+async def strategy_experiment_lineage_snapshot(
+    experiment_id: str, depth: int = 2
+) -> dict[str, Any]:
+    try:
+        return strategy_experiment_lineage(store, experiment_id, depth=depth)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get(
+    "/api/strategy-library/{strategy_uid}/versions/{version}/readiness",
+    dependencies=[Depends(_authorized)],
+)
+async def formal_strategy_readiness(strategy_uid: str, version: int) -> dict[str, Any]:
+    try:
+        return strategy_lifecycle_readiness(store, strategy_uid, version)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get(
+    "/api/strategy-library/{strategy_uid}/versions/{version}/execution-package",
+    dependencies=[Depends(_authorized)],
+)
+async def formal_strategy_execution_package(strategy_uid: str, version: int) -> dict[str, Any]:
+    try:
+        return strategy_execution_package(store, strategy_uid, version)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post(
+    "/api/strategy-library/{strategy_uid}/versions/{version}/paper-portfolio",
+    dependencies=[Depends(_authorized)],
+)
+async def create_paper_portfolio_from_strategy(
+    strategy_uid: str,
+    version: int,
+    payload: StrategyPaperPortfolioRequest,
+) -> dict[str, Any]:
+    if data_sync_worker.alive:
+        raise HTTPException(status_code=409, detail="Wait for the market-data refresh to finish")
+    try:
+        package = strategy_execution_package(store, strategy_uid, version)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    contract = package.get("paper_trading_contract") or {}
+    seed = contract.get("paper_portfolio_seed") or {}
+    factor_ids = list(seed.get("factor_ids") or [])
+    weights = list(seed.get("weights") or [])
+    if not factor_ids or len(factor_ids) != len(weights):
+        raise HTTPException(status_code=422, detail="Strategy paper seed is incomplete")
+    records = []
+    missing = []
+    for factor_id in factor_ids:
+        record = store.factor_pool_record(str(factor_id))
+        if record is None:
+            missing.append(str(factor_id))
+        else:
+            records.append(record)
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Factors not found: {', '.join(missing)}")
+    data_path, market, task_ids = _factor_source_context(records)
+    try:
+        result = await asyncio.to_thread(
+            PaperTradingEngine(store, data_path).create,
+            PaperStrategySpec(
+                name=payload.name or str(seed.get("name") or package["name"]),
+                factor_ids=[str(item) for item in factor_ids],
+                weights=[float(item) for item in weights],
+                initial_cash_cny=payload.initial_cash_cny,
+                selection_count=int(payload.selection_count or seed.get("selection_count") or 30),
+                gross_exposure=float(
+                    payload.gross_exposure
+                    if payload.gross_exposure is not None
+                    else seed.get("gross_exposure", 0.9)
+                ),
+                slippage_bps_each_side=float(
+                    payload.slippage_bps_each_side
+                    if payload.slippage_bps_each_side is not None
+                    else seed.get("slippage_bps_each_side", 5.0)
+                ),
+                as_of_date=payload.as_of_date,
+                market=market,
+                data_path=str(data_path),
+                source_task_ids=tuple(task_ids),
+            ),
+        )
+    except (FileNotFoundError, KeyError, RuntimeError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    result["source_strategy"] = {
+        "strategy_uid": strategy_uid,
+        "version": version,
+        "execution_package_protocol": contract.get("protocol"),
+        "execution_protocol": contract.get("execution_protocol"),
+    }
+    _paper_event("PAPER_PORTFOLIO_CREATED_FROM_STRATEGY", "策略模拟组合已创建", result)
+    return result
+
+
+@app.get(
+    "/api/strategy-library/{strategy_uid}/versions/{version}/release-dossier",
+    dependencies=[Depends(_authorized)],
+)
+async def formal_strategy_release_dossier(strategy_uid: str, version: int) -> dict[str, Any]:
+    try:
+        return strategy_release_dossier(store, strategy_uid, version)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post(
+    "/api/strategy-library/{strategy_uid}/versions/{version}/release-dossier/export",
+    dependencies=[Depends(_authorized)],
+)
+async def export_formal_strategy_release_dossier(
+    strategy_uid: str, version: int
+) -> dict[str, Any]:
+    try:
+        published = publish_strategy_release_dossier(
+            store,
+            RUNTIME_ROOT / "artifacts",
+            strategy_uid,
+            version,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    artifact = published["artifact"]
+    store.append_event(
+        "delivery",
+        "STRATEGY_RELEASE_DOSSIER_EXPORTED",
+        "策略发布档案已导出",
+        f"{strategy_uid} v{version} · {artifact['artifact_id']}",
+        payload={
+            "strategy_uid": strategy_uid,
+            "version": version,
+            "artifact_id": artifact["artifact_id"],
+            "content_hash": artifact["content_hash"],
+            "production_ready": artifact["metadata"].get("production_ready"),
+            "release_decision": artifact["metadata"].get("release_decision"),
+        },
+    )
+    return {
+        **published,
+        "download_url": f"/api/artifacts/{artifact['artifact_id']}/download",
+    }
+
+
+@app.get("/api/artifacts/{artifact_id}/download", dependencies=[Depends(_authorized)])
+async def download_artifact(artifact_id: str) -> FileResponse:
+    if not artifact_id.startswith("strategy-release-dossier-"):
+        raise HTTPException(status_code=404, detail="Artifact download is not exposed")
+    try:
+        from autoalpha.operations.artifacts import ArtifactRegistry
+
+        artifact = ArtifactRegistry(RUNTIME_ROOT / "artifacts").get(artifact_id)
+    except (KeyError, RuntimeError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    payload_path = (RUNTIME_ROOT / "artifacts" / artifact.payload_path).resolve()
+    artifact_root = (RUNTIME_ROOT / "artifacts").resolve()
+    if not payload_path.is_relative_to(artifact_root) or not payload_path.is_file():
+        raise HTTPException(status_code=500, detail="Artifact payload is unavailable")
+    return FileResponse(
+        payload_path,
+        media_type="application/json",
+        filename=f"{artifact.artifact_id}.json",
+    )
+
+
+@app.get("/api/gate-funnel", dependencies=[Depends(_authorized)])
+async def gate_funnel_snapshot(refresh: bool = False) -> dict[str, Any]:
+    cached = store.materialized_snapshot("gate_funnel_diagnostics")
+    if cached and not refresh:
+        return {
+            **cached["payload"],
+            **_materialized_response_fields(cached),
+        }
+    snapshot = build_gate_funnel_diagnostics(combine_store, quant_store)
+    if refresh:
+        cached = store.upsert_materialized_snapshot(
+            "gate_funnel_diagnostics",
+            snapshot,
+            ttl_seconds=SNAPSHOT_TTLS["gate_funnel_diagnostics"],
+            source="api.refresh",
+        )
+        return {
+            **cached["payload"],
+            **_materialized_response_fields(cached),
+        }
+    return {**snapshot, "materialized": False}
+
+
+@app.get("/api/gate-feedback", dependencies=[Depends(_authorized)])
+async def gate_feedback_snapshot(refresh: bool = False) -> dict[str, Any]:
+    cached = store.materialized_snapshot("gate_feedback_policy")
+    if cached and not refresh:
+        return {
+            **cached["payload"],
+            **_materialized_response_fields(cached),
+        }
+    if refresh:
+        gate_snapshot = build_gate_funnel_diagnostics(combine_store, quant_store)
+        store.upsert_materialized_snapshot(
+            "gate_funnel_diagnostics",
+            gate_snapshot,
+            ttl_seconds=SNAPSHOT_TTLS["gate_funnel_diagnostics"],
+            source="api.refresh",
+        )
+    policy = gate_feedback_policy(store)
+    if refresh:
+        cached = store.upsert_materialized_snapshot(
+            "gate_feedback_policy",
+            policy,
+            ttl_seconds=SNAPSHOT_TTLS["gate_feedback_policy"],
+            source="api.refresh",
+        )
+        return {
+            **cached["payload"],
+            **_materialized_response_fields(cached),
+        }
+    return {**policy, "materialized": False}
+
+
+@app.post("/api/gate-feedback/seed-quant-repair", dependencies=[Depends(_authorized)])
+async def seed_gate_feedback_quant_repair(
+    payload: GateFeedbackRepairSeedRequest,
+) -> dict[str, Any]:
+    gate_snapshot = build_gate_funnel_diagnostics(combine_store, quant_store)
+    store.upsert_materialized_snapshot("gate_funnel_diagnostics", gate_snapshot)
+    policy = gate_feedback_policy(store)
+    cached = store.upsert_materialized_snapshot("gate_feedback_policy", policy)
+    policy_payload = cached["payload"]
+    if not policy_payload.get("active"):
+        return {
+            "status": "SKIPPED",
+            "reason": "NO_ACTIVE_GATE_FEEDBACK_ACTIONS",
+            "policy": policy_payload,
+        }
+    source_fingerprint = _stable_gate_feedback_seed_fingerprint(policy_payload)
+    job_id = f"job-gate-repair-{source_fingerprint[:16]}"
+    existing = None
+    with suppress(KeyError):
+        existing = store.system_job(job_id)
+    if existing:
+        return {
+            "status": "EXISTING",
+            "job": existing,
+            "policy": policy_payload,
+            **_repair_seed_task_reference(existing),
+        }
+    job_payload: dict[str, Any] = {
+        "name": payload.name,
+        "notes": payload.notes,
+        "feedback_source_fingerprint": source_fingerprint,
+        "feedback_actions": policy_payload.get("action_ids") or [],
+        "feedback_recommendations": policy_payload.get("recommendations") or [],
+        "auto_start_task": payload.auto_start_task,
+    }
+    if payload.data_path:
+        job_payload["data_path"] = payload.data_path
+    if payload.protocol:
+        job_payload["protocol"] = payload.protocol
+    try:
+        job = store.enqueue_system_job(
+            job_id=job_id,
+            queue=payload.queue,
+            job_type="quantcombine_repair_task_seed",
+            payload=job_payload,
+            priority=payload.priority,
+            resource_group="sqlite-writer",
+            max_workers=1,
+            progress_total=1,
+            max_attempts=2,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    store.append_event(
+        "action",
+        "GATE_FEEDBACK_REPAIR_JOB_ENQUEUED",
+        "门禁反馈修复任务已入队",
+        f"{job_id} · QuantCombine repair seed · {source_fingerprint[:12]}",
+        payload={
+            "job_id": job_id,
+            "source_fingerprint": source_fingerprint,
+            "action_ids": policy_payload.get("action_ids") or [],
+        },
+    )
+    result = None
+    if payload.run_immediately:
+        result = await asyncio.to_thread(system_job_runner.run_next, queue=payload.queue)
+    return {
+        "status": "ENQUEUED",
+        "job": job,
+        "policy": policy_payload,
+        "run_result": result,
+        **_repair_seed_task_reference(job, result),
+    }
+
+
+def _repair_seed_task_reference(
+    job: dict[str, Any], run_result: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    result = run_result.get("job", {}).get("result") if isinstance(run_result, dict) else None
+    if not isinstance(result, dict):
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    task_id = result.get("task_id")
+    if not task_id:
+        return {}
+    task_url = result.get("task_url") or f"http://127.0.0.1:8889/tasks/{task_id}"
+    return {"repair_task_id": task_id, "repair_task_url": task_url}
+
+
+def _stable_gate_feedback_seed_fingerprint(policy_payload: dict[str, Any]) -> str:
+    stable_payload = {
+        "protocol": policy_payload.get("protocol"),
+        "action_ids": sorted(policy_payload.get("action_ids") or []),
+        "profile_override": policy_payload.get("profile_override"),
+        "root_cause_intensity": policy_payload.get("root_cause_intensity") or {},
+        "recommendations": [
+            {
+                "action": item.get("action"),
+                "root_cause": item.get("root_cause"),
+                "suggested_values": item.get("suggested_values") or {},
+            }
+            for item in policy_payload.get("recommendations") or []
+            if isinstance(item, dict)
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(stable_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+@app.post("/api/strategy-library/seed-candidates", dependencies=[Depends(_authorized)])
+async def seed_strategy_library_candidates(
+    payload: StrategyLibrarySeedJobRequest,
+) -> dict[str, Any]:
+    allowed = set(payload.candidate_classes)
+    candidates = [
+        item
+        for item in strategy_promotion_candidates(store, limit=payload.limit * 5)
+        if str(item.get("candidate_class")) in allowed
+    ][: payload.limit]
+    if not candidates:
+        return {
+            "status": "SKIPPED",
+            "reason": "NO_PROMOTION_CANDIDATES",
+            "candidate_classes": sorted(allowed),
+        }
+    fingerprint = _stable_strategy_seed_fingerprint(
+        "strategy_library_seed", payload.model_dump(), candidates
+    )
+    job_id = f"job-strategy-seed-{fingerprint[:16]}"
+    existing = _existing_system_job(job_id)
+    if existing:
+        return {"status": "EXISTING", "job": existing, "candidate_count": len(candidates)}
+    job_payload = {
+        "limit": payload.limit,
+        "candidate_classes": sorted(allowed),
+        "candidate_ids": [item["experiment_id"] for item in candidates],
+    }
+    job = store.enqueue_system_job(
+        job_id=job_id,
+        queue=payload.queue,
+        job_type="strategy_library_seed",
+        payload=job_payload,
+        priority=payload.priority,
+        resource_group="sqlite-writer",
+        max_workers=1,
+        progress_total=len(candidates),
+        max_attempts=2,
+    )
+    store.append_event(
+        "action",
+        "STRATEGY_LIBRARY_SEED_JOB_ENQUEUED",
+        "策略候选入库作业已入队",
+        f"{job_id} · {len(candidates)} 个候选",
+        payload={"job_id": job_id, "candidate_count": len(candidates)},
+    )
+    result = None
+    if payload.run_immediately:
+        result = await asyncio.to_thread(system_job_runner.run_next, queue=payload.queue)
+    return {
+        "status": "ENQUEUED",
+        "job": job,
+        "candidate_count": len(candidates),
+        "run_result": result,
+    }
+
+
+@app.post("/api/strategy-library/freeze-ready", dependencies=[Depends(_authorized)])
+async def freeze_public_validation_ready_strategies(
+    payload: StrategyFreezeReadyJobRequest,
+) -> dict[str, Any]:
+    ready_strategies: list[dict[str, Any]] = []
+    for strategy in store.formal_strategy_versions(limit=5000):
+        if str(strategy.get("lifecycle")) != "RESEARCH":
+            continue
+        readiness = strategy_lifecycle_readiness(
+            store, str(strategy["strategy_uid"]), int(strategy["version"])
+        )
+        if readiness.get("next_lifecycle") == "FROZEN" and readiness.get("ready"):
+            ready_strategies.append(strategy)
+        if len(ready_strategies) >= payload.limit:
+            break
+    if not ready_strategies:
+        return {
+            "status": "SKIPPED",
+            "reason": "NO_PUBLIC_VALIDATION_READY_STRATEGIES",
+            "ready_count": 0,
+        }
+    fingerprint = _stable_strategy_seed_fingerprint(
+        "strategy_public_validation_freeze", payload.model_dump(), ready_strategies
+    )
+    job_id = f"job-strategy-freeze-{fingerprint[:16]}"
+    existing = _existing_system_job(job_id)
+    if existing:
+        return {"status": "EXISTING", "job": existing, "ready_count": len(ready_strategies)}
+    job = store.enqueue_system_job(
+        job_id=job_id,
+        queue=payload.queue,
+        job_type="strategy_public_validation_freeze",
+        payload={"limit": payload.limit},
+        priority=payload.priority,
+        resource_group="sqlite-writer",
+        max_workers=1,
+        progress_total=len(ready_strategies),
+        max_attempts=2,
+    )
+    store.append_event(
+        "action",
+        "STRATEGY_FREEZE_READY_JOB_ENQUEUED",
+        "可冻结策略推进作业已入队",
+        f"{job_id} · {len(ready_strategies)} 个策略",
+        payload={"job_id": job_id, "ready_count": len(ready_strategies)},
+    )
+    result = None
+    if payload.run_immediately:
+        result = await asyncio.to_thread(system_job_runner.run_next, queue=payload.queue)
+    return {
+        "status": "ENQUEUED",
+        "job": job,
+        "ready_count": len(ready_strategies),
+        "run_result": result,
+    }
+
+
+def _existing_system_job(job_id: str) -> dict[str, Any] | None:
+    with suppress(KeyError):
+        return store.system_job(job_id)
+    return None
+
+
+def _stable_strategy_seed_fingerprint(
+    action: str, payload: dict[str, Any], items: list[dict[str, Any]]
+) -> str:
+    stable_payload = {
+        "action": action,
+        "payload": {
+            key: value
+            for key, value in payload.items()
+            if key not in {"run_immediately", "queue", "priority"}
+        },
+        "items": [
+            item.get("experiment_id")
+            or f"{item.get('strategy_uid')}@{item.get('version')}"
+            for item in items
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(stable_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+@app.post("/api/strategy-library", dependencies=[Depends(_authorized)])
+async def create_formal_strategy(payload: FormalStrategyCreateRequest) -> dict[str, Any]:
+    try:
+        strategy = create_formal_strategy_from_experiment(
+            store,
+            payload.experiment_id,
+            name=payload.name,
+            lifecycle=payload.lifecycle,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    store.append_event(
+        "delivery",
+        "FORMAL_STRATEGY_VERSION_CREATED",
+        "正式策略版本已创建",
+        f"{strategy['strategy_uid']} VERSION {strategy['version']} 已进入策略库。",
+        payload={
+            "strategy_uid": strategy["strategy_uid"],
+            "version": strategy["version"],
+            "source_experiment_id": payload.experiment_id,
+        },
+    )
+    return strategy
+
+
+@app.post(
+    "/api/strategy-library/{strategy_uid}/versions/{version}/promote",
+    dependencies=[Depends(_authorized)],
+)
+async def promote_formal_strategy(
+    strategy_uid: str,
+    version: int,
+    payload: FormalStrategyPromotionRequest,
+) -> dict[str, Any]:
+    try:
+        strategy = promote_formal_strategy_lifecycle(
+            store,
+            strategy_uid,
+            version,
+            target_lifecycle=payload.target_lifecycle,
+            evidence=payload.evidence,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    store.append_event(
+        "audit",
+        "FORMAL_STRATEGY_LIFECYCLE_PROMOTED",
+        "正式策略版本已晋级",
+        f"{strategy_uid} VERSION {version} -> {payload.target_lifecycle}。",
+        payload={
+            "strategy_uid": strategy_uid,
+            "version": version,
+            "target_lifecycle": payload.target_lifecycle,
+            "evidence_keys": sorted(payload.evidence),
+        },
+    )
+    return strategy
+
+
+@app.post(
+    "/api/strategy-library/{strategy_uid}/versions/{version}/advance",
+    dependencies=[Depends(_authorized)],
+)
+async def advance_formal_strategy(strategy_uid: str, version: int) -> dict[str, Any]:
+    try:
+        strategy = advance_formal_strategy_lifecycle(store, strategy_uid, version)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    store.append_event(
+        "audit",
+        "FORMAL_STRATEGY_LIFECYCLE_ADVANCED",
+        "正式策略版本已按就绪证据晋级",
+        f"{strategy_uid} VERSION {version} -> {strategy['lifecycle']}。",
+        payload={
+            "strategy_uid": strategy_uid,
+            "version": version,
+            "target_lifecycle": strategy["lifecycle"],
+            "evidence_source": "strategy_lifecycle_readiness",
+        },
+    )
+    return strategy
+
+
+@app.post(
+    "/api/strategy-library/{strategy_uid}/versions/{version}/approve",
+    dependencies=[Depends(_authorized)],
+)
+async def approve_formal_strategy(
+    strategy_uid: str,
+    version: int,
+    payload: FormalStrategyApprovalRequest,
+) -> dict[str, Any]:
+    try:
+        strategy = approve_formal_strategy_transition(
+            store,
+            strategy_uid,
+            version,
+            approver=payload.approver,
+            approval_type=payload.approval_type,
+            notes=payload.notes,
+            target_lifecycle=payload.target_lifecycle,
+            evidence=payload.evidence,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    approval = (strategy.get("evidence") or {}).get("human_approval") or {}
+    store.append_event(
+        "audit",
+        "FORMAL_STRATEGY_TRANSITION_APPROVED",
+        "正式策略晋级审批已记录",
+        f"{strategy_uid} VERSION {version} -> {strategy['lifecycle']}。",
+        payload={
+            "strategy_uid": strategy_uid,
+            "version": version,
+            "target_lifecycle": strategy["lifecycle"],
+            "approval_type": payload.approval_type,
+            "approver": payload.approver,
+            "approved_at": approval.get("approved_at"),
+            "evidence_keys": sorted(payload.evidence),
+        },
+    )
+    return strategy
+
+
+@app.get("/api/jobs", dependencies=[Depends(_authorized)])
+async def job_queue_snapshot(
+    queue: str | None = None,
+    status: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    database_health = _runtime_database_health()
+    snapshot_policy = _materialized_snapshot_policy(
+        database_health.get("materialized_snapshots") or None
+    )
+    jobs = store.system_jobs(queue=queue, status=status, limit=limit)
+    recent_logs = store.system_job_logs_for_jobs(
+        [str(job["job_id"]) for job in jobs],
+        limit_per_job=3,
+    )
+    return {
+        "summary": store.system_job_summary(),
+        "jobs": jobs,
+        "recent_logs": recent_logs,
+        "scheduler": _system_job_scheduler_status(),
+        "database": database_health,
+        "snapshot_policy": snapshot_policy,
+        "resource_policy": {
+            "database_mode": "WAL",
+            "recommended_reader_mode": "read_only_snapshot",
+            "claim_quota": "global_capacity_queue_capacity_and_resource_group_capacity",
+            "single_writer_group": "use max_workers=1 for sqlite-writer jobs",
+            "checkpoint_policy": "every_completed_chunk",
+            "retry_policy": "bounded_attempts_with_structured_error",
+            "expired_lease_policy": "recover_expired_system_jobs_before_claim",
+            "job_log_policy": "structured_system_job_logs_by_job_id",
+            "snapshot_policy": (
+                "read materialized snapshots; refresh through Job Center or explicit POST"
+            ),
+            "supported_system_job_types": sorted(SUPPORTED_SYSTEM_JOB_TYPES),
+        },
+    }
+
+
+@app.post("/api/jobs", dependencies=[Depends(_authorized)])
+async def enqueue_system_job(payload: SystemJobRequest) -> dict[str, Any]:
+    job_id = f"job-{uuid.uuid4().hex[:12]}"
+    try:
+        job = store.enqueue_system_job(
+            job_id=job_id,
+            queue=payload.queue,
+            job_type=payload.job_type,
+            payload=payload.payload,
+            priority=payload.priority,
+            resource_group=payload.resource_group,
+            max_workers=payload.max_workers,
+            progress_total=payload.progress_total,
+            max_attempts=payload.max_attempts,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    store.append_event(
+        "action",
+        "SYSTEM_JOB_ENQUEUED",
+        "系统作业已入队",
+        f"{job_id} · {payload.job_type} 已进入 {payload.queue} 队列。",
+        payload={"job_id": job_id, "queue": payload.queue, "job_type": payload.job_type},
+    )
+    return job
+
+
+@app.get("/api/jobs/{job_id}/logs", dependencies=[Depends(_authorized)])
+async def system_job_logs(job_id: str, limit: int = 200) -> dict[str, Any]:
+    try:
+        job = store.system_job(job_id)
+        logs = store.system_job_logs(job_id, limit=limit)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return {"job": job, "logs": logs}
+
+
+@app.post("/api/jobs/claim", dependencies=[Depends(_authorized)])
+async def claim_system_job(payload: SystemJobClaimRequest) -> dict[str, Any]:
+    recovered = store.recover_expired_system_jobs(queue=payload.queue)
+    job = store.claim_system_job(
+        queue=payload.queue,
+        worker_id=payload.worker_id,
+        lease_seconds=payload.lease_seconds,
+        resource_group=payload.resource_group,
+        max_queue_running=payload.max_queue_running,
+        max_global_running=payload.max_global_running,
+    )
+    return {"job": job, "recovered_expired_jobs": recovered}
+
+
+@app.post("/api/jobs/run-next", dependencies=[Depends(_authorized)])
+async def run_next_system_job(payload: SystemJobRunNextRequest) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        system_job_runner.run_next,
+        queue=payload.queue,
+        lease_seconds=payload.lease_seconds,
+        max_queue_running=payload.max_queue_running,
+        max_global_running=payload.max_global_running,
+    )
+
+
+@app.post("/api/jobs/{job_id}/heartbeat", dependencies=[Depends(_authorized)])
+async def heartbeat_system_job(
+    job_id: str, payload: SystemJobHeartbeatRequest
+) -> dict[str, Any]:
+    try:
+        return store.heartbeat_system_job(
+            job_id,
+            worker_id=payload.worker_id,
+            lease_seconds=payload.lease_seconds,
+            progress_current=payload.progress_current,
+            checkpoint=payload.checkpoint,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/api/jobs/{job_id}/{command}", dependencies=[Depends(_authorized)])
+async def command_system_job(
+    job_id: str,
+    command: Literal["cancel", "pause", "resume"],
+    payload: SystemJobCommandRequest,
+) -> dict[str, Any]:
+    try:
+        job = store.command_system_job(
+            job_id,
+            command=command,
+            actor=payload.actor,
+            reason=payload.reason,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    store.append_event(
+        "action",
+        "SYSTEM_JOB_COMMAND",
+        "系统作业控制命令已记录",
+        f"{job_id} · {command} -> {job['status']}。",
+        payload={
+            "job_id": job_id,
+            "command": command,
+            "actor": payload.actor,
+            "target_status": job["status"],
+            "reason": payload.reason,
+        },
+    )
+    return job
+
+
+@app.post("/api/jobs/recover", dependencies=[Depends(_authorized)])
+async def recover_system_jobs(queue: str | None = None) -> dict[str, Any]:
+    recovered = store.recover_expired_system_jobs(queue=queue)
+    return {"recovered_expired_jobs": recovered, "summary": store.system_job_summary()}
 
 
 @app.get("/api/data-center", dependencies=[Depends(_authorized)])
@@ -1367,8 +3065,110 @@ async def research_task_activity(task_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/factors", dependencies=[Depends(_authorized)])
-async def factor_library(response: Response) -> dict[str, Any]:
+async def factor_library(response: Response, refresh: bool = False) -> dict[str, Any]:
     response.headers["Cache-Control"] = "no-store, max-age=0"
+    cached = store.materialized_snapshot("factor_library")
+    cached_payload = cached["payload"] if cached else {}
+    cache_has_integrity = (
+        (cached_payload.get("knowledge_integrity") or {}).get("protocol")
+        == "AUTOALPHA_FACTOR_KNOWLEDGE_INTEGRITY_V1"
+    )
+    if cached and not refresh and cache_has_integrity:
+        return {
+            **cached["payload"],
+            **_materialized_response_fields(cached),
+            "read_only": True,
+        }
+    if refresh:
+        return {
+            **_factor_library_cache_miss_payload(cached),
+            "refresh_ignored": True,
+            "refresh_hint": "Use POST /api/factors/refresh to rebuild materialized state.",
+        }
+    return _factor_library_cache_miss_payload(cached)
+
+
+@app.post("/api/factors/refresh", dependencies=[Depends(_authorized)])
+async def refresh_factor_library(
+    response: Response,
+    request: FactorLibraryRefreshRequest | None = None,
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    request = request or FactorLibraryRefreshRequest()
+    if not request.run_now:
+        existing = None if request.force_new else _existing_system_job_by_type(
+            "factor_library_refresh",
+            queue=request.queue,
+            statuses=("QUEUED", "RUNNING"),
+        )
+        if existing is not None:
+            return {
+                "queued": True,
+                "deduplicated": True,
+                "job": existing,
+                "message": "Factor library refresh is already queued or running.",
+            }
+        job = store.enqueue_system_job(
+            job_id=f"job-factor-library-{uuid.uuid4().hex[:12]}",
+            queue=request.queue,
+            job_type="factor_library_refresh",
+            payload={"source": "api.factor_library_refresh"},
+            priority=request.priority,
+            resource_group="sqlite-writer",
+            max_workers=1,
+            progress_total=1,
+        )
+        store.append_event(
+            "audit",
+            "FACTOR_LIBRARY_REFRESH_QUEUED",
+            "因子库主榜刷新已进入 Job Center",
+            f"{job['job_id']} · queue={job['queue']} · priority={job['priority']}",
+            payload={"job_id": job["job_id"], "job_type": job["job_type"]},
+        )
+        return {
+            "queued": True,
+            "deduplicated": False,
+            "job": job,
+            "message": "Factor library refresh queued in Job Center.",
+        }
+    library = {
+        **_build_factor_library_payload(),
+        "api_payload_protocol": "MATERIALIZED_FACTOR_LIBRARY_API_V1",
+        "materialized": False,
+    }
+    cached = store.upsert_materialized_snapshot(
+        "factor_library",
+        library,
+        ttl_seconds=SNAPSHOT_TTLS["factor_library"],
+        source="api.refresh",
+    )
+    return {
+        **cached["payload"],
+        **_materialized_response_fields(cached),
+        "read_only": False,
+        "run_now": True,
+    }
+
+
+def _factor_library_cache_miss_payload(cached: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        "api_payload_protocol": "MATERIALIZED_FACTOR_LIBRARY_API_V1",
+        "materialized": False,
+        "read_only": True,
+        "cache_status": "STALE" if cached else "MISSING",
+        "summary": {},
+        "factors": [],
+        "research_tasks": [],
+        "data": {},
+        "knowledge_integrity": (
+            (cached.get("payload") or {}).get("knowledge_integrity") if cached else None
+        ),
+        "refresh_required": True,
+        "refresh_hint": "Use POST /api/factors/refresh to rebuild materialized state.",
+    }
+
+
+def _build_factor_library_payload() -> dict[str, Any]:
     task_lookup = {task["task_id"]: _research_task_view(task) for task in store.research_tasks()}
     generation_ids: dict[str, str] = {}
     for task_id in task_lookup:
@@ -1440,12 +3240,101 @@ async def factor_library(response: Response) -> dict[str, Any]:
     )
     library["summary"]["behavior_cluster_count"] = int(behavior.get("cluster_count", 0))
     library["summary"]["behavior_evaluated_count"] = len(behavior_factors)
+    homogeneity_snapshot = store.materialized_snapshot("factor_homogeneity_backfill")
+    homogeneity_control = (
+        homogeneity_snapshot["payload"].get("report") if homogeneity_snapshot else None
+    )
+    if not homogeneity_control:
+        homogeneity_control = build_homogeneity_report(
+            pool_records,
+            behavior,
+            source_task_id=None,
+        )
+    library["homogeneity_control"] = homogeneity_control
+    gate_funnel_snapshot = store.materialized_snapshot("gate_funnel_diagnostics")
+    library["gate_funnel"] = (
+        {
+            **gate_funnel_snapshot["payload"],
+            "materialized": True,
+            "materialized_at": gate_funnel_snapshot["updated_at"],
+            "materialized_fingerprint": gate_funnel_snapshot["fingerprint"],
+        }
+        if gate_funnel_snapshot
+        else {**build_gate_funnel_diagnostics(combine_store, quant_store), "materialized": False}
+    )
+    library["materialization"] = {
+        "factor_homogeneity_backfill": (
+            {
+                "updated_at": homogeneity_snapshot["updated_at"],
+                "fingerprint": homogeneity_snapshot["fingerprint"],
+                "processed_count": homogeneity_snapshot["payload"].get("processed_count"),
+                "behavior_snapshot_id": homogeneity_snapshot["payload"].get(
+                    "behavior_snapshot_id"
+                ),
+            }
+            if homogeneity_snapshot
+            else None
+        ),
+        "gate_funnel_diagnostics": (
+            {
+                "updated_at": gate_funnel_snapshot["updated_at"],
+                "fingerprint": gate_funnel_snapshot["fingerprint"],
+                "total_candidates": gate_funnel_snapshot["payload"].get("total_candidates"),
+                "passed_candidates": gate_funnel_snapshot["payload"].get("passed_candidates"),
+            }
+            if gate_funnel_snapshot
+            else None
+        ),
+    }
+    library["summary"]["crowded_behavior_cluster_count"] = int(
+        homogeneity_control["crowded_cluster_count"]
+    )
+    library["summary"]["homogeneity_target_mechanisms"] = list(
+        homogeneity_control["target_mechanisms"]
+    )
     favorite_factors = store.favorite_ids("factor")
+    knowledge_lookup = {
+        item["factor_id"]: item for item in store.factor_knowledge_catalog(limit=5000)
+    }
+    missing_knowledge_factor_ids = sorted(set(pool_lookup) - set(knowledge_lookup))
+    homogeneity_integrity = factor_homogeneity_integrity(
+        pool_records,
+        list(knowledge_lookup.values()),
+    )
+    library["knowledge_integrity"] = {
+        "protocol": "AUTOALPHA_FACTOR_KNOWLEDGE_INTEGRITY_V1",
+        "factor_count": len(pool_lookup),
+        "knowledge_count": len(knowledge_lookup),
+        "missing_count": len(missing_knowledge_factor_ids),
+        "missing_factor_ids": missing_knowledge_factor_ids[:25],
+        "complete": not missing_knowledge_factor_ids,
+        "stale": bool(missing_knowledge_factor_ids),
+        "recommended_job_type": (
+            "factor_homogeneity_backfill" if missing_knowledge_factor_ids else None
+        ),
+        "homogeneity": homogeneity_integrity,
+    }
+    library["summary"]["factor_knowledge_count"] = len(knowledge_lookup)
+    library["summary"]["factor_knowledge_missing_count"] = len(missing_knowledge_factor_ids)
+    library["summary"]["factor_homogeneity_complete"] = homogeneity_integrity["complete"]
+    library["summary"]["factor_homogeneity_missing_count"] = homogeneity_integrity[
+        "missing_field_count"
+    ]
     for factor in library["factors"]:
         source = task_lookup.get(factor["source_task_id"])
+        knowledge = knowledge_lookup.get(factor["factor_id"])
+        if knowledge:
+            factor["canonical_mechanism"] = knowledge.get("canonical_mechanism")
+            factor["knowledge_tags"] = knowledge.get("tags", [])
+            factor["mechanism_summary"] = knowledge.get("mechanism_summary")
+        else:
+            factor["canonical_mechanism"] = None
+            factor["knowledge_tags"] = []
+            factor["mechanism_summary"] = None
         factor["source_task_name"] = source["name"] if source else factor["source_task_id"]
         factor["source_market"] = source["market"] if source else None
         factor["favorite"] = factor["factor_id"] in favorite_factors
+    library["research_map"] = _factor_research_map(library["factors"])
     library["research_tasks"] = [
         {"task_id": task["task_id"], "name": task["name"], "market": task["market"]}
         for task in task_lookup.values()
@@ -1475,6 +3364,318 @@ async def factor_library(response: Response) -> dict[str, Any]:
         "maximum_factors": int(settings.get("autocombine_default_max_factors", "5")),
     }
     return library
+
+
+system_job_runner.factor_library_builder = _build_factor_library_payload
+
+
+def _factor_research_map(factors: list[dict[str, Any]]) -> dict[str, Any]:
+    mechanism_groups: dict[str, list[dict[str, Any]]] = {}
+    behavior_groups: dict[str, list[dict[str, Any]]] = {}
+    for factor in factors:
+        mechanism = str(
+            factor.get("canonical_mechanism")
+            or factor.get("mechanism_type")
+            or factor.get("category")
+            or "OTHER"
+        )
+        mechanism_groups.setdefault(mechanism, []).append(factor)
+        behavior_id = str(
+            factor.get("behavior_cluster_id") or factor.get("cluster_id") or "PENDING"
+        )
+        behavior_groups.setdefault(behavior_id, []).append(factor)
+    behavior_clusters = [
+        _factor_cluster_profile(cluster_id, members, cluster_type="behavior")
+        for cluster_id, members in behavior_groups.items()
+    ]
+    mechanism_clusters = [
+        _factor_cluster_profile(cluster_id, members, cluster_type="mechanism")
+        for cluster_id, members in mechanism_groups.items()
+    ]
+    annual_heatmap = _factor_annual_heatmap(mechanism_groups)
+    crowded = [
+        cluster
+        for cluster in behavior_clusters
+        if int(cluster["size"]) >= 8 or cluster["redundancy_counts"].get("NEAR_DUPLICATE", 0)
+    ]
+    near_duplicates = []
+    for factor in factors:
+        similarity = _finite_float(
+            factor.get("behavior_nearest_similarity")
+            or (factor.get("metric_summary") or {}).get("homogeneity_nearest_similarity")
+        )
+        if similarity is not None and similarity >= 0.92:
+            near_duplicates.append(
+                {
+                    "factor_id": factor["factor_id"],
+                    "name": factor["name"],
+                    "nearest_factor_id": factor.get("behavior_nearest_factor_id")
+                    or (factor.get("metric_summary") or {}).get("homogeneity_nearest_factor_id"),
+                    "similarity": similarity,
+                    "cluster_id": factor.get("behavior_cluster_id") or factor.get("cluster_id"),
+                }
+            )
+    parameter_families = _factor_parameter_family_profiles(factors)
+    return {
+        "protocol": "AUTOALPHA_FACTOR_RESEARCH_MAP_V2",
+        "research_map_protocol": "AUTOALPHA_FACTOR_RESEARCH_MAP_V2",
+        "factor_count": len(factors),
+        "mechanism_cluster_count": len(mechanism_clusters),
+        "behavior_cluster_count": len(behavior_clusters),
+        "crowded_cluster_count": len(crowded),
+        "near_duplicate_count": len(near_duplicates),
+        "parameter_family_count": len(parameter_families),
+        "mechanism_clusters": sorted(
+            mechanism_clusters, key=lambda item: item["average_score"], reverse=True
+        )[:24],
+        "mechanism_map": sorted(
+            mechanism_clusters, key=lambda item: item["average_score"], reverse=True
+        )[:24],
+        "behavior_clusters": sorted(
+            behavior_clusters, key=lambda item: (item["size"], item["average_score"]), reverse=True
+        )[:32],
+        "crowded_clusters": sorted(
+            crowded, key=lambda item: (item["size"], item["near_duplicate_count"]), reverse=True
+        )[:16],
+        "homogeneity_fold_groups": sorted(
+            behavior_clusters,
+            key=lambda item: (item["size"], item["near_duplicate_count"], item["average_score"]),
+            reverse=True,
+        )[:32],
+        "parameter_families": parameter_families[:24],
+        "annual_heatmap": annual_heatmap,
+        "near_duplicates": sorted(
+            near_duplicates, key=lambda item: item["similarity"], reverse=True
+        )[:24],
+        "map_questions": [
+            "which_return_source",
+            "which_representative_factor",
+            "which_clusters_are_crowded",
+            "which_factors_are_near_duplicates",
+            "which_sources_need_combination_testing",
+        ],
+    }
+
+
+def _factor_parameter_family_profiles(factors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_family: dict[str, list[dict[str, Any]]] = {}
+    for factor in factors:
+        by_family.setdefault(_factor_parameter_family(factor), []).append(factor)
+    profiles = []
+    for family, members in by_family.items():
+        leader = max(members, key=_factor_research_map_score)
+        scores = [_factor_research_map_score(member) for member in members]
+        profiles.append(
+            {
+                "parameter_family": family,
+                "factor_count": len(members),
+                "leader_factor_id": leader["factor_id"],
+                "leader_name": leader["name"],
+                "leader_score": _factor_research_map_score(leader),
+                "average_score": sum(scores) / len(scores) if scores else 0.0,
+                "mechanisms": sorted(
+                    {
+                        str(
+                            member.get("canonical_mechanism")
+                            or member.get("mechanism_type")
+                            or member.get("category")
+                            or "OTHER"
+                        )
+                        for member in members
+                    }
+                )[:8],
+                "behavior_clusters": sorted(
+                    {
+                        str(
+                            member.get("behavior_cluster_id")
+                            or member.get("cluster_id")
+                            or "PENDING"
+                        )
+                        for member in members
+                    }
+                )[:12],
+            }
+        )
+    return sorted(
+        profiles,
+        key=lambda item: (item["factor_count"], item["average_score"]),
+        reverse=True,
+    )
+
+
+def _factor_parameter_family(factor: dict[str, Any]) -> str:
+    values: list[str] = []
+
+    def visit(node: dict[str, Any] | None) -> None:
+        if not isinstance(node, dict):
+            return
+        parameters = node.get("parameters") if isinstance(node.get("parameters"), dict) else {}
+        for key in ("window", "period", "periods", "lookback"):
+            if key in parameters:
+                values.append(f"{key}={parameters[key]}")
+        for child in node.get("arguments", []):
+            visit(child)
+
+    visit(factor.get("expression"))
+    return "|".join(values) if values else "NO_EXPLICIT_LOOKBACK"
+
+
+def _factor_cluster_profile(
+    cluster_id: str,
+    members: list[dict[str, Any]],
+    *,
+    cluster_type: str,
+) -> dict[str, Any]:
+    leader = max(members, key=_factor_research_map_score)
+    redundancy_counts = Counter(
+        str(member.get("behavior_redundancy") or "UNKNOWN") for member in members
+    )
+    lifecycle_counts = Counter(
+        str(member.get("lifecycle_state") or "UNKNOWN") for member in members
+    )
+    mechanism_counts = Counter(
+        str(
+            member.get("canonical_mechanism")
+            or member.get("mechanism_type")
+            or member.get("category")
+            or "OTHER"
+        )
+        for member in members
+    )
+    scores = [_factor_research_map_score(member) for member in members]
+    annual_profile = _average_annual_profiles(
+        [_factor_annual_profile(member) for member in members]
+    )
+    return {
+        "cluster_id": cluster_id,
+        "cluster_type": cluster_type,
+        "size": len(members),
+        "leader_factor_id": leader["factor_id"],
+        "leader_name": leader["name"],
+        "leader_score": _factor_research_map_score(leader),
+        "average_score": sum(scores) / len(scores) if scores else 0.0,
+        "mechanisms": [item for item, _ in mechanism_counts.most_common(5)],
+        "redundancy_counts": dict(redundancy_counts),
+        "lifecycle_counts": dict(lifecycle_counts),
+        "near_duplicate_count": int(redundancy_counts.get("NEAR_DUPLICATE", 0)),
+        "annual_profile": annual_profile,
+        "weak_years": [
+            year for year, value in annual_profile.items() if value is not None and value < 0.0
+        ],
+        "top_factors": [
+            {
+                "factor_id": item["factor_id"],
+                "name": item["name"],
+                "score": _factor_research_map_score(item),
+                "behavior_redundancy": item.get("behavior_redundancy"),
+                "source_task_id": item.get("source_task_id"),
+            }
+            for item in sorted(members, key=_factor_research_map_score, reverse=True)[:6]
+        ],
+    }
+
+
+def _factor_annual_heatmap(
+    mechanism_groups: dict[str, list[dict[str, Any]]]
+) -> dict[str, Any]:
+    rows = []
+    year_set: set[int] = set()
+    for mechanism, members in mechanism_groups.items():
+        profile = _average_annual_profiles(
+            [_factor_annual_profile(member) for member in members]
+        )
+        year_set.update(profile)
+        if not profile:
+            continue
+        values = [value for value in profile.values() if value is not None]
+        rows.append(
+            {
+                "mechanism": mechanism,
+                "factor_count": len(members),
+                "leader_factor_id": max(members, key=_factor_research_map_score)["factor_id"],
+                "annual_returns": profile,
+                "average_annual_return": sum(values) / len(values) if values else None,
+                "weak_years": [
+                    year for year, value in profile.items() if value is not None and value < 0.0
+                ],
+            }
+        )
+    return {
+        "protocol": "AUTOALPHA_FACTOR_ANNUAL_HEATMAP_V1",
+        "years": sorted(year_set),
+        "rows": sorted(
+            rows,
+            key=lambda item: (
+                item["average_annual_return"] is not None,
+                item["average_annual_return"] or -100.0,
+            ),
+            reverse=True,
+        )[:12],
+    }
+
+
+def _factor_annual_profile(factor: dict[str, Any]) -> dict[int, float]:
+    metrics = _factor_metric_source_for_annual_profile(factor)
+    folds = (
+        metrics.get("long_only_walk_forward_folds")
+        or metrics.get("recent_long_only_walk_forward_folds")
+        or []
+    )
+    profile: dict[int, float] = {}
+    for fold in folds:
+        if not isinstance(fold, dict):
+            continue
+        validation_start = str(fold.get("validation_start") or "")
+        annual_return = _finite_float(fold.get("annual_return"))
+        if len(validation_start) < 4 or annual_return is None:
+            continue
+        try:
+            year = int(validation_start[:4])
+        except ValueError:
+            continue
+        profile[year] = annual_return
+    return profile
+
+
+def _factor_metric_source_for_annual_profile(factor: dict[str, Any]) -> dict[str, Any]:
+    for key in ("metric_summary", "historical_metric_summary", "metrics"):
+        metrics = factor.get(key)
+        if not isinstance(metrics, dict):
+            continue
+        if metrics.get("long_only_walk_forward_folds") or metrics.get(
+            "recent_long_only_walk_forward_folds"
+        ):
+            return metrics
+    return {}
+
+
+def _average_annual_profiles(profiles: list[dict[int, float]]) -> dict[int, float]:
+    values_by_year: dict[int, list[float]] = {}
+    for profile in profiles:
+        for year, value in profile.items():
+            values_by_year.setdefault(year, []).append(value)
+    return {
+        year: sum(values) / len(values)
+        for year, values in sorted(values_by_year.items())
+        if values
+    }
+
+
+def _factor_research_map_score(factor: dict[str, Any]) -> float:
+    for key in ("recent_long_only_overall", "long_only_overall"):
+        value = ((factor.get("ranking_values") or {}).get(key))
+        parsed = _finite_float(value)
+        if parsed is not None:
+            return parsed
+    return _finite_float((factor.get("scores") or {}).get("long_only_overall")) or 0.0
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed == parsed and abs(parsed) != float("inf") else None
 
 
 @app.post("/api/autocombine/quick-task", dependencies=[Depends(_authorized)])
@@ -2374,15 +4575,72 @@ async def update_data_center_settings(payload: DataCenterSettingsRequest) -> dic
 
 @app.post("/api/data-sync/start", dependencies=[Depends(_authorized)])
 async def start_data_sync(payload: DataSyncRequest) -> dict[str, Any]:
+    if payload.run_now:
+        try:
+            return await data_sync_worker.start(
+                trigger="manual",
+                dataset_ids=payload.dataset_ids,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+            )
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+    if data_sync_worker.alive:
+        raise HTTPException(status_code=409, detail="A market-data sync is already running")
+    if not data_sync_worker.token_configured():
+        raise HTTPException(status_code=409, detail="Tushare Token is not configured")
+    existing = _existing_system_job_by_type(
+        "market_data_sync",
+        queue=payload.queue,
+        statuses=("QUEUED", "RUNNING", "PAUSED", "PAUSE_REQUESTED", "CANCEL_REQUESTED"),
+    )
+    if existing is not None:
+        return {
+            "mode": "queued",
+            "deduplicated": True,
+            "message": "Market data sync is already queued or running.",
+            "job": existing,
+            "sync": data_sync_worker.status(),
+        }
     try:
-        return await data_sync_worker.start(
-            trigger="manual",
-            dataset_ids=payload.dataset_ids,
-            start_date=payload.start_date,
-            end_date=payload.end_date,
+        job = store.enqueue_system_job(
+            job_id=f"job-market-data-sync-{uuid.uuid4().hex[:8]}",
+            queue=payload.queue,
+            job_type="market_data_sync",
+            payload={
+                "trigger": "manual",
+                "dataset_ids": payload.dataset_ids,
+                "start_date": payload.start_date.isoformat() if payload.start_date else None,
+                "end_date": payload.end_date.isoformat() if payload.end_date else None,
+            },
+            priority=payload.priority,
+            resource_group="market-data-sync",
+            max_workers=1,
+            progress_total=1,
+            max_attempts=2,
         )
-    except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    store.append_event(
+        "action",
+        "MARKET_DATA_SYNC_QUEUED",
+        "市场数据同步已进入 Job Center",
+        f"{job['job_id']} · market_data_sync 已排队，资源组 market-data-sync。",
+        payload={
+            "job_id": job["job_id"],
+            "queue": payload.queue,
+            "dataset_ids": payload.dataset_ids,
+            "start_date": payload.start_date.isoformat() if payload.start_date else None,
+            "end_date": payload.end_date.isoformat() if payload.end_date else None,
+        },
+    )
+    return {
+        "mode": "queued",
+        "deduplicated": False,
+        "message": "Market data sync queued in Job Center.",
+        "job": job,
+        "sync": data_sync_worker.status(),
+    }
 
 
 @app.post("/api/logs/manual", dependencies=[Depends(_authorized)])

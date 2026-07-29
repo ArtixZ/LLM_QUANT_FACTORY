@@ -5,6 +5,7 @@ import hashlib
 import math
 import time
 import uuid
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,8 @@ from autoalpha.service.store import ServiceStore
 DEFAULT_ENGINE = {
     "mode": "ENSEMBLE",
     "cluster_correlation_threshold": 0.78,
+    "strategy_reference_limit": 25,
+    "strategy_reference_minimum_observations": 120,
     "minimum_stability_score": -2.0,
     "sffs_beam_width": 3,
     "evolution_population": 12,
@@ -186,6 +189,7 @@ def _objective_vector(metrics: dict[str, Any]) -> list[float]:
         _metric(metrics, "portfolio_walk_forward_worst_sharpe", default=-100),
         -_metric(metrics, "portfolio_annual_turnover", default=1_000),
         -_metric(metrics, "portfolio_max_factor_correlation", default=1),
+        -_metric(metrics, "portfolio_max_strategy_active_correlation", default=1),
         _metric(metrics, "portfolio_effective_factor_bets", default=1),
         _metric(metrics, "portfolio_effective_mechanisms", default=1),
     ]
@@ -215,11 +219,70 @@ def _bounded_simplex(values: np.ndarray, minimum: float, maximum: float) -> np.n
     return result
 
 
+def _homogeneity_limit_ok(
+    factor_ids: tuple[str, ...],
+    records: dict[str, dict[str, Any]],
+    construction: dict[str, Any],
+) -> bool:
+    return _homogeneity_limit_violation(factor_ids, records, construction) is None
+
+
+def _homogeneity_limit_violation(
+    factor_ids: tuple[str, ...],
+    records: dict[str, dict[str, Any]],
+    construction: dict[str, Any],
+) -> dict[str, Any] | None:
+    maximum_family = int(construction.get("maximum_same_family", 2))
+    maximum_cluster = int(construction.get("maximum_same_semantic_cluster", 1))
+    maximum_parameter_family = int(construction.get("maximum_same_parameter_family", 1))
+    mechanisms = {
+        factor_id: str(records[factor_id].get("mechanism") or records[factor_id].get("family"))
+        for factor_id in factor_ids
+    }
+    search_clusters = {
+        factor_id: str(
+            records[factor_id].get("search_cluster_id")
+            or records[factor_id].get("semantic_cluster_id")
+            or factor_id
+        )
+        for factor_id in factor_ids
+    }
+    parameter_families = {
+        factor_id: str(records[factor_id].get("parameter_family") or "NO_EXPLICIT_LOOKBACK")
+        for factor_id in factor_ids
+        if str(records[factor_id].get("parameter_family") or "NO_EXPLICIT_LOOKBACK")
+        != "NO_EXPLICIT_LOOKBACK"
+    }
+    for dimension, labels, maximum in (
+        ("mechanism", mechanisms, maximum_family),
+        ("search_cluster", search_clusters, maximum_cluster),
+        ("parameter_family", parameter_families, maximum_parameter_family),
+    ):
+        label_counts = Counter(labels.values())
+        crowded = {
+            label: count for label, count in label_counts.items() if count > max(0, maximum)
+        }
+        if crowded:
+            return {
+                "reason": "HOMOGENEITY_DIVERSIFICATION_CONSTRAINT",
+                "dimension": dimension,
+                "maximum_allowed": maximum,
+                "crowded_labels": crowded,
+                "factor_ids": list(factor_ids),
+            }
+    return None
+
+
 def pareto_ranks(candidates: list[dict[str, Any]]) -> dict[int, tuple[int, float]]:
     if not candidates:
         return {}
     ids = [int(item["id"]) for item in candidates]
-    vectors = {int(item["id"]): list(item["objectives"]) for item in candidates}
+    raw_vectors = {int(item["id"]): list(item["objectives"]) for item in candidates}
+    width = max((len(value) for value in raw_vectors.values()), default=0)
+    vectors = {
+        candidate_id: [*value, *([0.0] * (width - len(value)))]
+        for candidate_id, value in raw_vectors.items()
+    }
     dominates: dict[int, list[int]] = {candidate_id: [] for candidate_id in ids}
     dominated_count = {candidate_id: 0 for candidate_id in ids}
     fronts: list[list[int]] = [[]]
@@ -480,6 +543,12 @@ class QuantCombineWorker:
         screen_by_id = {item["factor_id"]: item for item in ordered}
 
         def is_similar(left_id: str, right_id: str) -> bool:
+            search_id = records[left_id].get("search_cluster_id")
+            same_search_cluster = bool(
+                search_id and search_id == records[right_id].get("search_cluster_id")
+            )
+            if same_search_cluster:
+                return True
             semantic_id = records[left_id].get("semantic_cluster_id")
             same_semantic = bool(
                 semantic_id and semantic_id == records[right_id].get("semantic_cluster_id")
@@ -600,7 +669,11 @@ class QuantCombineWorker:
             )
             if seed_candidate is None:
                 raise
+        except _CandidateEvaluationRejected:
+            seed_candidate = None
         beam = [seed_candidate]
+        if seed_candidate is None:
+            beam = []
         width = int(task["engine"]["sffs_beam_width"])
         while beam and max(len(item["factor_ids"]) for item in beam) < maximum:
             expanded: list[dict[str, Any]] = []
@@ -624,6 +697,8 @@ class QuantCombineWorker:
                             )
                         )
                     except _DuplicateCandidate:
+                        continue
+                    except _CandidateEvaluationRejected:
                         continue
             if not expanded:
                 break
@@ -652,6 +727,8 @@ class QuantCombineWorker:
                             )
                         )
                     except _DuplicateCandidate:
+                        continue
+                    except _CandidateEvaluationRejected:
                         continue
                 if removals:
                     best_removal = max(removals, key=_candidate_key)
@@ -709,6 +786,7 @@ class QuantCombineWorker:
                 if len({item[0] for item in proposals}) >= population_size:
                     break
             evaluated = 0
+            rejected = 0
             for subset, parent_ids, action in proposals:
                 if evaluated >= population_size:
                     break
@@ -727,14 +805,21 @@ class QuantCombineWorker:
                     evaluated += 1
                 except _DuplicateCandidate:
                     continue
+                except _CandidateEvaluationRejected:
+                    rejected += 1
+                    continue
             self._refresh_pareto()
             self.quant_store.event(
                 self.task_id,
                 "research",
                 "NSGA2_GENERATION_COMPLETED",
                 f"NSGA-II 第 {generation + 1} 代",
-                f"新增 {evaluated} 个可审计组合。",
-                payload={"generation": generation + 1, "evaluated": evaluated},
+                f"新增 {evaluated} 个可审计组合，跳过 {rejected} 个不可评估候选。",
+                payload={
+                    "generation": generation + 1,
+                    "evaluated": evaluated,
+                    "candidate_level_rejected": rejected,
+                },
             )
 
     def _run_adaptive(
@@ -796,6 +881,8 @@ class QuantCombineWorker:
                 )
             except _DuplicateCandidate:
                 continue
+            except _CandidateEvaluationRejected:
+                continue
             if trial % 4 == 3:
                 self._refresh_pareto()
 
@@ -818,17 +905,57 @@ class QuantCombineWorker:
             raise _DuplicateCandidate
         task = self._require_task()
         records = {item["factor_id"]: item for item in task["factor_snapshot"]}
+        homogeneity_violation = _homogeneity_limit_violation(
+            factor_ids, records, task["construction"]
+        )
+        if homogeneity_violation is not None:
+            self.quant_store.event(
+                self.task_id,
+                "audit",
+                "QUANT_HOMOGENEITY_CANDIDATE_REJECTED",
+                "同质候选已跳过",
+                (
+                    f"{homogeneity_violation['dimension']} 超过上限 "
+                    f"{homogeneity_violation['maximum_allowed']}"
+                ),
+                level="WARN",
+                payload=homogeneity_violation,
+            )
+            raise _CandidateEvaluationRejected(
+                f"HOMOGENEITY_DIVERSIFICATION_CONSTRAINT:{homogeneity_violation['dimension']}"
+            )
         factors = [factor_from_pool_record(records[value]) for value in factor_ids]
         started = time.monotonic()
         best: (
             tuple[tuple[float, ...], tuple[float, ...], Any, dict[str, Any], list[str], float]
             | None
         ) = None
+        rejected_reasons: list[str] = []
         for weights in self._weight_candidates(factor_ids):
             self._check_budget()
             if evaluation_limit is not None and self._evaluation_limit_reached(evaluation_limit):
                 break
-            evaluation = evaluator.evaluate_portfolio(factors, weights=weights)
+            try:
+                evaluation = evaluator.evaluate_portfolio(factors, weights=weights)
+            except (ValueError, FloatingPointError, ArithmeticError) as error:
+                reason = _recoverable_evaluation_failure_reason(error)
+                if reason is None:
+                    raise
+                rejected_reasons.append(reason)
+                self.quant_store.event(
+                    self.task_id,
+                    "audit",
+                    "QUANT_WEIGHT_CANDIDATE_REJECTED",
+                    "权重候选评估失败，已作为候选级问题跳过",
+                    f"{reason}: {error}",
+                    level="WARN",
+                    payload={
+                        "factor_ids": list(factor_ids),
+                        "weights": list(weights),
+                        "failure_class": reason,
+                    },
+                )
+                continue
             self._increment_evaluations()
             metrics = dict(evaluation.metrics)
             metrics.update(mechanism_independence_metrics(records, list(factor_ids), list(weights)))
@@ -843,6 +970,10 @@ class QuantCombineWorker:
             if best is None or rank > best[0]:
                 best = (rank, weights, evaluation, metrics, failures, score)
         if best is None:
+            if rejected_reasons:
+                raise _CandidateEvaluationRejected(
+                    f"All weight candidates rejected: {sorted(set(rejected_reasons))}"
+                )
             raise _BudgetExhausted
         _, weights, evaluation, metrics, failures, score = best
         candidate_hash = canonical_hash(sorted(factor_ids))
@@ -993,7 +1124,22 @@ class QuantCombineWorker:
     def _strategy_independence_metrics(self, active_returns: pd.Series) -> dict[str, Any]:
         maximum = 0.0
         nearest: str | None = None
-        references: list[tuple[str, str]] = []
+        nearest_kind: str | None = None
+        nearest_observations = 0
+        nearest_spearman = 0.0
+        comparisons_detail: list[dict[str, Any]] = []
+        task = self._require_task()
+        minimum_observations = int(
+            task["engine"].get("strategy_reference_minimum_observations", 120)
+        )
+        references: list[tuple[str, str, str]] = []
+        for candidate in self.quant_store.best_candidate_references(
+            exclude_task_id=self.task_id,
+            limit=int(task["engine"].get("strategy_reference_limit", 25)),
+        ):
+            path = candidate.get("return_artifact_path")
+            if path:
+                references.append((str(candidate["task_id"]), "QUANT_TASK_BEST", path))
         for strategy in self.quant_store.strategies():
             path = (
                 strategy["specification"]
@@ -1001,7 +1147,7 @@ class QuantCombineWorker:
                 .get("quantcombine_return_artifact_path")
             )
             if path:
-                references.append((strategy["strategy_id"], path))
+                references.append((strategy["strategy_id"], "QUANT_STRATEGY", path))
         for strategy in self._auto_store.strategies():
             path = (
                 strategy["specification"]
@@ -1009,22 +1155,48 @@ class QuantCombineWorker:
                 .get("autocombine_return_artifact_path")
             )
             if path:
-                references.append((strategy["strategy_id"], path))
+                references.append((strategy["strategy_id"], "AUTOCOMBINE_STRATEGY", path))
         comparisons = 0
-        for strategy_id, path in references:
+        seen: set[tuple[str, str]] = set()
+        for strategy_id, reference_kind, path in references:
+            key = (strategy_id, path)
+            if key in seen:
+                continue
+            seen.add(key)
             if not Path(path).is_file():
                 continue
             comparison = return_independence(
                 active_returns, load_return_artifact(path)["active_return"]
             )
+            if int(comparison["observations"]) < minimum_observations:
+                continue
             comparisons += 1
             correlation = abs(float(comparison["pearson"]))
+            detail = {
+                "reference_id": strategy_id,
+                "reference_kind": reference_kind,
+                "pearson": float(comparison["pearson"]),
+                "spearman": float(comparison["spearman"]),
+                "absolute_pearson": correlation,
+                "observations": int(comparison["observations"]),
+            }
+            comparisons_detail.append(detail)
             if correlation > maximum:
                 maximum, nearest = correlation, strategy_id
+                nearest_kind = reference_kind
+                nearest_observations = int(comparison["observations"])
+                nearest_spearman = float(comparison["spearman"])
+        comparisons_detail.sort(key=lambda item: item["absolute_pearson"], reverse=True)
         return {
             "portfolio_max_strategy_active_correlation": maximum,
             "portfolio_nearest_strategy_id": nearest,
+            "portfolio_nearest_strategy_kind": nearest_kind,
+            "portfolio_nearest_strategy_observations": nearest_observations,
+            "portfolio_nearest_strategy_spearman": nearest_spearman,
             "portfolio_strategy_independence_comparisons": comparisons,
+            "portfolio_strategy_correlation_top": comparisons_detail[:5],
+            "portfolio_strategy_reference_scope": "QUANT_TASK_BEST_AND_STRATEGY_V1",
+            "portfolio_strategy_reference_minimum_observations": minimum_observations,
         }
 
     def _update_leaders(self, candidate: dict[str, Any]) -> None:
@@ -1260,5 +1432,31 @@ class _BudgetExhausted(Exception):
     pass
 
 
+class _CandidateEvaluationRejected(Exception):
+    pass
+
+
 class _DuplicateCandidate(Exception):
     pass
+
+
+def _recoverable_evaluation_failure_reason(error: Exception) -> str | None:
+    message = str(error).lower()
+    markers = {
+        "non-finite": "NON_FINITE_METRICS",
+        "not finite": "NON_FINITE_METRICS",
+        "nan": "NON_FINITE_METRICS",
+        "inf": "NON_FINITE_METRICS",
+        "insufficient coverage": "INSUFFICIENT_COVERAGE",
+        "coverage": "INSUFFICIENT_COVERAGE",
+        "no dates fall inside": "NO_PUBLIC_VALIDATION_DATES",
+        "walk-forward folds": "INSUFFICIENT_WALK_FORWARD_FOLDS",
+        "no target securities": "EMPTY_PORTFOLIO_SELECTION",
+        "a portfolio requires at least one factor": "EMPTY_PORTFOLIO_SELECTION",
+    }
+    if "database" in message or "locked" in message or "no parquet" in message:
+        return None
+    for marker, reason in markers.items():
+        if marker in message:
+            return reason
+    return None

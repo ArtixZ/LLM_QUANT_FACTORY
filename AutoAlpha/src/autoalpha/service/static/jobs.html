@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoAlpha 作业中心</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/platform_header.css?v=20260718-v2">
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity"><h1>AutoAlpha 作业中心</h1><p id="jobSummary">统一队列、资源配额、租约和恢复状态</p></div>
+    <div class="header-actions">
+      <nav class="app-nav" aria-label="研究工作台"></nav>
+      <span class="state-pill small" id="schedulerState">CHECKING</span>
+    </div>
+  </header>
+  <script src="/static/platform_header.js?v=20260729-jobs-v1"></script>
+
+  <main class="page-shell">
+    <section class="metric-grid">
+      <div class="metric-card"><span>调度器</span><strong id="schedulerStatus">--</strong><small id="schedulerDetail">--</small></div>
+      <div class="metric-card"><span>队列作业</span><strong id="queuedJobs">--</strong><small>等待领取</small></div>
+      <div class="metric-card"><span>运行作业</span><strong id="runningJobs">--</strong><small>持有租约</small></div>
+      <div class="metric-card"><span>失败作业</span><strong id="failedJobs">--</strong><small>需要复核</small></div>
+      <div class="metric-card"><span>资源组</span><strong id="resourceGroups">--</strong><small>互斥和并发边界</small></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>作业控制</h2><p id="resourcePolicy">--</p></div>
+        <div class="button-row">
+          <button class="button" id="refreshJobs" type="button"><i data-lucide="refresh-cw"></i>刷新</button>
+          <button class="button" id="recoverJobs" type="button"><i data-lucide="rotate-ccw"></i>恢复过期租约</button>
+          <button class="button primary" id="runNextJob" type="button"><i data-lucide="play"></i>运行下一项</button>
+        </div>
+      </div>
+      <form id="jobForm" class="settings-grid">
+        <label>队列<input id="jobQueue" value="system" required></label>
+        <label>作业类型<select id="jobType"></select></label>
+        <label>资源组<input id="resourceGroup" value="sqlite-writer" required></label>
+        <label>优先级<input id="jobPriority" type="number" min="0" max="10000" value="80"></label>
+        <label>最大并发<input id="jobMaxWorkers" type="number" min="1" max="128" value="1"></label>
+        <label>最大尝试<input id="jobMaxAttempts" type="number" min="1" max="20" value="3"></label>
+        <label>运行下一项队列限额<input id="runMaxQueue" type="number" min="1" max="256" placeholder="可选"></label>
+        <label>运行下一项全局限额<input id="runMaxGlobal" type="number" min="1" max="512" placeholder="可选"></label>
+        <label class="wide">Payload JSON<textarea id="jobPayload" rows="4">{}</textarea></label>
+        <button class="button primary" type="submit"><i data-lucide="plus"></i>入队作业</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>资源配额矩阵</h2><p id="resourceMatrixSummary">--</p></div>
+      </div>
+      <div id="resourceMatrix" class="resource-matrix"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>关键快照</h2><p id="snapshotPolicySummary">--</p></div>
+      </div>
+      <div id="snapshotPolicyRows" class="resource-matrix"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>作业表</h2><p id="jobTableSummary">--</p></div>
+        <div class="button-row">
+          <label>状态<select id="statusFilter"><option value="">全部</option><option>QUEUED</option><option>RUNNING</option><option>PAUSED</option><option>PAUSE_REQUESTED</option><option>CANCEL_REQUESTED</option><option>CANCELLED</option><option>COMPLETED</option><option>FAILED</option><option>BLOCKED_UNSUPPORTED</option></select></label>
+          <label>队列<input id="queueFilter" placeholder="system"></label>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>作业</th><th>类型</th><th>状态</th><th>队列 / 资源</th><th>进度</th><th>租约</th><th>错误 / 结果</th><th>操作</th><th>更新时间</th></tr></thead>
+          <tbody id="jobRows"></tbody>
+        </table>
+      </div>
+      <div class="job-log-panel" id="jobLogPanel" hidden>
+        <div class="panel-header compact">
+          <div><h3 id="jobLogTitle">作业日志</h3><p id="jobLogSubtitle">--</p></div>
+          <button class="button tiny" id="closeJobLog" type="button"><i data-lucide="x"></i>关闭</button>
+        </div>
+        <div id="jobLogRows" class="job-log-rows"></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" role="status"></div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/static/jobs.js?v=20260729-jobs-v1"></script>
+</body>
+</html>

@@ -13,6 +13,24 @@ It provides raw and adjusted OHLC prices, volume, amount, returns, observation h
 validity, activity, and a generic tradable-observation flag. This is sufficient for provisional
 price/volume factor development when signals are delayed to the next trading session.
 
+## Platform Capability Levels
+
+The service exposes the same module-level decision through `/ready` and `/api/data-center` under
+`AUTOALPHA_DATA_CAPABILITY_MATRIX_V1`. Operators should treat these labels as policy, not as
+decorative UI state:
+
+| Level | Allowed use | Production meaning |
+|---|---|---|
+| `RESEARCH_READY` | AutoAlpha factor research and close-of-day screening | Research only; no execution claim |
+| `PROXY_BACKTEST_READY` | Manual and batch A-share long-only proxy backtests | Non-PIT evidence only; reconcile vector and event engines |
+| `PROXY_PAPER_READY` | Paper trading with next-session open proxy, T+1 and fees | Operational rehearsal only; still blocked from production |
+| `PRODUCTION_BLOCKED` | Strict capital ledger and production candidate promotion | Missing PIT market state or source lineage |
+| `STRICT_PIT_READY` | Strict capital ledger and production promotion gates | Requires versioned PIT state, eligibility, limits and classifications |
+
+The current local data basis is expected to be `RESEARCH_READY` plus non-PIT proxy levels where raw
+execution prices are available. It must remain `PRODUCTION_BLOCKED` until the blockers below are
+removed from versioned source tables.
+
 ## Production blockers
 
 - No source `knowledge_time`, ingestion batch, or revision history.

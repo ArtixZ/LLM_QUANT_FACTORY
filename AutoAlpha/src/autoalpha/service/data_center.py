@@ -45,6 +45,11 @@ def build_data_center_snapshot(
         "workspace": workspace,
         "workspace_error": workspace_error,
         "execution_basis": execution_basis,
+        "capability_matrix": build_data_capability_matrix(
+            workspace=workspace,
+            execution_basis=execution_basis,
+            workspace_error=workspace_error,
+        ),
         "downloader": downloader,
         "data_products": products,
         "credentials": {"tushare_token_configured": token_configured},
@@ -62,6 +67,198 @@ def build_data_center_snapshot(
             or str(event.get("event", "")) == "DATA_CENTER_SETTINGS_UPDATED"
         ][:20],
     }
+
+
+def build_data_capability_matrix(
+    *,
+    workspace: Mapping[str, Any] | None,
+    execution_basis: Mapping[str, Any] | None,
+    workspace_error: str | None = None,
+) -> dict[str, Any]:
+    """Describe which platform modules may use the current data basis."""
+    workspace_blockers = _workspace_blockers(workspace, workspace_error)
+    research_ready = (
+        bool(workspace and workspace.get("price_research_ready")) and not workspace_error
+    )
+    proxy_ready = bool(execution_basis and execution_basis.get("capital_ledger_proxy_ready"))
+    strict_pit_ready = bool(
+        workspace
+        and workspace.get("institutional_pit_ready")
+        and execution_basis
+        and execution_basis.get("capital_ledger_ready")
+    )
+    proxy_blockers = _basis_messages(execution_basis, "proxy_blockers")
+    strict_blockers = _basis_messages(execution_basis, "blockers")
+    if workspace_error:
+        proxy_blockers = [workspace_error, *proxy_blockers]
+        strict_blockers = [workspace_error, *strict_blockers]
+    if not workspace or not workspace.get("institutional_pit_ready"):
+        strict_blockers = [
+            "missing point-in-time institutional market-state workspace",
+            *strict_blockers,
+        ]
+    rows = [
+        _capability_row(
+            module_id="auto_research",
+            label="自动因子研究",
+            level="RESEARCH_READY" if research_ready else "BLOCKED",
+            allowed=research_ready,
+            data_mode="FORWARD_ADJUSTED_RESEARCH_PANEL",
+            summary=(
+                "可使用前复权研究价格、成交量与扩展研究字段构造截面因子。"
+                if research_ready
+                else "研究面板缺少必要价格或活动字段。"
+            ),
+            blockers=workspace_blockers if not research_ready else [],
+        ),
+        _capability_row(
+            module_id="screener",
+            label="收盘后选股器",
+            level="RESEARCH_READY" if research_ready else "BLOCKED",
+            allowed=research_ready,
+            data_mode="EOD_SIGNAL_ONLY",
+            summary=(
+                "可在最新收盘截面生成候选股票；不代表次日一定可成交。"
+                if research_ready
+                else "选股器需要完整研究面板。"
+            ),
+            blockers=workspace_blockers if not research_ready else [],
+        ),
+        _capability_row(
+            module_id="manual_backtest_proxy",
+            label="手动回测 · 非 PIT 代理",
+            level="PROXY_BACKTEST_READY" if proxy_ready else "BLOCKED",
+            allowed=proxy_ready,
+            data_mode="NON_PIT_PROXY_NEXT_OPEN_LEDGER",
+            summary=(
+                "可使用未复权开盘价、整手、费用和开盘可买卖代理做研究级现金账本。"
+                if proxy_ready
+                else "缺少未复权执行价格或开盘可交易代理字段。"
+            ),
+            blockers=proxy_blockers if not proxy_ready else [],
+            caveats=["non-PIT proxy is research and paper trading only"],
+        ),
+        _capability_row(
+            module_id="batch_backtest_proxy",
+            label="批量回测 · 非 PIT 代理",
+            level="PROXY_BACKTEST_READY" if proxy_ready else "BLOCKED",
+            allowed=proxy_ready,
+            data_mode="NON_PIT_PROXY_VECTOR_OR_EVENT_LEDGER",
+            summary=(
+                "可批量评估因子和组合，但不能宣称真实生产现金账本。"
+                if proxy_ready
+                else "批量现金代理回测需要完整执行代理字段。"
+            ),
+            blockers=proxy_blockers if not proxy_ready else [],
+            caveats=["vector engine results must be reconciled against event ledger"],
+        ),
+        _capability_row(
+            module_id="paper_trading",
+            label="模拟交易",
+            level="PROXY_PAPER_READY" if proxy_ready else "BLOCKED",
+            allowed=proxy_ready,
+            data_mode="NEXT_SESSION_OPEN_PROXY_T_PLUS_1",
+            summary=(
+                "可做次日开盘代理成交、T+1、费用和交割单级模拟组合。"
+                if proxy_ready
+                else "模拟交易需要开盘执行代理与可买卖状态。"
+            ),
+            blockers=proxy_blockers if not proxy_ready else [],
+            caveats=["strict production promotion still requires PIT market state"],
+        ),
+        _capability_row(
+            module_id="strict_capital_ledger",
+            label="真实现金账本 / 生产候选",
+            level="STRICT_PIT_READY" if strict_pit_ready else "PRODUCTION_BLOCKED",
+            allowed=strict_pit_ready,
+            data_mode="STRICT_POINT_IN_TIME_CAPITAL_LEDGER",
+            summary=(
+                "PIT 市场状态、上市退市、ST、停复牌和涨跌停约束已满足。"
+                if strict_pit_ready
+                else "不能宣称生产可交易；需要补齐 PIT 市场状态和版本化基础数据。"
+            ),
+            blockers=strict_blockers if not strict_pit_ready else [],
+            required_fields=[
+                "listing_date",
+                "delisting_date",
+                "is_st",
+                "is_suspended",
+                "limit_up",
+                "limit_down",
+                "can_buy_open",
+                "can_sell_open",
+                "industry_code",
+                "index_membership",
+                "free_float_market_cap",
+            ],
+        ),
+    ]
+    levels = {str(row["level"]): 0 for row in rows}
+    for row in rows:
+        levels[str(row["level"])] += 1
+    return {
+        "protocol": "AUTOALPHA_DATA_CAPABILITY_MATRIX_V1",
+        "production_policy": (
+            "research and paper trading may use NON_PIT_PROXY; production requires STRICT_PIT"
+        ),
+        "summary": {
+            "research_ready": research_ready,
+            "non_pit_proxy_ready": proxy_ready,
+            "strict_pit_ready": strict_pit_ready,
+            "production_allowed": strict_pit_ready,
+            "levels": levels,
+        },
+        "rows": rows,
+    }
+
+
+def _capability_row(
+    *,
+    module_id: str,
+    label: str,
+    level: str,
+    allowed: bool,
+    data_mode: str,
+    summary: str,
+    blockers: Sequence[str] | None = None,
+    caveats: Sequence[str] | None = None,
+    required_fields: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "module_id": module_id,
+        "label": label,
+        "level": level,
+        "allowed": allowed,
+        "data_mode": data_mode,
+        "summary": summary,
+        "blockers": list(dict.fromkeys(str(item) for item in blockers or [] if item)),
+        "caveats": list(dict.fromkeys(str(item) for item in caveats or [] if item)),
+        "required_fields": list(required_fields or []),
+    }
+
+
+def _workspace_blockers(
+    workspace: Mapping[str, Any] | None,
+    workspace_error: str | None,
+) -> list[str]:
+    if workspace_error:
+        return [workspace_error]
+    if not workspace:
+        return ["data workspace is unavailable"]
+    blockers = [str(item) for item in workspace.get("blockers", [])]
+    warnings = [str(item) for item in workspace.get("warnings", [])]
+    if not workspace.get("price_research_ready"):
+        return list(dict.fromkeys([*blockers, *warnings, "price research panel is not ready"]))
+    return list(dict.fromkeys([*blockers, *warnings]))
+
+
+def _basis_messages(
+    execution_basis: Mapping[str, Any] | None,
+    key: str,
+) -> list[str]:
+    if not execution_basis:
+        return ["execution basis is unavailable"]
+    return [str(item) for item in execution_basis.get(key, [])]
 
 
 def inspect_data_products(

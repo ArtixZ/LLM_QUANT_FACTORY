@@ -6,7 +6,10 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Any
 
-from autoalpha.service.autocombine_intelligence import enrich_factor_record
+from autoalpha.service.autocombine_intelligence import (
+    enrich_factor_record,
+    factor_snapshot_homogeneity_summary,
+)
 from autoalpha.service.store import ServiceStore
 
 
@@ -238,11 +241,16 @@ class AutoCombineStore:
         for key in ("protocol", "scope", "construction", "objective", "budget", "factor_snapshot"):
             item[key] = json.loads(item.pop(f"{key}_json"))
         item["factor_snapshot"] = [
-            record if record.get("mechanism_fingerprint") else enrich_factor_record(record)
+            record
+            if record.get("mechanism_fingerprint") and record.get("search_cluster_id")
+            else enrich_factor_record(record)
             for record in item["factor_snapshot"]
         ]
         item["stop_requested"] = bool(item["stop_requested"])
         item["factor_count"] = len(item["factor_snapshot"])
+        item["homogeneity_summary"] = factor_snapshot_homogeneity_summary(
+            item["factor_snapshot"]
+        )
         return item
 
     def update_task(self, task_id: str, **values: Any) -> dict[str, Any]:

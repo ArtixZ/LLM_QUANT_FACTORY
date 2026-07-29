@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from autoalpha.service.mechanism import normalize_mechanism
+
 NORMALIZATION_OPERATORS = {
     "cs_rank",
     "cs_zscore",
@@ -74,17 +76,72 @@ def enrich_factor_record(record: dict[str, Any]) -> dict[str, Any]:
     fingerprint = mechanism_fingerprint(
         expression, mechanism, expected_direction=int(proposal.get("expected_direction", 1))
     )
+    semantic_cluster_id = f"SC_{fingerprint[:10]}"
+    behavior_cluster_id = _clean_optional_identifier(result.get("behavior_cluster_id"))
     result.update(
         {
             "mechanism": mechanism,
             "mechanism_fingerprint": fingerprint,
-            "semantic_cluster_id": f"SC_{fingerprint[:10]}",
+            "semantic_cluster_id": semantic_cluster_id,
+            "behavior_cluster_id": behavior_cluster_id,
+            "search_cluster_id": behavior_cluster_id or semantic_cluster_id,
             "expression_fields": fields,
             "expression_windows": windows,
             "expression_summary": expression_summary(expression),
         }
     )
     return result
+
+
+def factor_snapshot_homogeneity_summary(snapshot: list[dict[str, Any]]) -> dict[str, Any]:
+    factor_count = len(snapshot)
+    behavior_clusters = {
+        str(item.get("behavior_cluster_id"))
+        for item in snapshot
+        if item.get("behavior_cluster_id")
+    }
+    semantic_clusters = {
+        str(item.get("semantic_cluster_id"))
+        for item in snapshot
+        if item.get("semantic_cluster_id")
+    }
+    search_clusters = {
+        str(item.get("search_cluster_id") or item.get("semantic_cluster_id"))
+        for item in snapshot
+        if item.get("search_cluster_id") or item.get("semantic_cluster_id")
+    }
+    crowded_search_clusters: dict[str, int] = {}
+    for item in snapshot:
+        cluster_id = str(item.get("search_cluster_id") or item.get("semantic_cluster_id") or "")
+        if not cluster_id:
+            continue
+        crowded_search_clusters[cluster_id] = crowded_search_clusters.get(cluster_id, 0) + 1
+    crowded_search_clusters = {
+        cluster_id: count
+        for cluster_id, count in sorted(
+            crowded_search_clusters.items(), key=lambda value: (-value[1], value[0])
+        )
+        if count > 1
+    }
+    return {
+        "protocol": "AUTOCOMBINE_FACTOR_SNAPSHOT_HOMOGENEITY_SUMMARY_V1",
+        "factor_count": factor_count,
+        "behavior_cluster_count": len(behavior_clusters),
+        "semantic_cluster_count": len(semantic_clusters),
+        "search_cluster_count": len(search_clusters),
+        "behavior_cluster_coverage": (
+            round(sum(1 for item in snapshot if item.get("behavior_cluster_id")) / factor_count, 6)
+            if factor_count
+            else 1.0
+        ),
+        "search_space_compression_ratio": (
+            round(len(search_clusters) / factor_count, 6) if factor_count else 1.0
+        ),
+        "duplicate_search_cluster_factor_count": sum(
+            max(0, count - 1) for count in crowded_search_clusters.values()
+        ),
+        "crowded_search_clusters": dict(list(crowded_search_clusters.items())[:12]),
+    }
 
 
 def expression_fields(expression: dict[str, Any]) -> set[str]:
@@ -113,29 +170,32 @@ def expression_windows(expression: dict[str, Any]) -> set[int]:
 
 
 def normalized_mechanism(proposal: dict[str, Any], fields: list[str]) -> str:
+    explicit = normalize_mechanism(proposal.get("canonical_mechanism"), default="")
+    if explicit:
+        return explicit
     field_set = set(fields)
     text = " ".join(
         str(proposal.get(key, "")) for key in ("name", "family", "hypothesis")
     ).casefold()
     if field_set & ORDER_FLOW_FIELDS:
-        return "ORDER_FLOW"
+        return normalize_mechanism("ORDER_FLOW")
     if field_set & QUALITY_FIELDS:
-        return "QUALITY"
+        return normalize_mechanism("QUALITY")
     if field_set & VALUE_FIELDS:
-        return "VALUE"
+        return normalize_mechanism("VALUE")
     if field_set & CAPITAL_SUPPLY_FIELDS and not field_set & LIQUIDITY_FIELDS:
-        return "CAPITAL_SUPPLY"
+        return normalize_mechanism("CAPITAL_SUPPLY")
     if field_set & LIQUIDITY_FIELDS:
-        return "LIQUIDITY_ACTIVITY"
+        return normalize_mechanism("LIQUIDITY_ACTIVITY")
     if any(token in text for token in ("reversal", "mean revert", "反转", "均值回归")):
-        return "PRICE_REVERSAL"
+        return normalize_mechanism("PRICE_REVERSAL")
     if any(token in text for token in ("momentum", "trend", "动量", "趋势")):
-        return "PRICE_TREND"
+        return normalize_mechanism("PRICE_TREND")
     if any(token in text for token in ("volatility", "波动率", "low vol")):
-        return "VOLATILITY"
+        return normalize_mechanism("VOLATILITY")
     if field_set and field_set <= PRICE_FIELDS:
-        return "PRICE_ACTION"
-    return "OTHER"
+        return normalize_mechanism("PRICE_ACTION")
+    return normalize_mechanism("OTHER")
 
 
 def mechanism_fingerprint(
@@ -185,6 +245,13 @@ def expression_summary(expression: dict[str, Any], *, maximum_length: int = 260)
     )
     body = f"{operator}({', '.join(arguments)}{'; ' if suffix and arguments else ''}{suffix})"
     return body if len(body) <= maximum_length else f"{body[: maximum_length - 3]}..."
+
+
+def _clean_optional_identifier(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def signal_independence_metrics(

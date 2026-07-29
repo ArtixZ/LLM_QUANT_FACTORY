@@ -5,11 +5,12 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
 from autoalpha.registry.lifecycle import ALLOWED_TRANSITIONS, FactorState
+from autoalpha.service.system_job_sql import system_job_sql
 
 LogCategory = Literal["audit", "action", "research", "delivery"]
 
@@ -19,6 +20,7 @@ class ServiceStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._system_job_sql = system_job_sql("sqlite")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -325,6 +327,8 @@ class ServiceStore:
                     security_name TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
                     average_cost_cny REAL NOT NULL,
+                    acquired_trade_date TEXT,
+                    last_trade_date TEXT,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(portfolio_id, symbol)
                 );
@@ -340,6 +344,7 @@ class ServiceStore:
                     notional_cny REAL NOT NULL,
                     fees_cny REAL NOT NULL,
                     reason TEXT NOT NULL,
+                    execution_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS paper_nav (
@@ -352,6 +357,96 @@ class ServiceStore:
                     daily_return REAL,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(portfolio_id, trade_date)
+                );
+                CREATE TABLE IF NOT EXISTS strategy_experiment_objects (
+                    experiment_id TEXT PRIMARY KEY,
+                    stage TEXT NOT NULL,
+                    object_type TEXT NOT NULL,
+                    source_system TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    market TEXT,
+                    protocol_json TEXT NOT NULL DEFAULT '{}',
+                    metrics_json TEXT NOT NULL DEFAULT '{}',
+                    evidence_json TEXT NOT NULL DEFAULT '{}',
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(source_system, source_id, stage)
+                );
+                CREATE TABLE IF NOT EXISTS strategy_experiment_edges (
+                    source_experiment_id TEXT NOT NULL
+                        REFERENCES strategy_experiment_objects(experiment_id)
+                        ON DELETE CASCADE,
+                    target_experiment_id TEXT NOT NULL
+                        REFERENCES strategy_experiment_objects(experiment_id)
+                        ON DELETE CASCADE,
+                    relation TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(source_experiment_id, target_experiment_id, relation)
+                );
+                CREATE TABLE IF NOT EXISTS formal_strategy_versions (
+                    strategy_uid TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    source_experiment_id TEXT
+                        REFERENCES strategy_experiment_objects(experiment_id),
+                    name TEXT NOT NULL,
+                    market TEXT NOT NULL,
+                    lifecycle TEXT NOT NULL,
+                    signal_policy_json TEXT NOT NULL,
+                    rebalance_policy_json TEXT NOT NULL,
+                    execution_policy_json TEXT NOT NULL,
+                    risk_policy_json TEXT NOT NULL,
+                    cost_policy_json TEXT NOT NULL,
+                    monitoring_policy_json TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    specification_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(strategy_uid, version)
+                );
+                CREATE TABLE IF NOT EXISTS system_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    queue TEXT NOT NULL,
+                    job_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 100,
+                    resource_group TEXT NOT NULL DEFAULT 'default',
+                    max_workers INTEGER NOT NULL DEFAULT 1,
+                    progress_current INTEGER NOT NULL DEFAULT 0,
+                    progress_total INTEGER NOT NULL DEFAULT 0,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}',
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 3,
+                    lease_owner TEXT,
+                    lease_expires_at TEXT,
+                    heartbeat_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS system_job_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL REFERENCES system_jobs(job_id) ON DELETE CASCADE,
+                    timestamp_utc TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE IF NOT EXISTS materialized_snapshots (
+                    key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'unknown',
+                    status TEXT NOT NULL DEFAULT 'READY',
+                    expires_at TEXT,
+                    updated_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_factor_pool_status
                 ON factor_pool(status, source_iteration);
@@ -387,6 +482,18 @@ class ServiceStore:
                 ON paper_trades(portfolio_id, id DESC);
                 CREATE INDEX IF NOT EXISTS idx_paper_nav_portfolio
                 ON paper_nav(portfolio_id, trade_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_strategy_experiment_stage
+                ON strategy_experiment_objects(stage, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_strategy_experiment_source
+                ON strategy_experiment_objects(source_system, source_id);
+                CREATE INDEX IF NOT EXISTS idx_strategy_experiment_edges_target
+                ON strategy_experiment_edges(target_experiment_id, relation);
+                CREATE INDEX IF NOT EXISTS idx_formal_strategy_lifecycle
+                ON formal_strategy_versions(lifecycle, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_system_jobs_queue
+                ON system_jobs(queue, status, priority, created_at);
+                CREATE INDEX IF NOT EXISTS idx_system_job_logs_job
+                ON system_job_logs(job_id, id DESC);
                 CREATE TRIGGER IF NOT EXISTS prevent_manual_exposure_update
                 BEFORE UPDATE ON manual_research_exposures
                 BEGIN
@@ -486,6 +593,58 @@ class ServiceStore:
                 if name not in task_columns:
                     connection.execute(
                         f"ALTER TABLE research_tasks ADD COLUMN {name} {declaration}"  # noqa: S608
+                    )
+            job_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(system_jobs)").fetchall()
+            }
+            job_migrations = {
+                "lease_owner": "TEXT",
+                "lease_expires_at": "TEXT",
+                "heartbeat_at": "TEXT",
+            }
+            for name, declaration in job_migrations.items():
+                if name not in job_columns:
+                    connection.execute(
+                        f"ALTER TABLE system_jobs ADD COLUMN {name} {declaration}"  # noqa: S608
+                    )
+            snapshot_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(materialized_snapshots)"
+                ).fetchall()
+            }
+            snapshot_migrations = {
+                "source": "TEXT NOT NULL DEFAULT 'unknown'",
+                "status": "TEXT NOT NULL DEFAULT 'READY'",
+                "expires_at": "TEXT",
+            }
+            for name, declaration in snapshot_migrations.items():
+                if name not in snapshot_columns:
+                    connection.execute(
+                        f"ALTER TABLE materialized_snapshots ADD COLUMN {name} {declaration}"  # noqa: S608
+                    )
+            paper_trade_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(paper_trades)").fetchall()
+            }
+            if "execution_json" not in paper_trade_columns:
+                connection.execute(
+                    "ALTER TABLE paper_trades ADD COLUMN execution_json "
+                    "TEXT NOT NULL DEFAULT '{}'"
+                )
+            paper_position_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(paper_positions)").fetchall()
+            }
+            paper_position_migrations = {
+                "acquired_trade_date": "TEXT",
+                "last_trade_date": "TEXT",
+            }
+            for name, declaration in paper_position_migrations.items():
+                if name not in paper_position_columns:
+                    connection.execute(
+                        f"ALTER TABLE paper_positions ADD COLUMN {name} {declaration}"  # noqa: S608
                     )
             direction_table = connection.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='direction_attempts'"
@@ -1571,6 +1730,28 @@ class ServiceStore:
         item["metrics"] = json.loads(item.pop("metrics_json"))
         return item
 
+    def merge_factor_pool_metrics(self, factor_id: str, metrics: dict[str, Any]) -> dict[str, Any]:
+        """Add derived library metadata without replacing frozen evaluation evidence."""
+        if not metrics:
+            record = self.factor_pool_record(factor_id)
+            if record is None:
+                raise KeyError(f"Factor not found: {factor_id}")
+            return record["metrics"]
+        now = _now()
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT metrics_json FROM factor_pool WHERE factor_id=?", (factor_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Factor not found: {factor_id}")
+            current = json.loads(row["metrics_json"] or "{}")
+            merged = {**current, **metrics}
+            connection.execute(
+                "UPDATE factor_pool SET metrics_json=?, updated_at=? WHERE factor_id=?",
+                (_canonical(merged), now, factor_id),
+            )
+        return merged
+
     def factor_research_diagnostics(self) -> dict[str, dict[str, Any]]:
         with self.connection() as connection:
             rows = connection.execute(
@@ -1947,7 +2128,7 @@ class ServiceStore:
             ).fetchall()
         item = self._paper_portfolio_record(row)
         item["positions"] = [dict(position) for position in positions]
-        item["trades"] = [dict(trade) for trade in trades]
+        item["trades"] = [self._paper_trade_record(trade) for trade in trades]
         item["nav_history"] = [dict(value) for value in nav]
         return item
 
@@ -1986,8 +2167,9 @@ class ServiceStore:
             connection.execute("DELETE FROM paper_positions WHERE portfolio_id=?", (portfolio_id,))
             connection.executemany(
                 """INSERT INTO paper_positions
-                (portfolio_id, symbol, security_name, quantity, average_cost_cny, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)""",
+                (portfolio_id, symbol, security_name, quantity, average_cost_cny,
+                 acquired_trade_date, last_trade_date, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         portfolio_id,
@@ -1995,6 +2177,8 @@ class ServiceStore:
                         position["security_name"],
                         position["quantity"],
                         position["average_cost_cny"],
+                        position.get("acquired_trade_date"),
+                        position.get("last_trade_date"),
                         now,
                     )
                     for position in positions
@@ -2004,8 +2188,8 @@ class ServiceStore:
             connection.executemany(
                 """INSERT INTO paper_trades
                 (portfolio_id, trade_date, symbol, security_name, side, quantity, price_cny,
-                 notional_cny, fees_cny, reason, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 notional_cny, fees_cny, reason, execution_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         portfolio_id,
@@ -2018,6 +2202,7 @@ class ServiceStore:
                         trade["notional_cny"],
                         trade["fees_cny"],
                         trade["reason"],
+                        _canonical(trade.get("execution") or {}),
                         now,
                     )
                     for trade in trades
@@ -2064,6 +2249,1001 @@ class ServiceStore:
         item = dict(row)
         item["config"] = json.loads(item.pop("config_json"))
         return item
+
+    @staticmethod
+    def _paper_trade_record(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        execution_json = item.pop("execution_json", "{}") or "{}"
+        item["execution"] = json.loads(execution_json)
+        return item
+
+    def upsert_strategy_experiment_object(
+        self,
+        *,
+        experiment_id: str,
+        stage: str,
+        object_type: str,
+        source_system: str,
+        source_id: str,
+        title: str,
+        status: str,
+        market: str | None = None,
+        protocol: dict[str, Any] | None = None,
+        metrics: dict[str, Any] | None = None,
+        evidence: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        now = _now()
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO strategy_experiment_objects
+                (experiment_id, stage, object_type, source_system, source_id, title, status,
+                 market, protocol_json, metrics_json, evidence_json, tags_json,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(experiment_id) DO UPDATE SET
+                stage=excluded.stage,
+                object_type=excluded.object_type,
+                source_system=excluded.source_system,
+                source_id=excluded.source_id,
+                title=excluded.title,
+                status=excluded.status,
+                market=excluded.market,
+                protocol_json=excluded.protocol_json,
+                metrics_json=excluded.metrics_json,
+                evidence_json=excluded.evidence_json,
+                tags_json=excluded.tags_json,
+                updated_at=excluded.updated_at""",
+                (
+                    experiment_id,
+                    stage,
+                    object_type,
+                    source_system,
+                    source_id,
+                    title,
+                    status,
+                    market,
+                    _canonical(protocol or {}),
+                    _canonical(metrics or {}),
+                    _canonical(evidence or {}),
+                    _canonical(tags or []),
+                    now,
+                    now,
+                ),
+            )
+        record = self.strategy_experiment_object(experiment_id)
+        assert record is not None
+        return record
+
+    def upsert_strategy_experiment_edge(
+        self,
+        source_experiment_id: str,
+        target_experiment_id: str,
+        relation: str,
+        *,
+        evidence: dict[str, Any] | None = None,
+    ) -> None:
+        now = _now()
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO strategy_experiment_edges
+                (source_experiment_id, target_experiment_id, relation, evidence_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(source_experiment_id, target_experiment_id, relation)
+                DO UPDATE SET evidence_json=excluded.evidence_json""",
+                (
+                    source_experiment_id,
+                    target_experiment_id,
+                    relation,
+                    _canonical(evidence or {}),
+                    now,
+                ),
+            )
+
+    def strategy_experiment_object(self, experiment_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM strategy_experiment_objects WHERE experiment_id=?",
+                (experiment_id,),
+            ).fetchone()
+        return self._strategy_experiment_record(row) if row is not None else None
+
+    def strategy_experiment_objects(
+        self, *, stage: str | None = None, limit: int = 1000
+    ) -> list[dict[str, Any]]:
+        where = "WHERE stage=?" if stage else ""
+        parameters: tuple[Any, ...] = (
+            (stage, min(max(limit, 1), 10_000)) if stage else (min(max(limit, 1), 10_000),)
+        )
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM strategy_experiment_objects {where}
+                ORDER BY updated_at DESC LIMIT ?""",  # noqa: S608
+                parameters,
+            ).fetchall()
+        return [self._strategy_experiment_record(row) for row in rows]
+
+    def strategy_experiment_edges(
+        self, *, experiment_id: str | None = None, limit: int = 5000
+    ) -> list[dict[str, Any]]:
+        where = (
+            "WHERE source_experiment_id=? OR target_experiment_id=?" if experiment_id else ""
+        )
+        parameters: tuple[Any, ...] = (
+            (experiment_id, experiment_id, min(max(limit, 1), 20_000))
+            if experiment_id
+            else (min(max(limit, 1), 20_000),)
+        )
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM strategy_experiment_edges {where}
+                ORDER BY created_at DESC LIMIT ?""",  # noqa: S608
+                parameters,
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["evidence"] = json.loads(item.pop("evidence_json"))
+            result.append(item)
+        return result
+
+    def strategy_experiment_summary(self) -> dict[str, Any]:
+        with self.connection() as connection:
+            stage_rows = connection.execute(
+                """SELECT stage, COUNT(*) AS count FROM strategy_experiment_objects
+                GROUP BY stage ORDER BY stage"""
+            ).fetchall()
+            status_rows = connection.execute(
+                """SELECT status, COUNT(*) AS count FROM strategy_experiment_objects
+                GROUP BY status ORDER BY count DESC"""
+            ).fetchall()
+            edge_count = connection.execute(
+                "SELECT COUNT(*) FROM strategy_experiment_edges"
+            ).fetchone()
+        return {
+            "by_stage": {str(row["stage"]): int(row["count"]) for row in stage_rows},
+            "by_status": {str(row["status"]): int(row["count"]) for row in status_rows},
+            "edge_count": int(edge_count[0] if edge_count else 0),
+        }
+
+    @staticmethod
+    def _strategy_experiment_record(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["protocol"] = json.loads(item.pop("protocol_json"))
+        item["metrics"] = json.loads(item.pop("metrics_json"))
+        item["evidence"] = json.loads(item.pop("evidence_json"))
+        item["tags"] = json.loads(item.pop("tags_json"))
+        return item
+
+    def create_formal_strategy_version(
+        self,
+        *,
+        strategy_uid: str,
+        source_experiment_id: str | None,
+        name: str,
+        market: str,
+        lifecycle: str,
+        signal_policy: dict[str, Any],
+        rebalance_policy: dict[str, Any],
+        execution_policy: dict[str, Any],
+        risk_policy: dict[str, Any],
+        cost_policy: dict[str, Any],
+        monitoring_policy: dict[str, Any],
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = _now()
+        specification = {
+            "strategy_uid": strategy_uid,
+            "name": name.strip(),
+            "market": market,
+            "lifecycle": lifecycle,
+            "source_experiment_id": source_experiment_id,
+            "signal_policy": signal_policy,
+            "rebalance_policy": rebalance_policy,
+            "execution_policy": execution_policy,
+            "risk_policy": risk_policy,
+            "cost_policy": cost_policy,
+            "monitoring_policy": monitoring_policy,
+            "evidence": evidence,
+        }
+        specification_hash = hashlib.sha256(_canonical(specification).encode()).hexdigest()
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT COALESCE(MAX(version), 0)
+                FROM formal_strategy_versions WHERE strategy_uid=?""",
+                (strategy_uid,),
+            ).fetchone()
+            version = int(row[0]) + 1
+            connection.execute(
+                """INSERT INTO formal_strategy_versions
+                (strategy_uid, version, source_experiment_id, name, market, lifecycle,
+                 signal_policy_json, rebalance_policy_json, execution_policy_json,
+                 risk_policy_json, cost_policy_json, monitoring_policy_json, evidence_json,
+                 specification_hash, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    strategy_uid,
+                    version,
+                    source_experiment_id,
+                    name.strip(),
+                    market,
+                    lifecycle,
+                    _canonical(signal_policy),
+                    _canonical(rebalance_policy),
+                    _canonical(execution_policy),
+                    _canonical(risk_policy),
+                    _canonical(cost_policy),
+                    _canonical(monitoring_policy),
+                    _canonical(evidence),
+                    specification_hash,
+                    now,
+                ),
+            )
+        return self.formal_strategy_version(strategy_uid, version)
+
+    def formal_strategy_versions(
+        self, *, lifecycle: str | None = None, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        where = "WHERE lifecycle=?" if lifecycle else ""
+        parameters: tuple[Any, ...] = (
+            (lifecycle, min(max(limit, 1), 5000))
+            if lifecycle
+            else (min(max(limit, 1), 5000),)
+        )
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM formal_strategy_versions {where}
+                ORDER BY created_at DESC LIMIT ?""",  # noqa: S608
+                parameters,
+            ).fetchall()
+        return [self._formal_strategy_record(row) for row in rows]
+
+    def formal_strategy_version(self, strategy_uid: str, version: int) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM formal_strategy_versions
+                WHERE strategy_uid=? AND version=?""",
+                (strategy_uid, version),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Formal strategy version not found: {strategy_uid} v{version}")
+        return self._formal_strategy_record(row)
+
+    def update_formal_strategy_lifecycle(
+        self,
+        strategy_uid: str,
+        version: int,
+        *,
+        lifecycle: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self.connection() as connection:
+            cursor = connection.execute(
+                """UPDATE formal_strategy_versions
+                SET lifecycle=?, evidence_json=?
+                WHERE strategy_uid=? AND version=?""",
+                (lifecycle, _canonical(evidence), strategy_uid, int(version)),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Formal strategy version not found: {strategy_uid} v{version}")
+        return self.formal_strategy_version(strategy_uid, version)
+
+    @staticmethod
+    def _formal_strategy_record(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        for key in (
+            "signal_policy",
+            "rebalance_policy",
+            "execution_policy",
+            "risk_policy",
+            "cost_policy",
+            "monitoring_policy",
+            "evidence",
+        ):
+            item[key] = json.loads(item.pop(f"{key}_json"))
+        return item
+
+    def enqueue_system_job(
+        self,
+        *,
+        job_id: str,
+        queue: str,
+        job_type: str,
+        payload: dict[str, Any],
+        priority: int = 100,
+        resource_group: str = "default",
+        max_workers: int = 1,
+        progress_total: int = 0,
+        max_attempts: int = 3,
+    ) -> dict[str, Any]:
+        now = _now()
+        with self.connection() as connection:
+            connection.execute(
+                self._system_job_sql.enqueue_job_sql(),
+                (
+                    job_id,
+                    queue,
+                    job_type,
+                    int(priority),
+                    resource_group,
+                    max(1, int(max_workers)),
+                    max(0, int(progress_total)),
+                    _canonical(payload),
+                    max(1, int(max_attempts)),
+                    now,
+                    now,
+                ),
+            )
+            self._insert_system_job_log(
+                connection,
+                job_id,
+                level="INFO",
+                event="ENQUEUED",
+                message=f"{job_type} queued on {queue}",
+                payload={
+                    "queue": queue,
+                    "job_type": job_type,
+                    "priority": int(priority),
+                    "resource_group": resource_group,
+                    "max_workers": max(1, int(max_workers)),
+                },
+            )
+        return self.system_job(job_id)
+
+    def update_system_job(self, job_id: str, **values: Any) -> dict[str, Any]:
+        allowed = {
+            "status",
+            "progress_current",
+            "progress_total",
+            "checkpoint",
+            "result",
+            "error",
+            "attempts",
+            "started_at",
+            "finished_at",
+            "lease_owner",
+            "lease_expires_at",
+            "heartbeat_at",
+        }
+        invalid = set(values) - allowed
+        if invalid:
+            raise ValueError(f"Unknown system job fields: {sorted(invalid)}")
+        encoded: dict[str, Any] = {}
+        for key, value in values.items():
+            if key in {"checkpoint", "result"}:
+                encoded[f"{key}_json"] = _canonical(value)
+            else:
+                encoded[key] = value
+        encoded["updated_at"] = _now()
+        with self.connection() as connection:
+            previous = connection.execute(
+                self._system_job_sql.select_job_by_id_sql(projection="status"), (job_id,)
+            ).fetchone()
+            if previous is None:
+                raise KeyError(f"System job not found: {job_id}")
+            cursor = connection.execute(
+                self._system_job_sql.update_job_sql(list(encoded)),
+                (*encoded.values(), job_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"System job not found: {job_id}")
+            if "status" in values and str(previous["status"]) != str(values["status"]):
+                self._insert_system_job_log(
+                    connection,
+                    job_id,
+                    level="ERROR" if str(values["status"]) == "FAILED" else "INFO",
+                    event="STATUS_CHANGED",
+                    message=f"{previous['status']} -> {values['status']}",
+                    payload={
+                        "from_status": str(previous["status"]),
+                        "to_status": str(values["status"]),
+                        "error": values.get("error"),
+                    },
+                )
+        return self.system_job(job_id)
+
+    def claim_system_job(
+        self,
+        *,
+        queue: str,
+        worker_id: str,
+        lease_seconds: int = 300,
+        resource_group: str | None = None,
+        max_queue_running: int | None = None,
+        max_global_running: int | None = None,
+    ) -> dict[str, Any] | None:
+        now = _now()
+        lease_expires_at = (
+            datetime.now(UTC) + timedelta(seconds=max(30, int(lease_seconds)))
+        ).isoformat()
+        clauses = [
+            "queue=?",
+            "(status='QUEUED' OR (status='RUNNING' AND lease_expires_at IS NOT NULL "
+            "AND lease_expires_at < ?))",
+            "attempts < max_attempts",
+        ]
+        parameters: list[Any] = [queue, now]
+        if resource_group:
+            clauses.append("resource_group=?")
+            parameters.append(resource_group)
+        where = " AND ".join(clauses)
+        claimed_job_id: str | None = None
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                self._system_job_sql.claim_candidates_sql(where),
+                tuple(parameters),
+            ).fetchall()
+            for row in rows:
+                job_id = str(row["job_id"])
+                group = str(row["resource_group"])
+                global_active = connection.execute(
+                    self._system_job_sql.active_global_sql(),
+                    (job_id, now),
+                ).fetchone()
+                if max_global_running is not None and int(
+                    global_active[0] if global_active else 0
+                ) >= max(1, int(max_global_running)):
+                    self._insert_system_job_log(
+                        connection,
+                        job_id,
+                        level="DEBUG",
+                        event="CLAIM_DEFERRED_GLOBAL_CAPACITY",
+                        message="Global running job capacity is exhausted",
+                        payload={
+                            "worker_id": worker_id,
+                            "max_global_running": max(1, int(max_global_running)),
+                            "active_global": int(global_active[0] if global_active else 0),
+                        },
+                    )
+                    continue
+                queue_active = connection.execute(
+                    self._system_job_sql.active_queue_sql(),
+                    (queue, job_id, now),
+                ).fetchone()
+                if max_queue_running is not None and int(
+                    queue_active[0] if queue_active else 0
+                ) >= max(1, int(max_queue_running)):
+                    self._insert_system_job_log(
+                        connection,
+                        job_id,
+                        level="DEBUG",
+                        event="CLAIM_DEFERRED_QUEUE_CAPACITY",
+                        message="Queue running job capacity is exhausted",
+                        payload={
+                            "worker_id": worker_id,
+                            "queue": queue,
+                            "max_queue_running": max(1, int(max_queue_running)),
+                            "active_queue": int(queue_active[0] if queue_active else 0),
+                        },
+                    )
+                    continue
+                capacity_row = connection.execute(
+                    self._system_job_sql.resource_capacity_sql(),
+                    (queue, group),
+                ).fetchone()
+                capacity = max(
+                    1,
+                    int(
+                        capacity_row[0]
+                        if capacity_row and capacity_row[0] is not None
+                        else row["max_workers"]
+                    ),
+                )
+                active = connection.execute(
+                    self._system_job_sql.active_resource_sql(),
+                    (queue, group, job_id, now),
+                ).fetchone()
+                if int(active[0] if active else 0) >= capacity:
+                    self._insert_system_job_log(
+                        connection,
+                        job_id,
+                        level="DEBUG",
+                        event="CLAIM_DEFERRED_RESOURCE_CAPACITY",
+                        message="Resource group running job capacity is exhausted",
+                        payload={
+                            "worker_id": worker_id,
+                            "queue": queue,
+                            "resource_group": group,
+                            "capacity": capacity,
+                            "active_resource": int(active[0] if active else 0),
+                        },
+                    )
+                    continue
+                connection.execute(
+                    self._system_job_sql.claim_update_sql(),
+                    (worker_id, lease_expires_at, now, now, now, job_id),
+                )
+                self._insert_system_job_log(
+                    connection,
+                    job_id,
+                    level="INFO",
+                    event="CLAIMED",
+                    message=f"Lease acquired by {worker_id}",
+                    payload={
+                        "worker_id": worker_id,
+                        "lease_expires_at": lease_expires_at,
+                        "attempt": int(row["attempts"]) + 1,
+                    },
+                )
+                claimed_job_id = job_id
+                break
+        return self.system_job(claimed_job_id) if claimed_job_id else None
+
+    def heartbeat_system_job(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        lease_seconds: int = 300,
+        progress_current: int | None = None,
+        checkpoint: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = _now()
+        lease_expires_at = (
+            datetime.now(UTC) + timedelta(seconds=max(30, int(lease_seconds)))
+        ).isoformat()
+        values: dict[str, Any] = {
+            "heartbeat_at": now,
+            "lease_expires_at": lease_expires_at,
+        }
+        if progress_current is not None:
+            values["progress_current"] = max(0, int(progress_current))
+        if checkpoint is not None:
+            values["checkpoint"] = checkpoint
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT lease_owner, status FROM system_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"System job not found: {job_id}")
+            if row["status"] != "RUNNING" or row["lease_owner"] != worker_id:
+                raise RuntimeError("System job lease is not held by this worker")
+        updated = self.update_system_job(job_id, **values)
+        self.append_system_job_log(
+            job_id,
+            level="DEBUG",
+            event="HEARTBEAT",
+            message=f"Heartbeat from {worker_id}",
+            payload={
+                "worker_id": worker_id,
+                "lease_expires_at": lease_expires_at,
+                "progress_current": progress_current,
+                "checkpoint_keys": sorted((checkpoint or {}).keys()),
+            },
+        )
+        return updated
+
+    def command_system_job(
+        self,
+        job_id: str,
+        *,
+        command: str,
+        actor: str = "local-operator",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        command_key = command.strip().lower()
+        if command_key not in {"cancel", "pause", "resume"}:
+            raise ValueError(f"Unsupported system job command: {command}")
+        now = _now()
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM system_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"System job not found: {job_id}")
+            status = str(row["status"])
+            terminal = {"COMPLETED", "FAILED", "CANCELLED", "BLOCKED_UNSUPPORTED"}
+            if status in terminal:
+                raise RuntimeError(f"System job is terminal: {status}")
+
+            if command_key == "cancel":
+                if status in {"QUEUED", "PAUSED"}:
+                    next_status = "CANCELLED"
+                    lease_owner = None
+                    lease_expires_at = None
+                    heartbeat_at = None
+                    finished_at = now
+                elif status in {"RUNNING", "PAUSE_REQUESTED"}:
+                    next_status = "CANCEL_REQUESTED"
+                    lease_owner = row["lease_owner"]
+                    lease_expires_at = row["lease_expires_at"]
+                    heartbeat_at = row["heartbeat_at"]
+                    finished_at = None
+                else:
+                    raise RuntimeError(f"System job cannot be cancelled from {status}")
+            elif command_key == "pause":
+                if status == "QUEUED":
+                    next_status = "PAUSED"
+                    lease_owner = None
+                    lease_expires_at = None
+                    heartbeat_at = None
+                    finished_at = None
+                elif status == "RUNNING":
+                    next_status = "PAUSE_REQUESTED"
+                    lease_owner = row["lease_owner"]
+                    lease_expires_at = row["lease_expires_at"]
+                    heartbeat_at = row["heartbeat_at"]
+                    finished_at = None
+                else:
+                    raise RuntimeError(f"System job cannot be paused from {status}")
+            else:
+                if status != "PAUSED":
+                    raise RuntimeError(f"System job cannot be resumed from {status}")
+                next_status = "QUEUED"
+                lease_owner = None
+                lease_expires_at = None
+                heartbeat_at = None
+                finished_at = None
+
+            error = reason.strip() if reason.strip() else f"{command_key} by {actor}"
+            connection.execute(
+                """UPDATE system_jobs
+                SET status=?, error=?, lease_owner=?, lease_expires_at=?,
+                    heartbeat_at=?, finished_at=?, updated_at=?
+                WHERE job_id=?""",
+                (
+                    next_status,
+                    error,
+                    lease_owner,
+                    lease_expires_at,
+                    heartbeat_at,
+                    finished_at,
+                    now,
+                    job_id,
+                ),
+            )
+            self._insert_system_job_log(
+                connection,
+                job_id,
+                level="WARNING" if command_key == "cancel" else "INFO",
+                event=f"COMMAND_{command_key.upper()}",
+                message=f"{actor} requested {command_key}: {status} -> {next_status}",
+                payload={
+                    "actor": actor,
+                    "command": command_key,
+                    "reason": reason,
+                    "from_status": status,
+                    "to_status": next_status,
+                },
+            )
+        return self.system_job(job_id)
+
+    def recover_expired_system_jobs(self, *, queue: str | None = None) -> int:
+        now = _now()
+        clauses = ["status='RUNNING'", "lease_expires_at IS NOT NULL", "lease_expires_at < ?"]
+        parameters: list[Any] = [now]
+        if queue:
+            clauses.append("queue=?")
+            parameters.append(queue)
+        where = " AND ".join(clauses)
+        with self.connection() as connection:
+            expired = connection.execute(
+                self._system_job_sql.recover_expired_select_sql(where),
+                tuple(parameters),
+            ).fetchall()
+            cursor = connection.execute(
+                self._system_job_sql.recover_expired_update_sql(where),
+                (now, *parameters),
+            )
+            for row in expired:
+                exhausted = int(row["attempts"]) >= int(row["max_attempts"])
+                self._insert_system_job_log(
+                    connection,
+                    str(row["job_id"]),
+                    level="ERROR" if exhausted else "WARNING",
+                    event="LEASE_EXPIRED_RECOVERED",
+                    message="Lease expired; job failed"
+                    if exhausted
+                    else "Lease expired; job returned to queue",
+                    payload={
+                        "attempts": int(row["attempts"]),
+                        "max_attempts": int(row["max_attempts"]),
+                        "recovered_status": "FAILED" if exhausted else "QUEUED",
+                    },
+                )
+            return int(cursor.rowcount)
+
+    def upsert_materialized_snapshot(
+        self,
+        key: str,
+        payload: dict[str, Any],
+        *,
+        fingerprint: str | None = None,
+        ttl_seconds: int | None = None,
+        source: str = "unknown",
+        status: str = "READY",
+    ) -> dict[str, Any]:
+        now = _now()
+        expires_at = (
+            (datetime.now(UTC) + timedelta(seconds=max(1, int(ttl_seconds)))).isoformat()
+            if ttl_seconds is not None
+            else None
+        )
+        encoded = _canonical(payload)
+        digest = fingerprint or hashlib.sha256(encoded.encode()).hexdigest()
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO materialized_snapshots
+                (key, payload_json, fingerprint, source, status, expires_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                payload_json=excluded.payload_json,
+                fingerprint=excluded.fingerprint,
+                source=excluded.source,
+                status=excluded.status,
+                expires_at=excluded.expires_at,
+                updated_at=excluded.updated_at""",
+                (key, encoded, digest, source, status, expires_at, now),
+            )
+        snapshot = self.materialized_snapshot(key)
+        assert snapshot is not None
+        return snapshot
+
+    def materialized_snapshot(self, key: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM materialized_snapshots WHERE key=?", (key,)
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json"))
+        item["cache_state"] = _materialized_cache_state(item)
+        return item
+
+    def materialized_snapshot_summary(self) -> dict[str, Any]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT key, source, status, expires_at, updated_at
+                FROM materialized_snapshots ORDER BY key"""
+            ).fetchall()
+        snapshots = []
+        states: dict[str, int] = {}
+        for row in rows:
+            item = dict(row)
+            cache_state = _materialized_cache_state(item)
+            state = str(cache_state["status"])
+            states[state] = states.get(state, 0) + 1
+            snapshots.append(
+                {
+                    "key": item["key"],
+                    "source": item.get("source") or "unknown",
+                    "status": item.get("status") or "READY",
+                    "updated_at": item.get("updated_at"),
+                    "expires_at": item.get("expires_at"),
+                    "cache_state": cache_state,
+                }
+            )
+        stale = [
+            item
+            for item in snapshots
+            if item["cache_state"].get("status") == "STALE"
+        ]
+        no_ttl = [
+            item
+            for item in snapshots
+            if item["cache_state"].get("status") == "NO_TTL"
+        ]
+        return {
+            "protocol": "AUTOALPHA_MATERIALIZED_SNAPSHOT_SUMMARY_V1",
+            "total": len(snapshots),
+            "states": states,
+            "stale_count": len(stale),
+            "no_ttl_count": len(no_ttl),
+            "stale_keys": [str(item["key"]) for item in stale],
+            "no_ttl_keys": [str(item["key"]) for item in no_ttl],
+            "snapshots": snapshots,
+        }
+
+    def append_system_job_log(
+        self,
+        job_id: str,
+        *,
+        level: str,
+        event: str,
+        message: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self.connection() as connection:
+            exists = connection.execute(
+                self._system_job_sql.select_job_by_id_sql(projection="1"), (job_id,)
+            ).fetchone()
+            if exists is None:
+                raise KeyError(f"System job not found: {job_id}")
+            log_id = self._insert_system_job_log(
+                connection,
+                job_id,
+                level=level,
+                event=event,
+                message=message,
+                payload=payload or {},
+            )
+        return self.system_job_log(log_id)
+
+    def system_job_log(self, log_id: int) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM system_job_logs WHERE id=?", (int(log_id),)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"System job log not found: {log_id}")
+        return self._system_job_log_record(row)
+
+    def system_job_logs(self, job_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM system_job_logs WHERE job_id=?
+                ORDER BY id DESC LIMIT ?""",
+                (job_id, min(max(int(limit), 1), 2000)),
+            ).fetchall()
+        return [self._system_job_log_record(row) for row in rows]
+
+    def system_job_logs_for_jobs(
+        self, job_ids: list[str], *, limit_per_job: int = 3
+    ) -> dict[str, list[dict[str, Any]]]:
+        if not job_ids:
+            return {}
+        result: dict[str, list[dict[str, Any]]] = {job_id: [] for job_id in job_ids}
+        with self.connection() as connection:
+            rows = connection.execute(
+                self._system_job_sql.logs_for_jobs_sql(len(job_ids)),
+                tuple(job_ids),
+            ).fetchall()
+        for row in rows:
+            job_id = str(row["job_id"])
+            if len(result.setdefault(job_id, [])) < max(1, int(limit_per_job)):
+                result[job_id].append(self._system_job_log_record(row))
+        return result
+
+    def system_job(self, job_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM system_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"System job not found: {job_id}")
+        return self._system_job_record(row)
+
+    def system_jobs(
+        self, *, queue: str | None = None, status: str | None = None, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        clauses = []
+        parameters: list[Any] = []
+        if queue:
+            clauses.append(f"queue={self._system_job_sql.placeholder(len(parameters) + 1)}")
+            parameters.append(queue)
+        if status:
+            clauses.append(f"status={self._system_job_sql.placeholder(len(parameters) + 1)}")
+            parameters.append(status)
+        parameters.append(min(max(limit, 1), 5000))
+        with self.connection() as connection:
+            rows = connection.execute(
+                self._system_job_sql.list_jobs_sql(
+                    queue=bool(queue),
+                    status=bool(status),
+                    limit_index=len(parameters),
+                ),
+                tuple(parameters),
+            ).fetchall()
+        return [self._system_job_record(row) for row in rows]
+
+    def system_job_summary(self) -> dict[str, Any]:
+        now = _now()
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT queue, status, COUNT(*) AS count FROM system_jobs
+                GROUP BY queue, status ORDER BY queue, status"""
+            ).fetchall()
+            resource_rows = connection.execute(
+                """SELECT queue, resource_group, status, COUNT(*) AS count,
+                          MIN(max_workers) AS capacity
+                FROM system_jobs
+                GROUP BY queue, resource_group, status
+                ORDER BY queue, resource_group, status"""
+            ).fetchall()
+            expired_rows = connection.execute(
+                """SELECT queue, resource_group, COUNT(*) AS count FROM system_jobs
+                WHERE status='RUNNING' AND lease_expires_at IS NOT NULL
+                AND lease_expires_at < ?
+                GROUP BY queue, resource_group
+                ORDER BY queue, resource_group""",
+                (now,),
+            ).fetchall()
+        queues: dict[str, dict[str, int]] = {}
+        for row in rows:
+            queue = queues.setdefault(str(row["queue"]), {})
+            queue[str(row["status"])] = int(row["count"])
+        resources: dict[str, dict[str, dict[str, Any]]] = {}
+        for row in resource_rows:
+            queue = resources.setdefault(str(row["queue"]), {})
+            group = queue.setdefault(
+                str(row["resource_group"]),
+                {"statuses": {}, "capacity": int(row["capacity"] or 1)},
+            )
+            group["statuses"][str(row["status"])] = int(row["count"])
+            group["capacity"] = min(int(group["capacity"]), int(row["capacity"] or 1))
+        resource_utilization = []
+        for queue_name, groups in sorted(resources.items()):
+            for resource_group, detail in sorted(groups.items()):
+                statuses = dict(detail.get("statuses") or {})
+                running = int(statuses.get("RUNNING", 0))
+                queued = int(statuses.get("QUEUED", 0))
+                capacity = max(1, int(detail.get("capacity") or 1))
+                utilization = running / capacity
+                resource_utilization.append(
+                    {
+                        "queue": queue_name,
+                        "resource_group": resource_group,
+                        "capacity": capacity,
+                        "running": running,
+                        "queued": queued,
+                        "paused": int(statuses.get("PAUSED", 0)),
+                        "failed": int(statuses.get("FAILED", 0))
+                        + int(statuses.get("BLOCKED_UNSUPPORTED", 0)),
+                        "terminal": int(statuses.get("COMPLETED", 0))
+                        + int(statuses.get("CANCELLED", 0)),
+                        "utilization": utilization,
+                        "saturated": running >= capacity and queued > 0,
+                        "idle_capacity": max(0, capacity - running),
+                    }
+                )
+        expired_running = [
+            {
+                "queue": str(row["queue"]),
+                "resource_group": str(row["resource_group"]),
+                "count": int(row["count"]),
+            }
+            for row in expired_rows
+        ]
+        return {
+            "queues": queues,
+            "resources": resources,
+            "resource_utilization": resource_utilization,
+            "saturated_resources": [
+                item for item in resource_utilization if item["saturated"]
+            ],
+            "expired_running": expired_running,
+            "expired_running_count": sum(item["count"] for item in expired_running),
+            "total": sum(sum(item.values()) for item in queues.values()),
+        }
+
+    @staticmethod
+    def _system_job_record(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json"))
+        item["checkpoint"] = json.loads(item.pop("checkpoint_json"))
+        item["result"] = json.loads(item.pop("result_json"))
+        return item
+
+    @staticmethod
+    def _system_job_log_record(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json"))
+        return item
+
+    @staticmethod
+    def _insert_system_job_log(
+        connection: sqlite3.Connection,
+        job_id: str,
+        *,
+        level: str,
+        event: str,
+        message: str,
+        payload: dict[str, Any] | None = None,
+    ) -> int:
+        cursor = connection.execute(
+            system_job_sql("sqlite").insert_log_sql(),
+            (
+                job_id,
+                _now(),
+                level.upper(),
+                event,
+                message,
+                _canonical(payload or {}),
+            ),
+        )
+        return int(cursor.lastrowid)
 
     def record_portfolio_decision(
         self,
@@ -2866,6 +4046,39 @@ class ServiceStore:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _materialized_cache_state(snapshot: dict[str, Any]) -> dict[str, Any]:
+    updated_at = _parse_datetime(snapshot.get("updated_at"))
+    expires_at = _parse_datetime(snapshot.get("expires_at"))
+    now = datetime.now(UTC)
+    age_seconds = int((now - updated_at).total_seconds()) if updated_at else None
+    if expires_at is None:
+        status = "NO_TTL"
+        stale = False
+    else:
+        stale = expires_at <= now
+        status = "STALE" if stale else "FRESH"
+    return {
+        "status": status,
+        "stale": stale,
+        "age_seconds": age_seconds,
+        "expires_at": snapshot.get("expires_at"),
+        "source": snapshot.get("source") or "unknown",
+        "snapshot_status": snapshot.get("status") or "READY",
+    }
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _bounded_confidence(value: Any) -> float:

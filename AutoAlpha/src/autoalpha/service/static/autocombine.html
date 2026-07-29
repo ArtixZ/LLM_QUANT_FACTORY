@@ -77,6 +77,7 @@
               <div class="task-actions">
                 <span class="state-pill" id="taskStatus">READY</span>
                 <button class="favorite-button" id="favoriteCombineTaskBtn" type="button" title="收藏组合任务" aria-label="收藏组合任务"><i data-lucide="star"></i></button>
+                <a class="button" id="taskJobCenterLink" href="http://127.0.0.1:8788/jobs?queue=autocombine" target="_blank" rel="noreferrer"><i data-lucide="list-checks"></i>Job Center</a>
                 <button class="button primary" id="startTask"><i data-lucide="play"></i>启动</button>
                 <button class="button danger" id="stopTask"><i data-lucide="square"></i>停止</button>
               </div>
@@ -238,6 +239,7 @@
           <h3>优化目标与门禁</h3>
           <label class="wide">目标预设<select id="formObjectiveProfile"></select></label>
           <p class="preset-description wide" id="presetDescription"></p>
+          <div class="form-boundary wide" id="gateFeedbackSummary"><i data-lucide="activity"></i><span>门禁反馈未启用。</span></div>
           <label>最低覆盖率<input id="formCoverage" type="number" min="0" max="1" step="0.05" value="0.8"></label>
           <label>最低正折比例<input id="formPositiveFolds" type="number" min="0" max="1" step="0.05" value="0.5"></label>
           <label>最差折夏普下限<input id="formWorstFold" type="number" min="-10" max="10" step="0.1" value="-0.5"></label>

@@ -3,15 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+from autoalpha.service import autocombine_app
 from autoalpha.service.autocombine import (
     DEFAULT_BUDGET,
     DEFAULT_CONSTRUCTION,
     DEFAULT_OBJECTIVE,
     OBJECTIVE_PRESETS,
+    AutoCombineWorker,
+    CombineProposal,
+    _CandidateEvaluationRejected,
     _gate_distance,
     _gate_failures,
     _portfolio_score,
+    _recoverable_evaluation_failure_reason,
+    _rejected_experiment_record,
     build_factor_snapshot,
     create_task_record,
     refresh_task_strategy_clusters,
@@ -68,6 +75,83 @@ def test_factor_snapshot_is_filtered_ranked_and_frozen(tmp_path: Path) -> None:
     assert snapshot[0]["proposal"]["expression"]["parameters"] == {"name": "vol"}
 
 
+def test_factor_snapshot_uses_behavior_cluster_as_search_cluster(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    for factor_id in ("F_1", "F_2"):
+        store.upsert_factor_knowledge(
+            factor_id=factor_id,
+            canonical_mechanism="TURNOVER_LIQUIDITY",
+            mechanism_summary="test",
+            tags=["test"],
+            review={
+                "expression_signature": factor_id,
+                "parameter_family": "shared-parameter-family",
+                "behavior_cluster_id": "B_SHARED",
+            },
+            falsification={},
+            related_factors=[],
+        )
+
+    snapshot = build_factor_snapshot(
+        store,
+        {"statuses": ["ELIGIBLE"], "factor_ids": [], "source_task_ids": []},
+        DEFAULT_CONSTRUCTION,
+    )
+
+    by_id = {item["factor_id"]: item for item in snapshot}
+    assert by_id["F_1"]["behavior_cluster_id"] == "B_SHARED"
+    assert by_id["F_2"]["search_cluster_id"] == "B_SHARED"
+    assert by_id["F_1"]["semantic_cluster_id"] != by_id["F_2"]["semantic_cluster_id"]
+
+
+def test_combine_task_view_exposes_homogeneity_summary(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    for factor_id in ("F_1", "F_2"):
+        store.upsert_factor_knowledge(
+            factor_id=factor_id,
+            canonical_mechanism="TURNOVER_LIQUIDITY",
+            mechanism_summary="test",
+            tags=["test"],
+            review={
+                "expression_signature": factor_id,
+                "parameter_family": "shared-parameter-family",
+                "behavior_cluster_id": "B_SHARED",
+            },
+            falsification={},
+            related_factors=[],
+        )
+    combine_store = AutoCombineStore(store)
+    task = combine_store.create_task(
+        create_task_record(
+            store,
+            name="homogeneity summary",
+            market="CN_A",
+            data_path=str(tmp_path),
+            protocol={
+                "exploration_start": "2010-01-01",
+                "exploration_end": "2017-12-31",
+                "validation_start": "2018-01-01",
+                "validation_end": "2024-12-31",
+                "holdout_start": "2025-01-01",
+                "holdout_end": "2026-07-16",
+                "minimum_folds": 2,
+            },
+            scope={"statuses": ["ELIGIBLE"]},
+            construction={**DEFAULT_CONSTRUCTION, "candidate_pool_limit": 10},
+            objective=DEFAULT_OBJECTIVE,
+            budget=DEFAULT_BUDGET,
+            notes="test",
+        )
+    )
+
+    summary = task["homogeneity_summary"]
+
+    assert summary["factor_count"] == 2
+    assert summary["behavior_cluster_count"] == 1
+    assert summary["search_cluster_count"] == 1
+    assert summary["duplicate_search_cluster_factor_count"] == 1
+
+
 def test_manual_and_hybrid_factor_scope_preserve_user_intent(tmp_path: Path) -> None:
     store = _store(tmp_path)
     manual = build_factor_snapshot(
@@ -87,6 +171,175 @@ def test_manual_and_hybrid_factor_scope_preserve_user_intent(tmp_path: Path) -> 
     assert [item["factor_id"] for item in manual] == ["F_1"]
     assert hybrid[0]["factor_id"] == "F_1"
     assert hybrid[0]["required"] is True
+
+
+def test_autocombine_limits_real_parameter_family_duplicates() -> None:
+    mechanism = {"F_A": "TURNOVER_LIQUIDITY", "F_B": "PRICE_REVERSAL", "F_C": "QUALITY"}
+    search_cluster = {"F_A": "B_A", "F_B": "B_B", "F_C": "B_C"}
+    construction = {
+        **DEFAULT_CONSTRUCTION,
+        "maximum_same_family": 3,
+        "maximum_same_semantic_cluster": 2,
+        "maximum_same_parameter_family": 1,
+    }
+
+    assert not AutoCombineWorker._family_limit_ok(
+        ("F_A", "F_B"),
+        mechanism,
+        search_cluster,
+        construction,
+        parameter_family={"F_A": "window=20", "F_B": "window=20"},
+    )
+    assert AutoCombineWorker._family_limit_ok(
+        ("F_A", "F_C"),
+        mechanism,
+        search_cluster,
+        construction,
+        parameter_family={"F_A": "window=20", "F_C": "NO_EXPLICIT_LOOKBACK"},
+    )
+
+
+def test_autocombine_audits_homogeneity_candidate_rejections(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    for factor_id, mechanism, behavior in (
+        ("F_1", "PRICE_REVERSAL", "B_PRICE"),
+        ("F_2", "TURNOVER_LIQUIDITY", "B_LIQUIDITY"),
+    ):
+        store.upsert_factor_knowledge(
+            factor_id=factor_id,
+            canonical_mechanism=mechanism,
+            mechanism_summary="test",
+            tags=["test"],
+            review={
+                "behavior_cluster_id": behavior,
+                "parameter_family": "window=20",
+                "expression_signature": factor_id,
+            },
+            falsification={},
+            related_factors=[],
+        )
+    combine_store = AutoCombineStore(store)
+    task = combine_store.create_task(
+        create_task_record(
+            store,
+            name="homogeneity rejected",
+            market="CN_A",
+            data_path=str(tmp_path),
+            protocol={
+                "exploration_start": "2010-01-01",
+                "exploration_end": "2017-12-31",
+                "validation_start": "2018-01-01",
+                "validation_end": "2024-12-31",
+                "holdout_start": "2025-01-01",
+                "holdout_end": "2026-07-16",
+                "minimum_folds": 2,
+            },
+            scope={"statuses": ["ELIGIBLE"]},
+            construction={
+                **DEFAULT_CONSTRUCTION,
+                "candidate_pool_limit": 10,
+                "maximum_same_family": 2,
+                "maximum_same_semantic_cluster": 2,
+                "maximum_same_parameter_family": 1,
+            },
+            objective=DEFAULT_OBJECTIVE,
+            budget=DEFAULT_BUDGET,
+            notes="test",
+        )
+    )
+    worker = AutoCombineWorker(
+        task["task_id"],
+        store,
+        combine_store,
+        object(),  # type: ignore[arg-type]
+        config_path=tmp_path / "research.toml",
+    )
+
+    with pytest.raises(
+        _CandidateEvaluationRejected, match="HOMOGENEITY_DIVERSIFICATION_CONSTRAINT"
+    ):
+        worker._evaluate_proposal(
+            object(),  # type: ignore[arg-type]
+            task,
+            CombineProposal(
+                action="SEED",
+                factor_ids=("F_1", "F_2"),
+                rationale="same parameter family",
+                hypothesis="should be rejected before evaluation",
+                source="TEST",
+            ),
+            iteration=1,
+        )
+
+    events = combine_store.events(task["task_id"])
+    assert events[0]["event"] == "COMBINE_HOMOGENEITY_CANDIDATE_REJECTED"
+    assert events[0]["payload"]["dimension"] == "parameter_family"
+    assert events[0]["payload"]["crowded_labels"] == {"window=20": 2}
+    summary = autocombine_app._homogeneity_rejection_summary(events)
+    assert summary == {
+        "total": 1,
+        "by_dimension": {"parameter_family": 1},
+        "crowded_label_counts": {"parameter_family:window=20": 2},
+    }
+
+
+def test_autocombine_records_candidate_level_evaluation_rejection(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    combine_store = AutoCombineStore(store)
+    task = combine_store.create_task(
+        create_task_record(
+            store,
+            name="candidate rejection",
+            market="CN_A",
+            data_path=str(tmp_path),
+            protocol={
+                "exploration_start": "2010-01-01",
+                "exploration_end": "2017-12-31",
+                "validation_start": "2018-01-01",
+                "validation_end": "2024-12-31",
+                "holdout_start": "2025-01-01",
+                "holdout_end": "2026-07-16",
+                "minimum_folds": 2,
+            },
+            scope={"statuses": ["ELIGIBLE"]},
+            construction={**DEFAULT_CONSTRUCTION, "candidate_pool_limit": 10},
+            objective=DEFAULT_OBJECTIVE,
+            budget=DEFAULT_BUDGET,
+            notes="test",
+        )
+    )
+    proposal = CombineProposal(
+        factor_ids=("F_1", "F_2"),
+        action="SEED",
+        source="DETERMINISTIC",
+        rationale="test",
+        hypothesis="test",
+        prompt_hash=None,
+        response_hash=None,
+    )
+    assert (
+        _recoverable_evaluation_failure_reason(
+            ValueError("Only 5 walk-forward folds were evaluable; minimum=6")
+        )
+        == "INSUFFICIENT_WALK_FORWARD_FOLDS"
+    )
+
+    experiment = combine_store.record_experiment(
+        task["task_id"],
+        _rejected_experiment_record(
+            task,
+            proposal,
+            1,
+            _CandidateEvaluationRejected(
+                "All weight candidates rejected: ['INSUFFICIENT_WALK_FORWARD_FOLDS']"
+            ),
+        ),
+    )
+
+    assert experiment["qualification"] == "CANDIDATE_EVALUATION_REJECTED"
+    assert experiment["gate_status"] == "REJECTED"
+    assert experiment["failed_gates"] == ["candidate_evaluation_rejected"]
+    assert experiment["metrics"]["autocombine_hidden_metrics_exposed"] is False
 
 
 def test_contaminated_factor_remains_available_with_audit_marker(tmp_path: Path) -> None:
@@ -230,7 +483,7 @@ def test_semantic_fingerprint_ignores_cosmetic_family_and_normalization() -> Non
             }
         }
     )
-    assert first["mechanism"] == second["mechanism"] == "LIQUIDITY_ACTIVITY"
+    assert first["mechanism"] == second["mechanism"] == "TURNOVER_LIQUIDITY"
     assert first["semantic_cluster_id"] == second["semantic_cluster_id"]
 
 

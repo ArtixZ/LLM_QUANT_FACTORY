@@ -6,7 +6,10 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Any
 
-from autoalpha.service.autocombine_intelligence import enrich_factor_record
+from autoalpha.service.autocombine_intelligence import (
+    enrich_factor_record,
+    factor_snapshot_homogeneity_summary,
+)
 from autoalpha.service.store import ServiceStore
 
 
@@ -198,11 +201,16 @@ class QuantCombineStore:
         ):
             item[key] = json.loads(item.pop(f"{key}_json"))
         item["factor_snapshot"] = [
-            value if value.get("mechanism_fingerprint") else enrich_factor_record(value)
+            value
+            if value.get("mechanism_fingerprint") and value.get("search_cluster_id")
+            else enrich_factor_record(value)
             for value in item["factor_snapshot"]
         ]
         item["stop_requested"] = bool(item["stop_requested"])
         item["factor_count"] = len(item["factor_snapshot"])
+        item["homogeneity_summary"] = factor_snapshot_homogeneity_summary(
+            item["factor_snapshot"]
+        )
         return item
 
     def update_task(self, task_id: str, **values: Any) -> dict[str, Any]:
@@ -353,6 +361,27 @@ class QuantCombineStore:
                 "SELECT * FROM quant_combine_candidates WHERE id=?", (candidate_id,)
             ).fetchone()
         return self._candidate(row) if row is not None else None
+
+    def best_candidate_references(
+        self, *, exclude_task_id: str | None = None, limit: int = 25
+    ) -> list[dict[str, Any]]:
+        parameters: list[Any] = []
+        where = ["task.best_candidate_id IS NOT NULL", "candidate.return_artifact_path IS NOT NULL"]
+        if exclude_task_id:
+            where.append("task.task_id != ?")
+            parameters.append(exclude_task_id)
+        parameters.append(min(max(1, int(limit)), 200))
+        with self.base.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT candidate.*, task.name AS task_name, task.status AS task_status,
+                    task.updated_at AS task_updated_at
+                FROM quant_combine_tasks task
+                JOIN quant_combine_candidates candidate ON candidate.id=task.best_candidate_id
+                WHERE {' AND '.join(where)}
+                ORDER BY datetime(task.updated_at) DESC LIMIT ?""",  # noqa: S608
+                tuple(parameters),
+            ).fetchall()
+        return [self._candidate(row) for row in rows]
 
     @staticmethod
     def _candidate(row: sqlite3.Row) -> dict[str, Any]:

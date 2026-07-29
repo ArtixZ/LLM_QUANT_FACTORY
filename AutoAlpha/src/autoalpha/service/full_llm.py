@@ -13,6 +13,13 @@ FACTOR_LIBRARIAN = "FACTOR_LIBRARIAN"
 PORTFOLIO_RESEARCHER = "PORTFOLIO_MECHANISM_RESEARCHER"
 TCA_OBSERVER = "TCA_PAPER_OBSERVER"
 
+RESEARCHER_DOMAIN = "RESEARCHER"
+DATA_OFFICER_DOMAIN = "DATA_OFFICER"
+RISK_OFFICER_DOMAIN = "RISK_OFFICER"
+PORTFOLIO_MANAGER_DOMAIN = "PORTFOLIO_MANAGER"
+AUDITOR_DOMAIN = "AUDITOR"
+TRADER_DOMAIN = "TRADER"
+
 FULL_LLM_ROLES = (
     REVIEWER,
     FALSIFICATION_DESIGNER,
@@ -21,6 +28,64 @@ FULL_LLM_ROLES = (
     PORTFOLIO_RESEARCHER,
     TCA_OBSERVER,
 )
+
+RESEARCH_TEAM_DOMAINS = (
+    RESEARCHER_DOMAIN,
+    DATA_OFFICER_DOMAIN,
+    RISK_OFFICER_DOMAIN,
+    PORTFOLIO_MANAGER_DOMAIN,
+    AUDITOR_DOMAIN,
+    TRADER_DOMAIN,
+)
+
+ROLE_DOMAIN_MAP = {
+    FALSIFICATION_DESIGNER: (RESEARCHER_DOMAIN, AUDITOR_DOMAIN),
+    FACTOR_LIBRARIAN: (RESEARCHER_DOMAIN, DATA_OFFICER_DOMAIN),
+    REVIEWER: (DATA_OFFICER_DOMAIN, AUDITOR_DOMAIN),
+    PORTFOLIO_RESEARCHER: (PORTFOLIO_MANAGER_DOMAIN, RISK_OFFICER_DOMAIN),
+    ROOT_CAUSE_ANALYST: (AUDITOR_DOMAIN, RISK_OFFICER_DOMAIN),
+    TCA_OBSERVER: (TRADER_DOMAIN, RISK_OFFICER_DOMAIN),
+}
+
+DOMAIN_LABELS = {
+    RESEARCHER_DOMAIN: "研究员",
+    DATA_OFFICER_DOMAIN: "数据官",
+    RISK_OFFICER_DOMAIN: "风控官",
+    PORTFOLIO_MANAGER_DOMAIN: "组合经理",
+    AUDITOR_DOMAIN: "审计员",
+    TRADER_DOMAIN: "交易员",
+}
+
+DOMAIN_RESPONSIBILITIES = {
+    RESEARCHER_DOMAIN: "提出机制假设、证伪计划和可解释分类",
+    DATA_OFFICER_DOMAIN: "检查字段、时点、数据契约和可用性边界",
+    RISK_OFFICER_DOMAIN: "挑战回撤、换手、容量、成本和集中度",
+    PORTFOLIO_MANAGER_DOMAIN: "判断与现有组合的搭配价值和冗余风险",
+    AUDITOR_DOMAIN: "记录污染、过拟合、失败根因和门禁证据",
+    TRADER_DOMAIN: "把研究结论约束到真实调仓、成交和交割监控",
+}
+
+DOMAIN_HEADLINE_KEYS = {
+    RESEARCHER_DOMAIN: (
+        "canonical_mechanism",
+        "mechanism_summary",
+        "null_hypothesis",
+    ),
+    DATA_OFFICER_DOMAIN: ("leakage_risk", "execution_risk", "verdict"),
+    RISK_OFFICER_DOMAIN: (
+        "cost_risk",
+        "capacity_risk",
+        "primary_cause",
+        "interaction_risks",
+    ),
+    PORTFOLIO_MANAGER_DOMAIN: (
+        "preferred_action",
+        "candidate_role",
+        "complementarity_thesis",
+    ),
+    AUDITOR_DOMAIN: ("primary_cause", "verdict", "kill_conditions"),
+    TRADER_DOMAIN: ("execution_diagnosis", "turnover_driver", "monitoring_actions"),
+}
 
 CANONICAL_MECHANISMS = {
     "PRICE_REVERSAL",
@@ -414,10 +479,101 @@ def role_catalog() -> list[dict[str, Any]]:
             "role": spec.role,
             "stage": spec.stage,
             "required_keys": sorted(spec.required_keys),
+            "domains": list(ROLE_DOMAIN_MAP.get(spec.role, ())),
             "decision_authority": "ADVISORY_ONLY",
         }
         for spec in _SPECS.values()
     ]
+
+
+def research_team_domain_catalog() -> list[dict[str, Any]]:
+    return [
+        {
+            "domain": domain,
+            "label": DOMAIN_LABELS[domain],
+            "responsibility": DOMAIN_RESPONSIBILITIES[domain],
+            "roles": [
+                role for role, domains in ROLE_DOMAIN_MAP.items() if domain in domains
+            ],
+            "decision_authority": "ADVISORY_ONLY_STRUCTURED_EVIDENCE",
+        }
+        for domain in RESEARCH_TEAM_DOMAINS
+    ]
+
+
+def summarize_research_team_domains(
+    artifacts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    matrix = {
+        item["domain"]: {
+            **item,
+            "completed": 0,
+            "failed": 0,
+            "artifact_count": 0,
+            "latest_at": None,
+            "latest_candidate_id": None,
+            "latest_run_id": None,
+            "latest_iteration": None,
+            "latest_role": None,
+            "latest_headline": None,
+            "covered_roles": [],
+        }
+        for item in research_team_domain_catalog()
+    }
+    covered: dict[str, set[str]] = {domain: set() for domain in matrix}
+    for artifact in artifacts:
+        role = str(artifact.get("role") or "")
+        for domain in ROLE_DOMAIN_MAP.get(role, ()):
+            item = matrix[domain]
+            item["artifact_count"] += 1
+            if artifact.get("status") == "COMPLETED":
+                item["completed"] += 1
+            else:
+                item["failed"] += 1
+            covered[domain].add(role)
+            created_at = artifact.get("created_at")
+            if item["latest_at"] is None or str(created_at or "") > str(item["latest_at"] or ""):
+                item["latest_at"] = created_at
+                item["latest_candidate_id"] = artifact.get("candidate_id")
+                item["latest_run_id"] = artifact.get("run_id")
+                item["latest_iteration"] = artifact.get("iteration")
+                item["latest_role"] = role
+                item["latest_headline"] = _domain_headline(
+                    domain,
+                    artifact.get("artifact") if isinstance(artifact.get("artifact"), dict) else {},
+                    artifact.get("error"),
+                )
+    for domain, roles in covered.items():
+        matrix[domain]["covered_roles"] = sorted(roles)
+        expected = set(matrix[domain]["roles"])
+        matrix[domain]["coverage_ratio"] = (
+            len(roles & expected) / len(expected) if expected else 0.0
+        )
+        matrix[domain]["status"] = (
+            "ACTIVE"
+            if matrix[domain]["completed"]
+            else "FAILED_OPEN"
+            if matrix[domain]["failed"]
+            else "WAITING_FOR_ARTIFACTS"
+        )
+    return {
+        "protocol": "LLM_RESEARCH_TEAM_DOMAIN_MATRIX_V1",
+        "decision_authority": "ADVISORY_ONLY_DETERMINISTIC_GATES_REMAIN_FINAL",
+        "domains": [matrix[domain] for domain in RESEARCH_TEAM_DOMAINS],
+    }
+
+
+def _domain_headline(domain: str, artifact: dict[str, Any], error: Any) -> str:
+    if error:
+        return str(error)[:180]
+    for key in DOMAIN_HEADLINE_KEYS.get(domain, ()):
+        value = artifact.get(key)
+        if value in (None, "", []):
+            continue
+        if isinstance(value, list):
+            return " · ".join(str(item) for item in value[:3])[:180]
+        return str(value)[:180]
+    return "结构化研究意见"
 
 
 def _candidate_context(candidate: dict[str, Any]) -> dict[str, Any]:

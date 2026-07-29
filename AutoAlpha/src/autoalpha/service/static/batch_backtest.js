@@ -59,6 +59,7 @@ function renderJob() {
   const service = state.bootstrap?.service || {};
   text("headerSummary", `${job.factor_count} 个冻结因子 · ${job.completed_count} 个已提交 · 独立端口 ${service.port || "--"}`);
   text("jobStatus", job.status); text("jobPhase", job.phase); text("jobId", job.job_id);
+  text("systemJobId", job.system_job_id || "--");
   text("factorProgress", `${formatInt(job.completed_count)} / ${formatInt(job.factor_count)}`);
   text("failedCount", `失败 ${formatInt(job.failed_count)}`);
   text("progressPercent", formatPercent(job.progress));
@@ -102,7 +103,7 @@ function resultRow(item) {
   const metrics = item.metrics || {}, mc = item.monte_carlo || {};
   const factor = element("div", "factor-cell"); factor.append(element("strong", "", item.name), element("code", "", `${item.factor_id} · ${item.family} · ${item.source_status || "UNKNOWN"}`));
   const computedStatus = item.status === "SUCCESS" ? "计算完成" : item.status;
-  row.append(cell(item.rank || "--"), cell(factor), cell(element("span", `state ${item.status}`, computedStatus)), cell(formatMetric(metrics.sharpe_ratio)), cell(formatPercent(metrics.simple_annual_return)), cell(formatPercent(metrics.max_drawdown)), cell(formatMetric(metrics.large_window_worst_sharpe)), cell(formatPercent(metrics.robustness_pass_fraction)), cell(formatPercent(mc.probability_positive_annual_return)), cell(item.elapsed_seconds ? formatDuration(item.elapsed_seconds) : "--"));
+  row.append(cell(item.rank || "--"), cell(factor), cell(element("span", `state ${item.status}`, computedStatus)), cell(formatMetric(long_only_metric(metrics, "sharpe_ratio"))), cell(formatPercent(long_only_metric(metrics, "simple_annual_return"))), cell(formatPercent(long_only_metric(metrics, "max_drawdown"))), cell(formatMetric(long_only_metric(metrics, "large_window_worst_sharpe"))), cell(formatPercent(metrics.robustness_pass_fraction)), cell(formatPercent(mc.probability_positive_annual_return)), cell(item.elapsed_seconds ? formatDuration(item.elapsed_seconds) : "--"));
   if (item.status === "SUCCESS") row.onclick = () => loadFactor(item.factor_id);
   else if (item.status === "FAILED") row.title = item.error || "因子执行失败";
   return row;
@@ -121,7 +122,7 @@ function renderFactorDetail(detail) {
   const ranked = state.results.find(item => item.factor_id === detail.factor_id);
   text("detailRank", ranked?.rank ? `RANK #${ranked.rank}` : detail.status);
   text("detailName", detail.name); text("detailIdentity", `${detail.factor_id} · ${detail.family} · ITER ${detail.source_iteration || "--"} · ${detail.source_status || "UNKNOWN"}`);
-  const values = [["全期夏普", formatMetric(metrics.sharpe_ratio)], ["简单年化", formatPercent(metrics.simple_annual_return)], ["最大回撤", formatPercent(metrics.max_drawdown)], ["年化换手", formatMetric(metrics.annual_turnover)], ["最差窗口", formatMetric(metrics.large_window_worst_sharpe)], ["窗口胜率", formatPercent(metrics.large_window_positive_fraction)], ["Rank IC", formatMetric(metrics.rank_ic_mean, 4)], ["MC正收益", formatPercent(mc.probability_positive_annual_return)]];
+  const values = [["纯多全期夏普", formatMetric(long_only_metric(metrics, "sharpe_ratio"))], ["纯多简单年化", formatPercent(long_only_metric(metrics, "simple_annual_return"))], ["纯多最大回撤", formatPercent(long_only_metric(metrics, "max_drawdown"))], ["纯多年化换手", formatMetric(long_only_metric(metrics, "annual_turnover"))], ["纯多最差窗口", formatMetric(long_only_metric(metrics, "large_window_worst_sharpe"))], ["窗口胜率", formatPercent(metrics.large_window_positive_fraction)], ["Rank IC", formatMetric(metrics.rank_ic_mean, 4)], ["MC正收益", formatPercent(mc.probability_positive_annual_return)]];
   if (metrics.engine_protocol === "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1") values.push(["累计交易成本", formatCurrency(metrics.total_transaction_cost_cny)], ["平均仓位", formatPercent(metrics.average_gross_exposure)], ["平均持股", formatMetric(metrics.average_positions, 1)], ["调仓次数", formatInt(metrics.rebalance_count)]);
   document.getElementById("detailMetrics").replaceChildren(...values.map(([label, value]) => stat(label, value)));
   text("curveCaption", `${metrics.backtest_start || "--"} — ${metrics.backtest_end || "--"}`);
@@ -129,6 +130,10 @@ function renderFactorDetail(detail) {
   drawLineChart(document.getElementById("equityChart"), detail.curve.map(item => item.equity), "#245eea");
   drawHistogram(document.getElementById("mcChart"), detail.monte_carlo_histogram?.sharpe_ratio, "#08785a");
   renderWindowTable(detail.windows || []); renderRobustnessTable(detail.robustness || []);
+}
+
+function long_only_metric(metrics, key) {
+  return metrics[`long_only_${key}`] ?? metrics[key];
 }
 
 function renderWindowTable(windows) {

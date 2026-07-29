@@ -12,6 +12,7 @@ PLATFORM_PAGES = (
     "factors.html",
     "screener.html",
     "paper_trading.html",
+    "formal_strategies.html",
     "backtest.html",
     "batch_backtest.html",
     "data_center.html",
@@ -90,3 +91,17 @@ def test_system_guide_covers_the_full_research_control_plane() -> None:
     assert "@app.get(\"/guide\"" in application
     for section in expected_sections:
         assert f'id="{section}"' in markup
+
+
+def test_factor_library_api_uses_materialized_cache_contract() -> None:
+    application = (STATIC.parent / "app.py").read_text(encoding="utf-8")
+
+    assert "async def factor_library(response: Response, refresh: bool = False)" in application
+    assert "FactorLibraryRefreshRequest" in application
+    assert 'store.materialized_snapshot("factor_library")' in application
+    assert '"factor_library_refresh"' in application
+    assert "Factor library refresh queued in Job Center." in application
+    assert 'store.upsert_materialized_snapshot(\n        "factor_library",' in application
+    assert "MATERIALIZED_FACTOR_LIBRARY_API_V1" in application
+    assert "AUTOALPHA_FACTOR_KNOWLEDGE_INTEGRITY_V1" in application
+    assert "factor_knowledge_missing_count" in application

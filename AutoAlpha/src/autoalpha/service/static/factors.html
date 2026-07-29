@@ -39,9 +39,65 @@
       <div><span>机制分类</span><strong id="categoryCount">--</strong></div>
       <div><span>结构簇</span><strong id="clusterCount">--</strong></div>
       <div><span>行为簇</span><strong id="behaviorClusterCount">--</strong></div>
+      <div><span>拥挤行为簇</span><strong id="crowdedClusterCount">--</strong></div>
       <div><span>影子观察</span><strong id="shadowCount">--</strong></div>
       <div><span>盲测污染</span><strong id="contaminatedCount">--</strong></div>
       <div><span>数据截至</span><strong id="dataEnd">--</strong></div>
+    </section>
+
+    <section class="library-diagnostic-band" id="libraryDiagnosticBand">
+      <div>
+        <span>知识回填</span>
+        <strong id="knowledgeBackfillStatus">--</strong>
+        <small id="knowledgeBackfillMeta">等待物化快照</small>
+      </div>
+      <div>
+        <span>组合门禁</span>
+        <strong id="gateFunnelStatus">--</strong>
+        <small id="gateFunnelMeta">等待诊断</small>
+      </div>
+      <div>
+        <span>主要瓶颈</span>
+        <strong id="gateFunnelTopCategory">--</strong>
+        <small id="gateFunnelTopMeta">无候选</small>
+      </div>
+      <div>
+        <span>下一步动作</span>
+        <strong id="gateFunnelAction">--</strong>
+        <small id="gateFunnelActionMeta">自动归因后给出</small>
+      </div>
+    </section>
+
+    <section class="panel factor-map-panel">
+      <div class="panel-header">
+        <div>
+          <h2>因子研究地图</h2>
+          <p id="researchMapSummary">按机制、行为簇和近重复关系折叠因子库。</p>
+        </div>
+        <span class="state-pill small" id="researchMapState">MAP</span>
+      </div>
+      <div class="factor-map-grid">
+        <section>
+          <h3>机制收益来源</h3>
+          <div class="factor-map-list" id="mechanismMapList"></div>
+        </section>
+        <section>
+          <h3>拥挤行为簇</h3>
+          <div class="factor-map-list" id="crowdedClusterList"></div>
+        </section>
+        <section>
+          <h3>参数家族</h3>
+          <div class="factor-map-list" id="parameterFamilyList"></div>
+        </section>
+        <section>
+          <h3>近重复样本</h3>
+          <div class="factor-map-list" id="nearDuplicateList"></div>
+        </section>
+      </div>
+      <section class="factor-heatmap-section">
+        <h3>机制年度表现热力图</h3>
+        <div class="factor-heatmap" id="annualHeatmap"></div>
+      </section>
     </section>
 
     <section class="panel library-panel">
@@ -82,6 +138,7 @@
             <option value="NEAR_DUPLICATE">近重复</option>
             <option value="SUBSTITUTE">可替代</option>
             <option value="RELATED">相关成员</option>
+            <option value="CROWDED">拥挤簇成员</option>
             <option value="DISTINCT">独立因子</option>
             <option value="PENDING">待计算</option>
           </select>
@@ -93,7 +150,7 @@
         </label>
         <label class="favorite-toggle"><input id="favoriteFactorFilter" type="checkbox">仅收藏</label>
         <button class="icon-button" id="rankingDirection" title="切换排序方向" aria-label="切换排序方向"><i data-lucide="arrow-down-wide-narrow"></i></button>
-        <button class="icon-button" id="libraryRefresh" title="刷新因子库"><i data-lucide="refresh-cw"></i></button>
+        <button class="icon-button" id="libraryRefresh" title="入队刷新因子库主榜" aria-label="入队刷新因子库主榜"><i data-lucide="refresh-cw"></i></button>
       </div>
 
       <div class="category-strip" id="categoryStrip"></div>
@@ -155,7 +212,7 @@
   </dialog>
   <div id="toast" role="status"></div>
   <script>window.MathJax = { tex: { displayMath: [["\\[", "\\]"]] }, startup: { typeset: false } };</script>
-  <script src="/static/factors.js?v=20260719-behavior-v2"></script>
+  <script src="/static/factors.js?v=20260728-evidence-bus-v1"></script>
   <script async src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" onload="window.lucide&&window.lucide.createIcons()"></script>
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" onload="window.dispatchEvent(new Event('mathjax-ready'))"></script>
 </body>

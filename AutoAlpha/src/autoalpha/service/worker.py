@@ -38,6 +38,10 @@ from autoalpha.service.direction import (
 )
 from autoalpha.service.evaluator import PriceVolumeEvaluator
 from autoalpha.service.factor_behavior import load_behavior_snapshot
+from autoalpha.service.factor_homogeneity import (
+    build_homogeneity_report,
+    candidate_homogeneity_metrics,
+)
 from autoalpha.service.full_llm import (
     FACTOR_LIBRARIAN,
     FALSIFICATION_DESIGNER,
@@ -93,11 +97,17 @@ class SecretVault:
         self.api_key = None
 
     def _resolve(self) -> str | None:
-        return (
-            self.api_key
-            or os.getenv("AUTOALPHA_API_KEY")
-            or (self.credential_store.get() if self.credential_store else None)
-        )
+        if self.api_key:
+            return self.api_key
+        environment = os.getenv("AUTOALPHA_API_KEY")
+        if environment:
+            return environment
+        if self.credential_store is None:
+            return None
+        try:
+            return self.credential_store.get()
+        except RuntimeError:
+            return None
 
 
 class ContinuousResearchWorker:
@@ -440,6 +450,55 @@ class ContinuousResearchWorker:
             except asyncio.CancelledError:
                 raise
             except Exception as error:
+                candidate_failure = _candidate_level_failure_reason(error)
+                if candidate_failure:
+                    message = f"{type(error).__name__}: {error}"
+                    fingerprint = hashlib.sha256(message.encode()).hexdigest()[:16]
+                    record = self.store.iteration_record(run_id, iteration)
+                    candidate_id = (
+                        str(record.get("candidate_id"))
+                        if record and record.get("candidate_id")
+                        else None
+                    )
+                    self.store.finish_iteration(
+                        run_id,
+                        iteration,
+                        status="REJECTED",
+                        error=f"{candidate_failure}:{message}",
+                    )
+                    if candidate_id:
+                        with suppress(KeyError):
+                            self.store.close_generation_experiment(
+                                candidate_id,
+                                status="REJECTED",
+                                public_verdict=f"CANDIDATE_LEVEL_FAILURE:{candidate_failure}",
+                            )
+                    self.store.remember(
+                        run_id,
+                        iteration,
+                        "candidate_failure",
+                        _failure_memory(message, fingerprint, record),
+                    )
+                    self._update_state(state="READY", phase="WAITING", last_error=None)
+                    self.store.append_event(
+                        "research",
+                        "CANDIDATE_LEVEL_FAILURE",
+                        "候选失败已隔离",
+                        f"{candidate_failure}: {message}",
+                        run_id=run_id,
+                        iteration=iteration,
+                        level="WARN",
+                        payload={
+                            "candidate_id": candidate_id,
+                            "failure_class": candidate_failure,
+                            "failure_fingerprint": fingerprint,
+                        },
+                    )
+                    with suppress(Exception):
+                        await self._interruptible_sleep(
+                            self._research_config().loop.sleep_seconds
+                        )
+                    continue
                 failures += 1
                 message = f"{type(error).__name__}: {error}"
                 fingerprint = hashlib.sha256(message.encode()).hexdigest()[:16]
@@ -579,6 +638,7 @@ class ContinuousResearchWorker:
             "institutional_pit_ready": workspace.institutional_pit_ready,
             "blockers": list(workspace.blockers),
         }
+        data_context["homogeneity_control"] = research_program["homogeneity_control"]
         data_context["research_program"] = research_program
         self.store.append_event(
             "audit",
@@ -944,6 +1004,30 @@ class ContinuousResearchWorker:
             pool_snapshot,
         )
         library_metrics.update(redundancy_metrics)
+        homogeneity_metrics = candidate_homogeneity_metrics(
+            factor_id=factor.factor_id,
+            candidate_mechanism=candidate_mechanism,
+            candidate_fields=candidate_fields,
+            pool_records=pool_snapshot,
+            behavior_snapshot=behavior_snapshot,
+            redundancy_metrics=redundancy_metrics,
+        )
+        result.metrics.update(homogeneity_metrics)
+        library_metrics.update(homogeneity_metrics)
+        if not homogeneity_metrics["homogeneity_gate_passed"]:
+            self.store.append_event(
+                "audit",
+                "HOMOGENEITY_GATE_BLOCKED",
+                "候选因子同质化门禁拦截",
+                str(homogeneity_metrics["homogeneity_gate_failure"]),
+                run_id=run_id,
+                iteration=iteration,
+                level="WARN",
+                payload={
+                    "candidate_id": factor.factor_id,
+                    **homogeneity_metrics,
+                },
+            )
         self._update_state(phase="PORTFOLIO")
         engine = MultiFactorResearchEngine(
             self.store,
@@ -1388,6 +1472,13 @@ class ContinuousResearchWorker:
             "adaptive_direction": direction_metrics,
             "llm_role_routing": role_routing if llm_team is not None else {},
         }
+        failure_profile = _candidate_failure_profile(
+            combined_metrics,
+            candidate_eligible=candidate_eligible,
+            portfolio_accepted=portfolio_decision.accepted,
+        )
+        combined_metrics["candidate_failure_profile"] = failure_profile
+        combined_metrics["planner_features"]["candidate_failure_profile"] = failure_profile
         self.store.close_generation_experiment(
             factor.factor_id,
             status=experiment_status,
@@ -1464,6 +1555,20 @@ class ContinuousResearchWorker:
             iteration=iteration,
             payload={"candidate_id": factor.factor_id, **combined_metrics},
         )
+        if failure_profile["severity"] != "PASS":
+            self.store.append_event(
+                "research",
+                "CANDIDATE_FAILURE_PROFILED",
+                "候选失败画像已归档",
+                "候选没有触发任务熔断，失败原因已结构化写入研究证据。",
+                run_id=run_id,
+                iteration=iteration,
+                payload={
+                    "candidate_id": factor.factor_id,
+                    "failure_profile": failure_profile,
+                },
+                level="WARN" if failure_profile["severity"] == "HARD_FAIL" else "INFO",
+            )
         self.store.append_event(
             "delivery",
             "ARTIFACT_PUBLISHED",
@@ -2165,6 +2270,11 @@ class ContinuousResearchWorker:
                 "value."
             ),
         }
+        homogeneity_control = build_homogeneity_report(
+            pool_records or pool,
+            behavior,
+            source_task_id=self.task_id,
+        )
         policy = evaluator.config.evaluation
         evidence_tier = getattr(
             evaluator, "research_evidence_tier", research_evidence_tier(evaluator.config)
@@ -2187,6 +2297,7 @@ class ContinuousResearchWorker:
             "plateau_iterations": max(0, iteration - last_accepted_iteration),
             "research_mandate": "assigned by the frozen adaptive direction campaign",
             "data_experiment": data_experiment,
+            "homogeneity_control": homogeneity_control,
             "active_portfolio": {
                 "version_id": active["id"] if active and not protocol_stale else None,
                 "source_iteration": (
@@ -2240,6 +2351,12 @@ class ContinuousResearchWorker:
                     "evaluated_count": len(behavior_factors),
                     "cluster_count": int(behavior.get("cluster_count", 0) or 0),
                     "pending_count": max(0, len(pool_records or pool) - len(behavior_factors)),
+                },
+                "homogeneity_control": {
+                    "protocol": homogeneity_control["protocol"],
+                    "crowded_cluster_count": homogeneity_control["crowded_cluster_count"],
+                    "target_mechanisms": homogeneity_control["target_mechanisms"],
+                    "avoid_mechanisms": homogeneity_control["avoid_mechanisms"],
                 },
                 "recent_expressions": [
                     {
@@ -2987,6 +3104,87 @@ def _expression_node_count(expression: dict[str, Any] | None) -> int:
     )
 
 
+def _candidate_failure_profile(
+    metrics: dict[str, Any],
+    *,
+    candidate_eligible: bool,
+    portfolio_accepted: bool,
+) -> dict[str, Any]:
+    """Classify evaluated candidate failures without treating them as task failures."""
+
+    single_factor_failures = [str(item) for item in metrics.get("exploratory_gate_failures", [])]
+    portfolio_failures = [str(item) for item in metrics.get("portfolio_action_gate_failures", [])]
+    homogeneity_failure = metrics.get("homogeneity_gate_failure")
+    if homogeneity_failure:
+        single_factor_failures.append(str(homogeneity_failure))
+    categories = sorted(
+        {
+            _candidate_failure_category(item)
+            for item in [*single_factor_failures, *portfolio_failures]
+        }
+        - {"OTHER"}
+    )
+    if not candidate_eligible:
+        categories.append("SINGLE_FACTOR_GATE")
+    if not portfolio_accepted:
+        categories.append("PORTFOLIO_GATE")
+    categories = sorted(set(categories))
+    failure_count = len(single_factor_failures) + len(portfolio_failures)
+    severity = "PASS"
+    if not candidate_eligible or not portfolio_accepted or failure_count:
+        severity = "SOFT_FAIL"
+    hard_markers = {
+        "COVERAGE",
+        "NON_FINITE",
+        "EMPTY_SIGNAL",
+        "HOMOGENEITY",
+        "CAPACITY",
+        "COST",
+        "TURNOVER",
+    }
+    if any(category in hard_markers for category in categories):
+        severity = "HARD_FAIL"
+    return {
+        "protocol": "CANDIDATE_FAILURE_PROFILE_V1",
+        "severity": severity,
+        "candidate_eligible": bool(candidate_eligible),
+        "portfolio_accepted": bool(portfolio_accepted),
+        "single_factor_failures": single_factor_failures,
+        "portfolio_failures": portfolio_failures,
+        "categories": categories,
+        "failure_count": failure_count,
+        "task_circuit_breaker_eligible": False,
+        "operational_failure": False,
+    }
+
+
+def _candidate_failure_category(reason: str) -> str:
+    value = reason.casefold()
+    if "finite" in value or "nan" in value or "inf" in value:
+        return "NON_FINITE"
+    if "coverage" in value or "valid_dates" in value or "observations" in value:
+        return "COVERAGE"
+    if "empty" in value or "missing" in value:
+        return "EMPTY_SIGNAL"
+    if "homogeneity" in value or "duplicate" in value or "redund" in value:
+        return "HOMOGENEITY"
+    if "turnover" in value:
+        return "TURNOVER"
+    if "capacity" in value:
+        return "CAPACITY"
+    if "cost" in value:
+        return "COST"
+    if "drawdown" in value or "worst_year" in value:
+        return "DRAWDOWN"
+    if "sharpe" in value or "return" in value or "ir" in value:
+        return "RETURN_QUALITY"
+    if "correlation" in value or "independence" in value:
+        return "INDEPENDENCE"
+    if "dsr" in value or "deflated" in value or "pbo" in value or "fdr" in value:
+        return "MULTIPLE_TESTING"
+    return "OTHER"
+
+
 def _matching_structure(
     expression: dict[str, Any], factor_pool: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
@@ -3029,6 +3227,48 @@ def _circuit_breaker_reason(
         return "同一确定性错误连续出现三次"
     if consecutive_failures >= 5:
         return "连续失败达到五次"
+    return None
+
+
+def _candidate_level_failure_reason(error: Exception) -> str | None:
+    if _is_operational_failure(error):
+        return None
+    message = str(error).lower()
+    candidate_markers = {
+        "evaluation produced non-finite metrics": "NON_FINITE_SINGLE_FACTOR_METRICS",
+        "portfolio evaluation produced non-finite metrics": "NON_FINITE_PORTFOLIO_METRICS",
+        "severe_coverage_shortfall": "SEVERE_COVERAGE_SHORTFALL",
+        "severe coverage shortfall": "SEVERE_COVERAGE_SHORTFALL",
+        "insufficient valid dates": "INSUFFICIENT_VALID_DATES",
+        "insufficient observations": "INSUFFICIENT_OBSERVATIONS",
+        "insufficient coverage": "INSUFFICIENT_COVERAGE",
+        "zero observations": "INSUFFICIENT_OBSERVATIONS",
+        "no observations": "INSUFFICIENT_OBSERVATIONS",
+        "not enough valid": "INSUFFICIENT_VALID_DATES",
+        "all factor values are missing": "EMPTY_FACTOR_SIGNAL",
+        "no valid factor values": "EMPTY_FACTOR_SIGNAL",
+        "factor signal is empty": "EMPTY_FACTOR_SIGNAL",
+        "empty evaluation": "EMPTY_FACTOR_SIGNAL",
+        "empty signal": "EMPTY_FACTOR_SIGNAL",
+        "cannot evaluate candidate": "CANDIDATE_EVALUATION_REJECTED",
+        "duplicate candidate expression": "DUPLICATE_CANDIDATE_EXPRESSION",
+        "parameter-only duplicate": "PARAMETER_ONLY_DUPLICATE",
+        "candidate signal preflight failed": "CANDIDATE_PREFLIGHT_FAILED",
+        "extended-data campaign has no research-eligible extended fields": (
+            "EXTENDED_DATA_CAMPAIGN_UNAVAILABLE"
+        ),
+        "explore_extended_data requires at least one eligible extended field": (
+            "EXTENDED_DATA_FIELD_MISMATCH"
+        ),
+        "frozen mechanism campaign requires": "MECHANISM_CAMPAIGN_MISMATCH",
+    }
+    for marker, reason in candidate_markers.items():
+        if marker in message:
+            return reason
+    if isinstance(error, ValueError) and (
+        "nan" in message or "inf" in message or "finite" in message
+    ):
+        return "NON_FINITE_CANDIDATE_EVIDENCE"
     return None
 
 

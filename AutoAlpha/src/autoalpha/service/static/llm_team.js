@@ -47,6 +47,7 @@ async function refresh() {
     state.snapshot = await response.json();
     hydrateFilters();
     renderSummary();
+    renderDomains();
     renderRoles();
     renderFlow();
     renderCurrentView();
@@ -76,6 +77,34 @@ function renderSummary() {
   document.getElementById("teamState").className = `state-pill ${snapshot.enabled ? "running" : ""}`;
   const failed = Object.values(snapshot.summary.roles).reduce((sum, item) => sum + item.failed, 0);
   document.getElementById("teamSummary").textContent = `${snapshot.roles.length} 个受限研究角色 · ${failed} 次失败开放 · 隐藏指标隔离`;
+}
+
+function renderDomains() {
+  const matrix = state.snapshot.domain_matrix || {};
+  const domains = matrix.domains || [];
+  const root = document.getElementById("domainGrid");
+  if (!domains.length) {
+    root.innerHTML = "";
+    return;
+  }
+  root.innerHTML = domains.map(domain => `
+    <article class="llm-domain-card ${String(domain.status || "").toLowerCase()}">
+      <header>
+        <div><span>${escapeHtml(domain.domain)}</span><h2>${escapeHtml(domain.label)}</h2></div>
+        <strong>${escapeHtml(domain.status || "WAITING")}</strong>
+      </header>
+      <p>${escapeHtml(domain.responsibility)}</p>
+      <div class="llm-domain-metrics">
+        <div><b>${domain.completed || 0}</b><small>完成</small></div>
+        <div><b>${domain.failed || 0}</b><small>失败开放</small></div>
+        <div><b>${Math.round(Number(domain.coverage_ratio || 0) * 100)}%</b><small>角色覆盖</small></div>
+      </div>
+      <footer>
+        <span>${escapeHtml(domain.latest_headline || "等待结构化制品")}</span>
+        <code>${escapeHtml(domain.latest_role || domain.roles.join(" / "))}</code>
+      </footer>
+    </article>
+  `).join("");
 }
 
 function renderRoles() {

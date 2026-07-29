@@ -12,6 +12,7 @@ from autoalpha.service.full_llm import (
     categorical_research_feedback,
     evaluate_falsification_plan,
     role_catalog,
+    summarize_research_team_domains,
 )
 from autoalpha.service.openai_client import GeneratedAnalysis
 
@@ -63,6 +64,47 @@ def test_role_catalog_has_six_advisory_roles() -> None:
 
     assert {item["role"] for item in catalog} == set(FULL_LLM_ROLES)
     assert all(item["decision_authority"] == "ADVISORY_ONLY" for item in catalog)
+    assert all(item["domains"] for item in catalog)
+
+
+def test_research_team_domain_matrix_summarizes_structured_artifacts() -> None:
+    matrix = summarize_research_team_domains(
+        [
+            {
+                "role": "FACTOR_LIBRARIAN",
+                "stage": "PRE_EVALUATION",
+                "status": "COMPLETED",
+                "candidate_id": "F_1",
+                "run_id": "run-one",
+                "iteration": 1,
+                "created_at": "2026-07-29T01:00:00Z",
+                "artifact": {
+                    "canonical_mechanism": "PRICE_REVERSAL",
+                    "mechanism_summary": "Short horizon reversal",
+                },
+            },
+            {
+                "role": "TCA_PAPER_OBSERVER",
+                "stage": "POST_EVALUATION",
+                "status": "FAILED",
+                "candidate_id": "F_2",
+                "run_id": "run-two",
+                "iteration": 2,
+                "created_at": "2026-07-29T01:01:00Z",
+                "artifact": {"advisory_available": False},
+                "error": "provider unavailable",
+            },
+        ]
+    )
+    domains = {item["domain"]: item for item in matrix["domains"]}
+
+    assert matrix["protocol"] == "LLM_RESEARCH_TEAM_DOMAIN_MATRIX_V1"
+    assert domains["RESEARCHER"]["status"] == "ACTIVE"
+    assert domains["RESEARCHER"]["latest_headline"] == "PRICE_REVERSAL"
+    assert domains["DATA_OFFICER"]["covered_roles"] == ["FACTOR_LIBRARIAN"]
+    assert domains["TRADER"]["status"] == "FAILED_OPEN"
+    assert domains["TRADER"]["latest_headline"] == "provider unavailable"
+    assert domains["PORTFOLIO_MANAGER"]["status"] == "WAITING_FOR_ARTIFACTS"
 
 
 def test_feedback_firewall_returns_categories_without_exact_metrics() -> None:

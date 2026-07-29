@@ -37,6 +37,7 @@ class MassiveBatchRunner:
         self._pause = threading.Event()
         self._thread: threading.Thread | None = None
         self._active_job_id: str | None = None
+        self.status_callback = None
 
     @property
     def active_job_id(self) -> str | None:
@@ -73,6 +74,7 @@ class MassiveBatchRunner:
             "PAUSE_REQUESTED",
             "Pause requested; active factor threads will checkpoint before stopping.",
         )
+        self._notify(job_id, "PAUSE_REQUESTED")
         return self.store.job(job_id)
 
     def _run(self, job_id: str) -> None:
@@ -88,6 +90,7 @@ class MassiveBatchRunner:
                 finished_at=None,
                 last_error=None,
             )
+            self._notify(job_id, "JOB_RUNNING")
             self.store.append_event(
                 job_id,
                 "INFO",
@@ -126,6 +129,7 @@ class MassiveBatchRunner:
                     "JOB_PAUSED",
                     "All active factor results were committed; the remaining queue is resumable.",
                 )
+                self._notify(job_id, "JOB_PAUSED")
                 return
 
             self.store.update_job(job_id, status="RUNNING", phase="MULTIPLE_TESTING")
@@ -152,6 +156,7 @@ class MassiveBatchRunner:
                     "successful_factors": len(successful),
                 },
             )
+            self._notify(job_id, "JOB_COMPLETED")
         except Exception as error:  # noqa: BLE001
             self.store.update_job(
                 job_id,
@@ -166,9 +171,19 @@ class MassiveBatchRunner:
                 "JOB_FAILED",
                 f"{type(error).__name__}: {error}",
             )
+            self._notify(job_id, "JOB_FAILED")
         finally:
             with self._lock:
                 self._active_job_id = None
+
+    def _notify(self, job_id: str, event: str) -> None:
+        callback = self.status_callback
+        if not callable(callback):
+            return
+        try:
+            callback(self.store.job(job_id), event)
+        except Exception:
+            return
 
     def _evaluate_pending(
         self,
@@ -210,6 +225,7 @@ class MassiveBatchRunner:
                             f"{record['name']} completed in {outcome.elapsed_seconds:.1f}s.",
                             {"factor_id": factor_id},
                         )
+                        self._notify(job_id, "FACTOR_COMPLETED")
                     except Exception as error:  # noqa: BLE001
                         elapsed = 0.0
                         self.store.fail_factor(
@@ -225,6 +241,7 @@ class MassiveBatchRunner:
                             f"{record['name']}: {type(error).__name__}: {error}",
                             {"factor_id": factor_id},
                         )
+                        self._notify(job_id, "FACTOR_FAILED")
                     if not self._pause.is_set():
                         self._submit_next(job_id, engine, records, pool, active)
 

@@ -14,6 +14,12 @@ from autoalpha.backtest.capital import (
 from autoalpha.backtest.costs import ChinaAExecutionCosts
 from autoalpha.service.store import ServiceStore
 
+PRIMARY_SELECTION_METRICS = (
+    "recent_long_only_sharpe_ratio",
+    "long_only_sharpe_ratio",
+    "sharpe_ratio",
+)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -34,11 +40,11 @@ def main() -> None:
     args = parser.parse_args()
 
     store = ServiceStore(args.database)
-    completed = [
-        metric for metric in store.metric_history() if metric.get("sharpe_ratio") is not None
-    ]
+    completed = [metric for metric in store.metric_history() if _selection_metric(metric)[0]]
+    if not completed:
+        raise ValueError("No completed iterations have usable selection metrics")
     if args.iteration is None:
-        best = max(completed, key=lambda item: float(item["sharpe_ratio"]))
+        best = max(completed, key=lambda item: _selection_metric(item)[1])
     else:
         best = next(
             (item for item in completed if int(item["iteration"]) == args.iteration),
@@ -70,9 +76,11 @@ def main() -> None:
         ),
     )
     paths = write_capital_backtest_artifacts(report, args.output)
+    selection_metric, selection_value = _selection_metric(best)
     summary = {
         "selection_iteration": best["iteration"],
-        "selection_validation_sharpe": best["sharpe_ratio"],
+        "selection_metric": selection_metric,
+        "selection_metric_value": selection_value,
         "factor_id": factor.factor_id,
         "factor_name": factor.name,
         "metrics": report.metrics,
@@ -83,6 +91,15 @@ def main() -> None:
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def _selection_metric(metrics: dict[str, object]) -> tuple[str | None, float]:
+    for key in PRIMARY_SELECTION_METRICS:
+        value = metrics.get(key)
+        if value is None:
+            continue
+        return key, float(value)
+    return None, float("-inf")
 
 
 if __name__ == "__main__":

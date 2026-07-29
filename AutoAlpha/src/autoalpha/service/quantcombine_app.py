@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Literal
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -16,6 +18,12 @@ from autoalpha.config import ResearchConfig
 from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.service.autocombine import DEFAULT_CONSTRUCTION, OBJECTIVE_PRESETS
 from autoalpha.service.autocombine_intelligence import enrich_factor_record
+from autoalpha.service.external_jobs import external_job_id, mirror_external_research_job
+from autoalpha.service.gate_feedback import (
+    append_gate_feedback_notes,
+    apply_gate_feedback,
+    gate_feedback_policy,
+)
 from autoalpha.service.quantcombine import (
     DEFAULT_BUDGET,
     DEFAULT_ENGINE,
@@ -114,6 +122,8 @@ class QuantObjective(BaseModel):
 class QuantEngine(BaseModel):
     mode: Literal["ENSEMBLE", "DETERMINISTIC", "EVOLUTIONARY", "BAYESIAN"] = "ENSEMBLE"
     cluster_correlation_threshold: float = Field(default=0.78, ge=0.3, le=0.99)
+    strategy_reference_limit: int = Field(default=25, ge=0, le=200)
+    strategy_reference_minimum_observations: int = Field(default=120, ge=20, le=5000)
     minimum_stability_score: float = Field(default=-2.0, ge=-10, le=10)
     sffs_beam_width: int = Field(default=3, ge=1, le=10)
     evolution_population: int = Field(default=12, ge=4, le=100)
@@ -172,13 +182,25 @@ manager = QuantCombineManager(
     config_path=CONFIG_PATH,
     maximum_concurrent_tasks=int(os.getenv("QUANTCOMBINE_MAX_CONCURRENT", "1")),
 )
+autostart_task: asyncio.Task[None] | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    global autostart_task
     try:
+        await _restore_autostart_repair_tasks()
+        if os.getenv("QUANTCOMBINE_AUTOSTART_REPAIR_TASKS", "true").casefold() == "true":
+            autostart_task = asyncio.create_task(
+                _autostart_repair_task_loop(),
+                name="quantcombine-repair-autostart",
+            )
         yield
     finally:
+        if autostart_task and not autostart_task.done():
+            autostart_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await autostart_task
         await manager.shutdown()
 
 
@@ -186,6 +208,74 @@ app = FastAPI(
     title="QuantCombine Statistical Portfolio Research", version="1.0.0", lifespan=lifespan
 )
 app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
+
+
+async def _restore_autostart_repair_tasks() -> None:
+    if os.getenv("QUANTCOMBINE_AUTOSTART_REPAIR_TASKS", "true").casefold() != "true":
+        return
+    for task in quant_store.tasks():
+        if manager.active_count >= manager.maximum_concurrent_tasks:
+            return
+        if task.get("status") != "READY":
+            continue
+        notes = str(task.get("notes") or "")
+        if "[quantcombine-autostart:AUTOALPHA_REPAIR_V1]" not in notes:
+            continue
+        try:
+            started = await manager.start(str(task["task_id"]))
+        except RuntimeError as error:
+            quant_store.event(
+                str(task["task_id"]),
+                "system",
+                "AUTOSTART_SKIPPED",
+                "自动启动已跳过",
+                str(error),
+                payload={"reason": type(error).__name__},
+            )
+            return
+        quant_store.event(
+            str(task["task_id"]),
+            "system",
+            "AUTOSTART_REPAIR_TASK",
+            "门禁反馈修复任务已自动启动",
+            f"{started['task_id']} · phase={started['phase']}",
+            payload={"protocol": "QUANTCOMBINE_REPAIR_AUTOSTART_V1"},
+        )
+
+
+async def _autostart_repair_task_loop() -> None:
+    while True:
+        await asyncio.sleep(_autostart_poll_seconds())
+        await _restore_autostart_repair_tasks()
+
+
+def _autostart_poll_seconds() -> float:
+    try:
+        return max(5.0, float(os.getenv("QUANTCOMBINE_AUTOSTART_POLL_SECONDS", "30")))
+    except ValueError:
+        return 30.0
+
+
+def _format_validation_errors(errors: list[dict[str, Any]]) -> str:
+    messages = []
+    for error in errors:
+        location = ".".join(str(part) for part in error.get("loc", []) if part != "body")
+        message = str(error.get("msg", "invalid value"))
+        if location:
+            messages.append(f"{location}: {message}")
+        else:
+            messages.append(message)
+    return "；".join(messages) or "请求参数不符合 QuantCombine 任务格式"
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    _: Request, exc: RequestValidationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _format_validation_errors(exc.errors())},
+    )
 
 
 @app.get("/", include_in_schema=False)
@@ -216,6 +306,12 @@ async def health() -> dict[str, Any]:
         "task_count": len(quant_store.tasks()),
         "active_tasks": manager.active_count,
         "maximum_concurrent_tasks": manager.maximum_concurrent_tasks,
+        "repair_autostart": {
+            "enabled": os.getenv("QUANTCOMBINE_AUTOSTART_REPAIR_TASKS", "true").casefold()
+            == "true",
+            "alive": autostart_task is not None and not autostart_task.done(),
+            "poll_seconds": _autostart_poll_seconds(),
+        },
         "runtime_root": str(RUNTIME_ROOT.resolve()),
     }
 
@@ -267,6 +363,34 @@ async def bootstrap() -> dict[str, Any]:
                 "holdout_contaminated": record["factor_id"] in contaminated,
             }
         )
+    feedback = gate_feedback_policy(base_store)
+    construction_defaults = apply_gate_feedback(
+        dict(DEFAULT_CONSTRUCTION),
+        feedback["adjustments"]["construction"],
+    )
+    objective_defaults = {
+        key: value
+        for key, value in OBJECTIVE_PRESETS["DRAWDOWN_FIRST"].items()
+        if key not in {"label", "description"}
+    }
+    if feedback.get("profile_override") in OBJECTIVE_PRESETS:
+        objective_defaults = {
+            key: value
+            for key, value in OBJECTIVE_PRESETS[str(feedback["profile_override"])].items()
+            if key not in {"label", "description"}
+        }
+    objective_defaults = apply_gate_feedback(
+        objective_defaults,
+        feedback["adjustments"]["objective"],
+    )
+    engine_defaults = apply_gate_feedback(
+        dict(DEFAULT_ENGINE),
+        feedback["adjustments"]["engine"],
+    )
+    budget_defaults = apply_gate_feedback(
+        dict(DEFAULT_BUDGET),
+        feedback["adjustments"]["budget"],
+    )
     return {
         "tasks": [_task_view(task) for task in quant_store.tasks()],
         "strategies": quant_store.strategies(),
@@ -285,15 +409,12 @@ async def bootstrap() -> dict[str, Any]:
             "data_path": data_path,
             "data_range": data_range,
             "protocol": protocol,
-            "construction": DEFAULT_CONSTRUCTION,
-            "objective": {
-                key: value
-                for key, value in OBJECTIVE_PRESETS["DRAWDOWN_FIRST"].items()
-                if key not in {"label", "description"}
-            },
-            "engine": DEFAULT_ENGINE,
-            "budget": DEFAULT_BUDGET,
+            "construction": construction_defaults,
+            "objective": objective_defaults,
+            "engine": engine_defaults,
+            "budget": budget_defaults,
         },
+        "gate_feedback_policy": feedback,
         "llm_required": False,
         "maximum_concurrent_tasks": manager.maximum_concurrent_tasks,
     }
@@ -313,11 +434,38 @@ async def create_task(payload: QuantTaskRequest) -> dict[str, Any]:
         blockers.extend(protocol_data_blockers(protocol, Path(workspace.panel_path)))
         if blockers:
             raise ValueError("；".join(blockers))
-        objective = payload.objective.model_dump()
-        preset = OBJECTIVE_PRESETS[payload.objective.profile]
+        feedback = gate_feedback_policy(base_store)
+        profile = (
+            str(feedback["profile_override"])
+            if "profile" not in payload.objective.model_fields_set
+            and feedback.get("profile_override") in OBJECTIVE_PRESETS
+            else payload.objective.profile
+        )
+        objective = {**payload.objective.model_dump(), "profile": profile}
+        preset = OBJECTIVE_PRESETS[profile]
         for key, value in preset.items():
             if key in QuantObjective.model_fields and key not in payload.objective.model_fields_set:
                 objective[key] = value
+        objective = apply_gate_feedback(
+            objective,
+            feedback["adjustments"]["objective"],
+            explicit_fields=set(payload.objective.model_fields_set),
+        )
+        construction = apply_gate_feedback(
+            payload.construction.model_dump(),
+            feedback["adjustments"]["construction"],
+            explicit_fields=set(payload.construction.model_fields_set),
+        )
+        engine = apply_gate_feedback(
+            payload.engine.model_dump(),
+            feedback["adjustments"]["engine"],
+            explicit_fields=set(payload.engine.model_fields_set),
+        )
+        budget = apply_gate_feedback(
+            payload.budget.model_dump(),
+            feedback["adjustments"]["budget"],
+            explicit_fields=set(payload.budget.model_fields_set),
+        )
         record = create_quant_task_record(
             base_store,
             name=payload.name,
@@ -325,29 +473,38 @@ async def create_task(payload: QuantTaskRequest) -> dict[str, Any]:
             data_path=str(data_path),
             protocol=protocol,
             scope=payload.scope.model_dump(),
-            construction=payload.construction.model_dump(),
+            construction=construction,
             objective=objective,
-            engine=payload.engine.model_dump(),
-            budget=payload.budget.model_dump(),
-            notes=payload.notes,
+            engine=engine,
+            budget=budget,
+            notes=append_gate_feedback_notes(payload.notes, feedback),
         )
         if int(record["budget"]["maximum_evaluations"]) <= len(record["factor_snapshot"]):
             raise ValueError("评价预算必须大于冻结因子数量，才能完成组合搜索")
         task = quant_store.create_task(record)
     except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    homogeneity_summary = task.get("homogeneity_summary") or {}
     quant_store.event(
         task["task_id"],
         "action",
         "QUANT_TASK_CREATED",
         "QuantCombine 任务已创建",
-        f"冻结 {task['factor_count']} 个因子 · 快照 {task['snapshot_hash'][:12]} · 不调用 LLM。",
+        f"冻结 {task['factor_count']} 个因子 · "
+        f"{homogeneity_summary.get('search_cluster_count', task['factor_count'])} 个搜索簇 · "
+        f"快照 {task['snapshot_hash'][:12]} · 不调用 LLM。",
         payload={
             "factor_count": task["factor_count"],
             "engine_mode": task["engine"]["mode"],
             "snapshot_hash": task["snapshot_hash"],
+            "homogeneity_summary": homogeneity_summary,
+            "search_cluster_count": homogeneity_summary.get("search_cluster_count"),
+            "duplicate_search_cluster_factor_count": homogeneity_summary.get(
+                "duplicate_search_cluster_factor_count"
+            ),
         },
     )
+    _mirror_task_job(task, event="QUANT_TASK_CREATED", message="QuantCombine task created")
     return _task_view(task)
 
 
@@ -358,13 +515,16 @@ async def task_detail(task_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="QuantCombine task not found")
     candidates = quant_store.candidates(task_id)
     ranks = pareto_ranks(candidates)
+    events = quant_store.events(task_id)
+    task_view = _task_view(task)
+    task_view["homogeneity_rejection_summary"] = _homogeneity_rejection_summary(events)
     return {
-        "task": _task_view(task),
+        "task": task_view,
         "factor_snapshot": task["factor_snapshot"],
         "factor_screen": quant_store.factor_screen(task_id),
         "candidates": candidates,
         "pareto_frontier": [candidate_id for candidate_id, value in ranks.items() if value[0] == 0],
-        "events": quant_store.events(task_id),
+        "events": events,
         "best": (
             quant_store.candidate(int(task["best_candidate_id"]))
             if task.get("best_candidate_id")
@@ -389,16 +549,20 @@ async def start_task(task_id: str) -> dict[str, Any]:
     if quant_store.task(task_id) is None:
         raise HTTPException(status_code=404, detail="QuantCombine task not found")
     try:
-        return _task_view(await manager.start(task_id))
+        task = await manager.start(task_id)
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    _mirror_task_job(task, event="QUANT_TASK_STARTED", message="QuantCombine task started")
+    return _task_view(task)
 
 
 @app.post("/api/tasks/{task_id}/stop")
 async def stop_task(task_id: str) -> dict[str, Any]:
     if quant_store.task(task_id) is None:
         raise HTTPException(status_code=404, detail="QuantCombine task not found")
-    return _task_view(await manager.stop(task_id))
+    task = await manager.stop(task_id)
+    _mirror_task_job(task, event="QUANT_TASK_STOPPED", message="QuantCombine task stopped")
+    return _task_view(task)
 
 
 @app.post("/api/tasks/{task_id}/promote")
@@ -425,13 +589,54 @@ async def strategies() -> dict[str, Any]:
     return {"strategies": quant_store.strategies()}
 
 
+def _homogeneity_rejection_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    relevant = [
+        item
+        for item in events
+        if item.get("event") == "QUANT_HOMOGENEITY_CANDIDATE_REJECTED"
+    ]
+    by_dimension: dict[str, int] = {}
+    by_label: dict[str, int] = {}
+    for item in relevant:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        dimension = str(payload.get("dimension") or "UNKNOWN")
+        by_dimension[dimension] = by_dimension.get(dimension, 0) + 1
+        crowded = payload.get("crowded_labels")
+        if isinstance(crowded, dict):
+            for label, count in crowded.items():
+                key = f"{dimension}:{label}"
+                by_label[key] = by_label.get(key, 0) + int(count)
+    return {
+        "total": len(relevant),
+        "by_dimension": by_dimension,
+        "crowded_label_counts": by_label,
+    }
+
+
 def _task_view(task: dict[str, Any]) -> dict[str, Any]:
     item = dict(task)
     item.pop("factor_snapshot", None)
     item["worker_alive"] = manager.alive(task["task_id"])
     maximum = max(1, int(task["budget"]["maximum_evaluations"]))
     item["progress"] = min(1.0, int(task["evaluation_count"]) / maximum)
+    item["system_job_id"] = external_job_id("quantcombine", str(task["task_id"]))
+    item["job_center_url"] = "http://127.0.0.1:8788/jobs?queue=quantcombine"
     return item
+
+
+def _mirror_task_job(task: dict[str, Any], *, event: str, message: str) -> dict[str, Any]:
+    maximum = max(1, int((task.get("budget") or {}).get("maximum_evaluations") or 1))
+    return mirror_external_research_job(
+        base_store,
+        system="quantcombine",
+        task=task,
+        queue="quantcombine",
+        job_type="external_quantcombine_research",
+        progress_current=int(task.get("evaluation_count") or 0),
+        progress_total=maximum,
+        event=event,
+        message=message,
+    )
 
 
 def main() -> None:

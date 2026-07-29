@@ -7,7 +7,11 @@ from autoalpha.config import ResearchConfig
 from autoalpha.service.research_manager import ResearchTaskManager
 from autoalpha.service.research_protocol import default_task_protocol, protocol_fingerprint
 from autoalpha.service.store import ServiceStore
-from autoalpha.service.worker import ContinuousResearchWorker, SecretVault
+from autoalpha.service.worker import (
+    ContinuousResearchWorker,
+    SecretVault,
+    _candidate_level_failure_reason,
+)
 
 
 def _task(
@@ -180,3 +184,17 @@ def test_manager_reports_protocol_and_market_readiness(tmp_path: Path, monkeypat
     assert ready["snapshot_changed"] is True
     assert any("至少需要" in blocker for blocker in short["blockers"])
     assert any("仅支持 A 股" in blocker for blocker in hong_kong["blockers"])
+
+
+def test_candidate_level_failure_classifier_covers_metric_and_coverage_errors() -> None:
+    assert _candidate_level_failure_reason(
+        ValueError("Evaluation produced non-finite metrics")
+    ) == "NON_FINITE_SINGLE_FACTOR_METRICS"
+    assert _candidate_level_failure_reason(
+        ValueError("severe coverage shortfall")
+    ) == "SEVERE_COVERAGE_SHORTFALL"
+    assert _candidate_level_failure_reason(
+        ValueError("zero observations after alignment")
+    ) == "INSUFFICIENT_OBSERVATIONS"
+    assert _candidate_level_failure_reason(ConnectionError("db connection lost")) is None
+

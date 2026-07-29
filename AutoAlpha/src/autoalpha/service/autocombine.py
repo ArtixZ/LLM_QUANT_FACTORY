@@ -6,6 +6,7 @@ import json
 import math
 import time
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ DEFAULT_CONSTRUCTION = {
     "allow_negative_weights": False,
     "maximum_same_family": 2,
     "maximum_same_semantic_cluster": 1,
+    "maximum_same_parameter_family": 1,
 }
 DEFAULT_OBJECTIVE = {
     "profile": "ROBUST_ACTIVE_LONG_ONLY",
@@ -142,6 +144,9 @@ def build_factor_snapshot(
     statuses = {str(value) for value in scope.get("statuses", ["ELIGIBLE", "SCREENED_OUT"])}
     families = {str(value).casefold() for value in scope.get("families", [])}
     contaminated = store.contaminated_factor_ids()
+    knowledge_lookup = {
+        str(item["factor_id"]): item for item in store.factor_knowledge_catalog(limit=5000)
+    }
     records: list[dict[str, Any]] = []
     available_ids: set[str] = set()
     for record in store.factor_pool(limit=5000):
@@ -180,23 +185,41 @@ def build_factor_snapshot(
             factor_from_pool_record(record)
         except (KeyError, TypeError, ValueError):
             continue
-        records.append(
-            enrich_factor_record(
-                {
-                    "factor_id": factor_id,
-                    "name": record["name"],
-                    "family": record["family"],
-                    "status": record["status"],
-                    "source_task_id": record.get("source_task_id"),
-                    "source_iteration": record.get("source_iteration"),
-                    "proposal": proposal,
-                    "metrics": record.get("metrics") or {},
-                    "prefilter_score": _prefilter_score(record.get("metrics") or {}),
-                    "required": factor_id in required,
-                    "holdout_contaminated": factor_id in contaminated,
-                }
-            )
+        knowledge = knowledge_lookup.get(factor_id) or {}
+        review = knowledge.get("review") or {}
+        metrics = record.get("metrics") or {}
+        behavior_cluster_id = (
+            review.get("behavior_cluster_id")
+            or metrics.get("homogeneity_cluster_id")
+            or metrics.get("online_behavior_cluster_id")
         )
+        canonical_mechanism = knowledge.get("canonical_mechanism")
+        enriched_proposal = {
+            **proposal,
+            **({"canonical_mechanism": canonical_mechanism} if canonical_mechanism else {}),
+        }
+        enriched = enrich_factor_record(
+            {
+                "factor_id": factor_id,
+                "name": record["name"],
+                "family": record["family"],
+                "status": record["status"],
+                "source_task_id": record.get("source_task_id"),
+                "source_iteration": record.get("source_iteration"),
+                "proposal": enriched_proposal,
+                "metrics": metrics,
+                "prefilter_score": _prefilter_score(metrics),
+                "required": factor_id in required,
+                "holdout_contaminated": factor_id in contaminated,
+                "behavior_cluster_id": behavior_cluster_id,
+                "parameter_family": review.get("parameter_family"),
+                "expression_signature": review.get("expression_signature"),
+            }
+        )
+        enriched["parameter_family"] = enriched.get("parameter_family") or _parameter_family(
+            proposal.get("expression")
+        )
+        records.append(enriched)
     requested = explicit | required
     unknown = requested - available_ids
     if unknown:
@@ -257,6 +280,23 @@ def _prefilter_score(metrics: dict[str, Any]) -> float:
         default=100.0,
     )
     return sharpe + 2.0 * annual + 0.45 * worst + 0.5 * drawdown - 0.005 * turnover
+
+
+def _parameter_family(expression: dict[str, Any] | None) -> str:
+    values: list[str] = []
+
+    def visit(node: dict[str, Any] | None) -> None:
+        if not isinstance(node, dict):
+            return
+        parameters = node.get("parameters") if isinstance(node.get("parameters"), dict) else {}
+        for key in ("window", "period", "periods", "lookback"):
+            if key in parameters:
+                values.append(f"{key}={parameters[key]}")
+        for child in node.get("arguments", []):
+            visit(child)
+
+    visit(expression)
+    return "|".join(values) if values else "NO_EXPLICIT_LOOKBACK"
 
 
 def merge_defaults(value: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
@@ -373,12 +413,16 @@ class AutoCombineWorker:
                 if proposal is None:
                     await self._complete_task("冻结搜索空间内已无新候选")
                     return
-                evaluated = await asyncio.to_thread(
-                    self._evaluate_proposal, evaluator, task, proposal, iteration
-                )
+                try:
+                    evaluated = await asyncio.to_thread(
+                        self._evaluate_proposal, evaluator, task, proposal, iteration
+                    )
+                except _CandidateEvaluationRejected as error:
+                    evaluated = _rejected_experiment_record(task, proposal, iteration, error)
                 experiment = self.combine_store.record_experiment(self.task_id, evaluated)
-                self._update_best(task, experiment)
-                self._write_memory(experiment)
+                if experiment["qualification"] != "CANDIDATE_EVALUATION_REJECTED":
+                    self._update_best(task, experiment)
+                    self._write_memory(experiment)
                 self.combine_store.event(
                     self.task_id,
                     "research",
@@ -490,7 +534,13 @@ class AutoCombineWorker:
                 llm = await self._llm_proposal(task, experiments, iteration)
                 if llm and not self._proposal_exists(llm, task):
                     return llm
-            except (ModelInvocationError, RuntimeError, TypeError, ValueError) as error:
+            except (
+                ModelInvocationError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                _CandidateEvaluationRejected,
+            ) as error:
                 self.combine_store.event(
                     self.task_id,
                     "audit",
@@ -514,7 +564,11 @@ class AutoCombineWorker:
         ranked = [item["factor_id"] for item in pool]
         required = {str(value) for value in task["scope"].get("required_factor_ids", [])}
         mechanism = {item["factor_id"]: str(item["mechanism"]) for item in pool}
-        semantic_cluster = {item["factor_id"]: str(item["semantic_cluster_id"]) for item in pool}
+        search_cluster = {item["factor_id"]: str(item["search_cluster_id"]) for item in pool}
+        parameter_family = {
+            item["factor_id"]: str(item.get("parameter_family") or "NO_EXPLICIT_LOOKBACK")
+            for item in pool
+        }
         passing = [item for item in experiments if item["gate_status"] == "PASSED"]
         incumbent = max(
             passing or experiments,
@@ -560,7 +614,13 @@ class AutoCombineWorker:
                 continue
             if not required <= set(factor_ids):
                 continue
-            if not self._family_limit_ok(factor_ids, mechanism, semantic_cluster, construction):
+            if self._family_limit_violation(
+                factor_ids,
+                mechanism,
+                search_cluster,
+                construction,
+                parameter_family=parameter_family,
+            ):
                 continue
             dominant = self._dominant_mechanism(factor_ids, mechanism)
             if (
@@ -605,19 +665,66 @@ class AutoCombineWorker:
     def _family_limit_ok(
         factor_ids: tuple[str, ...],
         mechanism: dict[str, str],
-        semantic_cluster: dict[str, str],
+        search_cluster: dict[str, str],
         construction: dict[str, Any],
+        *,
+        parameter_family: dict[str, str] | None = None,
     ) -> bool:
+        return (
+            AutoCombineWorker._family_limit_violation(
+                factor_ids,
+                mechanism,
+                search_cluster,
+                construction,
+                parameter_family=parameter_family,
+            )
+            is None
+        )
+
+    @staticmethod
+    def _family_limit_violation(
+        factor_ids: tuple[str, ...],
+        mechanism: dict[str, str],
+        search_cluster: dict[str, str],
+        construction: dict[str, Any],
+        *,
+        parameter_family: dict[str, str] | None = None,
+    ) -> dict[str, Any] | None:
         maximum = int(construction.get("maximum_same_family", 2))
         maximum_cluster = int(construction.get("maximum_same_semantic_cluster", 1))
-        return all(
-            sum(mechanism[value] == mechanism[factor_id] for value in factor_ids) <= maximum
-            for factor_id in factor_ids
-        ) and all(
-            sum(semantic_cluster[value] == semantic_cluster[factor_id] for value in factor_ids)
-            <= maximum_cluster
-            for factor_id in factor_ids
-        )
+        maximum_parameter_family = int(construction.get("maximum_same_parameter_family", 1))
+        dimensions: list[tuple[str, dict[str, str], int]] = [
+            ("mechanism", mechanism, maximum),
+            ("search_cluster", search_cluster, maximum_cluster),
+        ]
+        if parameter_family is None:
+            parameter_family = {}
+        filtered_parameter_family = {
+            factor_id: label
+            for factor_id, label in parameter_family.items()
+            if label != "NO_EXPLICIT_LOOKBACK"
+        }
+        dimensions.append(("parameter_family", filtered_parameter_family, maximum_parameter_family))
+        for dimension, labels, maximum_allowed in dimensions:
+            label_counts = Counter(
+                labels.get(factor_id, factor_id)
+                for factor_id in factor_ids
+                if factor_id in labels
+            )
+            crowded = {
+                label: count
+                for label, count in label_counts.items()
+                if count > max(0, maximum_allowed)
+            }
+            if crowded:
+                return {
+                    "reason": "HOMOGENEITY_DIVERSIFICATION_CONSTRAINT",
+                    "dimension": dimension,
+                    "maximum_allowed": maximum_allowed,
+                    "crowded_labels": crowded,
+                    "factor_ids": list(factor_ids),
+                }
+        return None
 
     @staticmethod
     def _dominant_mechanism(
@@ -652,6 +759,8 @@ class AutoCombineWorker:
                 "reported_family": item["family"],
                 "mechanism": item["mechanism"],
                 "semantic_cluster_id": item["semantic_cluster_id"],
+                "behavior_cluster_id": item.get("behavior_cluster_id"),
+                "search_cluster_id": item["search_cluster_id"],
                 "expression_summary": item["expression_summary"],
                 "expression_fields": item["expression_fields"],
                 "expression_windows": item["expression_windows"],
@@ -685,10 +794,10 @@ class AutoCombineWorker:
                 "system. Select only existing factor_ids. Propose one static long-only composite "
                 "signal subset. Do not invent factors, inspect hidden periods, flip signs, or tune "
                 "decimal weights. Treat differently named factors with the same mechanism, fields, "
-                "window and semantic cluster as redundant. Favor genuinely independent mechanisms "
-                "and robust public out-of-sample evidence. Exact public metrics are intentionally "
-                "hidden to reduce adaptive validation overfit. Return JSON with action, "
-                "factor_ids, rationale, hypothesis, risk."
+                "window and behavior/search cluster as redundant. Favor genuinely independent "
+                "mechanisms and robust public out-of-sample evidence. Exact public metrics are "
+                "intentionally hidden to reduce adaptive validation overfit. Return JSON with "
+                "action, factor_ids, rationale, hypothesis, risk."
             ),
             context={
                 "iteration": iteration,
@@ -715,10 +824,23 @@ class AutoCombineWorker:
         records = {item["factor_id"]: item for item in task["factor_snapshot"]}
         mechanism = {factor_id: str(item["mechanism"]) for factor_id, item in records.items()}
         clusters = {
-            factor_id: str(item["semantic_cluster_id"]) for factor_id, item in records.items()
+            factor_id: str(item["search_cluster_id"]) for factor_id, item in records.items()
         }
-        if not self._family_limit_ok(factor_ids, mechanism, clusters, task["construction"]):
-            raise ValueError("LLM combination violates mechanism-diversity constraints")
+        parameter_family = {
+            factor_id: str(item.get("parameter_family") or "NO_EXPLICIT_LOOKBACK")
+            for factor_id, item in records.items()
+        }
+        violation = self._family_limit_violation(
+            factor_ids,
+            mechanism,
+            clusters,
+            task["construction"],
+            parameter_family=parameter_family,
+        )
+        if violation is not None:
+            raise _CandidateEvaluationRejected(
+                f"HOMOGENEITY_DIVERSIFICATION_CONSTRAINT:{violation['dimension']}"
+            )
         return CombineProposal(
             action=str(analysis.artifact["action"]).upper()[:32],
             factor_ids=factor_ids,
@@ -746,6 +868,37 @@ class AutoCombineWorker:
     ) -> dict[str, Any]:
         started = time.monotonic()
         records = {item["factor_id"]: item for item in task["factor_snapshot"]}
+        mechanism = {factor_id: str(item["mechanism"]) for factor_id, item in records.items()}
+        search_cluster = {
+            factor_id: str(item["search_cluster_id"]) for factor_id, item in records.items()
+        }
+        parameter_family = {
+            factor_id: str(item.get("parameter_family") or "NO_EXPLICIT_LOOKBACK")
+            for factor_id, item in records.items()
+        }
+        homogeneity_violation = self._family_limit_violation(
+            proposal.factor_ids,
+            mechanism,
+            search_cluster,
+            task["construction"],
+            parameter_family=parameter_family,
+        )
+        if homogeneity_violation is not None:
+            self.combine_store.event(
+                self.task_id,
+                "audit",
+                "COMBINE_HOMOGENEITY_CANDIDATE_REJECTED",
+                "同质候选已跳过",
+                (
+                    f"{homogeneity_violation['dimension']} 超过上限 "
+                    f"{homogeneity_violation['maximum_allowed']}"
+                ),
+                level="WARN",
+                payload=homogeneity_violation,
+            )
+            raise _CandidateEvaluationRejected(
+                f"HOMOGENEITY_DIVERSIFICATION_CONSTRAINT:{homogeneity_violation['dimension']}"
+            )
         factors = [factor_from_pool_record(records[factor_id]) for factor_id in proposal.factor_ids]
         best: (
             tuple[
@@ -759,11 +912,32 @@ class AutoCombineWorker:
             | None
         ) = None
         evaluated_count = 0
+        rejected_reasons: list[str] = []
         for weights in self._weight_candidates(proposal.factor_ids, task, iteration):
             candidate_hash = _candidate_hash(proposal.factor_ids, weights)
             if self.combine_store.candidate_exists(self.task_id, candidate_hash):
                 continue
-            evaluation = evaluator.evaluate_portfolio(factors, weights=weights)
+            try:
+                evaluation = evaluator.evaluate_portfolio(factors, weights=weights)
+            except (ValueError, FloatingPointError, ArithmeticError) as error:
+                reason = _recoverable_evaluation_failure_reason(error)
+                if reason is None:
+                    raise
+                rejected_reasons.append(reason)
+                self.combine_store.event(
+                    self.task_id,
+                    "audit",
+                    "COMBINE_WEIGHT_CANDIDATE_REJECTED",
+                    "权重候选评估失败，已作为候选级问题跳过",
+                    f"{reason}: {error}",
+                    level="WARN",
+                    payload={
+                        "factor_ids": list(proposal.factor_ids),
+                        "weights": list(weights),
+                        "failure_class": reason,
+                    },
+                )
+                continue
             evaluated_count += 1
             metrics = dict(evaluation.metrics)
             metrics.update(
@@ -785,6 +959,10 @@ class AutoCombineWorker:
             if best is None or rank > best[0]:
                 best = (rank, weights, evaluation, metrics, failures, score)
         if best is None:
+            if rejected_reasons:
+                raise _CandidateEvaluationRejected(
+                    f"All weight candidates rejected: {sorted(set(rejected_reasons))}"
+                )
             raise RuntimeError("该组合的全部权重候选均已评估")
         _, weights, evaluation, metrics, failures, score = best
         if not failures:
@@ -1191,6 +1369,68 @@ def _repair_weight_sum(
 def _candidate_hash(factor_ids: tuple[str, ...], weights: tuple[float, ...]) -> str:
     ordered = sorted(zip(factor_ids, weights, strict=True))
     return canonical_hash([(factor_id, round(weight, 6)) for factor_id, weight in ordered])
+
+
+class _CandidateEvaluationRejected(Exception):
+    pass
+
+
+def _rejected_experiment_record(
+    task: dict[str, Any],
+    proposal: CombineProposal,
+    iteration: int,
+    error: _CandidateEvaluationRejected,
+) -> dict[str, Any]:
+    message = str(error)
+    rejected_hash = canonical_hash({"factors": proposal.factor_ids, "rejected": message})[:12]
+    return {
+        "iteration": iteration,
+        "candidate_hash": f"{rejected_hash}-rejected",
+        "action": proposal.action,
+        "proposal_source": proposal.source,
+        "factor_ids": list(proposal.factor_ids),
+        "weights": [],
+        "rationale": proposal.rationale,
+        "hypothesis": proposal.hypothesis,
+        "metrics": {
+            "autocombine_objective_profile": task["objective"]["profile"],
+            "autocombine_snapshot_hash": task["snapshot_hash"],
+            "autocombine_candidate_level_failure": message,
+            "autocombine_hidden_metrics_exposed": False,
+        },
+        "score": -1_000_000.0,
+        "gate_distance": 1_000_000.0,
+        "qualification": "CANDIDATE_EVALUATION_REJECTED",
+        "gate_status": "REJECTED",
+        "failed_gates": ["candidate_evaluation_rejected"],
+        "prompt_hash": proposal.prompt_hash,
+        "response_hash": proposal.response_hash,
+        "return_artifact_path": None,
+        "return_artifact_hash": None,
+        "duration_seconds": 0.0,
+    }
+
+
+def _recoverable_evaluation_failure_reason(error: Exception) -> str | None:
+    message = str(error).lower()
+    if "database" in message or "locked" in message or "no parquet" in message:
+        return None
+    markers = {
+        "non-finite": "NON_FINITE_METRICS",
+        "not finite": "NON_FINITE_METRICS",
+        "nan": "NON_FINITE_METRICS",
+        "inf": "NON_FINITE_METRICS",
+        "insufficient coverage": "INSUFFICIENT_COVERAGE",
+        "coverage": "INSUFFICIENT_COVERAGE",
+        "no dates fall inside": "NO_PUBLIC_VALIDATION_DATES",
+        "walk-forward folds": "INSUFFICIENT_WALK_FORWARD_FOLDS",
+        "no target securities": "EMPTY_PORTFOLIO_SELECTION",
+        "a portfolio requires at least one factor": "EMPTY_PORTFOLIO_SELECTION",
+    }
+    for marker, reason in markers.items():
+        if marker in message:
+            return reason
+    return None
 
 
 def _experiment_selection_key(experiment: dict[str, Any]) -> tuple[float, ...]:

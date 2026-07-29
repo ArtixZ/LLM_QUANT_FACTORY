@@ -111,9 +111,16 @@ function renderTaskDetail() {
   $("taskIdentity").textContent = `${task.task_id} · ${task.market} · ${objectivePreset?.label || task.objective.profile} · ${task.snapshot_hash.slice(0, 16)}`;
   $("taskStatus").textContent = statusLabel(task.status);
   $("taskStatus").className = `state-pill ${task.status}`;
+  const jobLink = $("taskJobCenterLink");
+  if (jobLink) {
+    jobLink.href = `http://127.0.0.1:8788/jobs?queue=autocombine&job=${encodeURIComponent(task.system_job_id || "")}`;
+    jobLink.title = task.system_job_id ? `查看 ${task.system_job_id}` : "查看 AutoCombine 作业队列";
+  }
   $("taskPhase").textContent = task.phase;
   $("taskIteration").textContent = `${task.iteration} / ${task.budget.maximum_experiments}`;
-  $("taskFactorCount").textContent = `${task.factor_count} 个`;
+  const homogeneity = task.homogeneity_summary || {};
+  const homogeneityRejected = task.homogeneity_rejection_summary?.total || 0;
+  $("taskFactorCount").textContent = `${task.factor_count} 个 / ${homogeneity.search_cluster_count || task.factor_count} 簇${homogeneityRejected ? ` · 跳过 ${homogeneityRejected} 同质` : ""}`;
   $("taskFactorBounds").textContent = `${task.construction.min_factors} — ${task.construction.max_factors}`;
   $("taskWeightBounds").textContent = `${percent(task.construction.minimum_weight, 0)} — ${percent(task.construction.maximum_weight, 0)} · 步长 ${percent(task.construction.weight_step, 0)}`;
   $("taskQualification").textContent = qualificationLabel(task.qualification_status);
@@ -202,9 +209,12 @@ function renderExperiments(experiments, frontier, snapshot) {
 }
 
 function renderSnapshot(snapshot) {
-  $("snapshotCount").textContent = `${snapshot.length} 个因子`;
+  const homogeneity = state.detail?.task?.homogeneity_summary || {};
+  $("snapshotCount").textContent = homogeneity.search_cluster_count
+    ? `${snapshot.length} 个因子 · ${homogeneity.search_cluster_count} 个搜索簇`
+    : `${snapshot.length} 个因子`;
   $("snapshotList").innerHTML = snapshot.map((item, index) => `
-    <div class="snapshot-item ${item.holdout_contaminated ? "contaminated" : ""}" title="${esc(item.expression_summary || "")}"><code>#${index + 1}</code><strong title="${esc(item.factor_id)}">${esc(item.name)}</strong><span>${esc(item.mechanism || item.family)} · ${esc(item.semantic_cluster_id || "--")}${item.required ? " · 必选" : ""}${item.holdout_contaminated ? " · 污染" : ""}</span><span>${number(item.prefilter_score, 2)}</span></div>`).join("");
+    <div class="snapshot-item ${item.holdout_contaminated ? "contaminated" : ""}" title="${esc(item.expression_summary || "")}"><code>#${index + 1}</code><strong title="${esc(item.factor_id)}">${esc(item.name)}</strong><span>${esc(item.mechanism || item.family)} · 搜索簇 ${esc(item.search_cluster_id || item.semantic_cluster_id || "--")}${item.behavior_cluster_id ? ` · 行为簇 ${esc(item.behavior_cluster_id)}` : ""}${item.required ? " · 必选" : ""}${item.holdout_contaminated ? " · 污染" : ""}</span><span>${number(item.prefilter_score, 2)}</span></div>`).join("");
 }
 
 function renderLogs() {
@@ -327,7 +337,36 @@ function fillTaskDefaults() {
   Object.entries(budgetFields).forEach(([id, key]) => { if (budget[key] != null) $(id).value = budget[key]; });
   $("formObjectiveProfile").value = defaults.objective?.profile || "DRAWDOWN_FIRST";
   applyObjectivePreset();
+  renderGateFeedbackSummary();
   renderFactorPicker();
+}
+
+function renderGateFeedbackSummary() {
+  const node = $("gateFeedbackSummary");
+  if (!node) return;
+  const policy = state.bootstrap?.gate_feedback_policy || {};
+  if (!policy.active) {
+    node.innerHTML = `<i data-lucide="activity"></i><span>门禁反馈未启用，使用系统默认组合搜索参数。</span>`;
+    return;
+  }
+  const roots = Object.entries(policy.root_cause_intensity || {})
+    .sort((left, right) => Number(right[1]) - Number(left[1]))
+    .slice(0, 3)
+    .map(([key, count]) => `${key} ${count}`)
+    .join(" · ");
+  const recommendations = (policy.recommendations || [])
+    .slice(0, 2)
+    .map((item) => item.action)
+    .join(" · ");
+  node.innerHTML = `
+    <i data-lucide="activity"></i>
+    <span>
+      门禁反馈已介入默认值：${esc(policy.profile_override || "KEEP_PROFILE")}。
+      ${policy.recommended_profile_reason ? esc(policy.recommended_profile_reason) : ""}
+      主根因：${esc(roots || "暂无")}。
+      建议：${esc(recommendations || "查看策略生产漏斗")}。
+    </span>
+  `;
 }
 
 function openDialog() { fillTaskDefaults(); $("taskDialog").showModal(); renderFactorPicker(); lucide.createIcons(); }

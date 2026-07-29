@@ -74,7 +74,7 @@ function bindLibraryControls() {
   document.getElementById("favoriteFactorBtn").onclick = () => {
     if (libraryState.detailFactor) toggleFactorFavorite(libraryState.detailFactor.factor_id);
   };
-  document.getElementById("libraryRefresh").onclick = () => loadLibrary({ announce: true });
+  document.getElementById("libraryRefresh").onclick = () => queueLibraryRefresh();
   document.getElementById("clearSelection").onclick = () => {
     libraryState.selected.clear();
     renderFactorTable();
@@ -124,6 +124,33 @@ function bindLibraryControls() {
   document.getElementById("copyLatex").onclick = () => copyDetailText("LaTex", expressionToLatex(libraryState.detailFactor?.expression));
 }
 
+async function queueLibraryRefresh() {
+  if (libraryState.refreshing) return;
+  libraryState.refreshing = true;
+  const refreshButton = document.getElementById("libraryRefresh");
+  refreshButton.disabled = true;
+  try {
+    const result = await api("/api/factors/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (result.queued) {
+      toast(result.deduplicated ? "因子库刷新作业已在队列中" : "因子库刷新作业已入队");
+      const jobId = result.job?.job_id;
+      window.location.href = `/jobs?queue=${encodeURIComponent(result.job?.queue || "system")}${jobId ? `&job=${encodeURIComponent(jobId)}` : ""}`;
+      return;
+    }
+    await loadLibrary({ announce: false });
+    toast("因子库已刷新");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    libraryState.refreshing = false;
+    refreshButton.disabled = false;
+  }
+}
+
 async function loadLibrary({ announce = true } = {}) {
   if (libraryState.refreshing) return;
   libraryState.refreshing = true;
@@ -138,6 +165,8 @@ async function loadLibrary({ announce = true } = {}) {
     libraryState.refreshedAt = new Date();
     hydrateFilters();
     renderSummary();
+    renderDiagnostics();
+    renderResearchMap();
     renderCategories();
     renderFactorTable();
     renderSelection();
@@ -199,6 +228,7 @@ function renderSummary() {
       ? `${behavior.completed_count || 0}/${behavior.total_count || summary.factor_count}`
       : behaviorCount || "待计算",
   );
+  text("crowdedClusterCount", summary.crowded_behavior_cluster_count || 0);
   text("shadowCount", summary.shadow_count);
   text("contaminatedCount", summary.contaminated_count);
   text("dataEnd", libraryState.data.data.last_trade_date);
@@ -206,6 +236,227 @@ function renderSummary() {
     "librarySummary",
     `${summary.factor_count} 个持久化候选 · 主榜 ${summary.long_only_evaluated_count || 0} · 行为分类 ${behavior.status || "NOT_STARTED"}${behavior.status === "RUNNING" ? ` ${behavior.completed_count || 0}/${behavior.total_count || summary.factor_count}` : ""} · ${summary.stale_protocol_count} 个待统一重评 · ${formatClock(libraryState.refreshedAt)} 已同步`,
   );
+}
+
+function renderDiagnostics() {
+  const materialization = libraryState.data.materialization || {};
+  const homogeneity = materialization.factor_homogeneity_backfill;
+  const integrity = libraryState.data.knowledge_integrity || {};
+  const gate = libraryState.data.gate_funnel || {};
+  const knowledgeNode = document.getElementById("knowledgeBackfillStatus").closest("div");
+  const gateNode = document.getElementById("gateFunnelStatus").closest("div");
+  const categoryNode = document.getElementById("gateFunnelTopCategory").closest("div");
+  const actionNode = document.getElementById("gateFunnelAction").closest("div");
+  setDiagnosticState(knowledgeNode, integrity.complete ? "good" : (homogeneity ? "warn" : "bad"));
+  text("knowledgeBackfillStatus", integrity.complete ? `${integrity.knowledge_count || 0}/${integrity.factor_count || 0} 完整` : `${integrity.missing_count || 0} 缺失`);
+  text("knowledgeBackfillMeta", integrity.complete ? `${homogeneity?.behavior_snapshot_id || "behavior"} · ${formatDate(homogeneity?.updated_at)}` : `建议作业 ${integrity.recommended_job_type || "factor_homogeneity_backfill"}`);
+  const total = Number(gate.total_candidates || 0), passed = Number(gate.passed_candidates || 0);
+  setDiagnosticState(gateNode, total && passed === 0 ? "bad" : (passed > 0 ? "good" : "warn"));
+  text("gateFunnelStatus", total ? `${passed}/${total} 通过` : "无候选");
+  text("gateFunnelMeta", gate.materialized ? `物化 ${formatDate(gate.materialized_at)}` : "实时诊断，未缓存");
+  const top = (gate.failure_categories || [])[0];
+  setDiagnosticState(categoryNode, top ? "warn" : "good");
+  text("gateFunnelTopCategory", top ? gateCategoryLabel(top.key) : "暂无");
+  text("gateFunnelTopMeta", top ? `${top.count} 次失败 · ${percent(top.count / Math.max(1, total - passed))}` : "没有失败样本");
+  const action = gateAction(gate);
+  setDiagnosticState(actionNode, action.level);
+  text("gateFunnelAction", action.title);
+  text("gateFunnelActionMeta", action.note);
+}
+
+function renderResearchMap() {
+  const map = libraryState.data?.research_map || {};
+  const mechanisms = map.mechanism_map || map.mechanism_clusters || [];
+  const folded = map.homogeneity_fold_groups || map.crowded_clusters || [];
+  const parameterFamilies = map.parameter_families || [];
+  text(
+    "researchMapSummary",
+    `${map.factor_count || 0} 个因子 · ${map.mechanism_cluster_count || mechanisms.length || 0} 个机制源 · ${map.behavior_cluster_count || 0} 个行为簇 · ${map.parameter_family_count || parameterFamilies.length || 0} 个参数家族 · ${map.near_duplicate_count || 0} 个近重复`,
+  );
+  text("researchMapState", map.research_map_protocol || map.protocol ? "READY" : "PENDING");
+  renderMapCards(
+    "mechanismMapList",
+    mechanisms.slice(0, 8),
+    cluster => mapClusterCard(cluster, { filterType: "mechanism" }),
+  );
+  renderMapCards(
+    "crowdedClusterList",
+    folded.slice(0, 8),
+    cluster => mapClusterCard(cluster, { filterType: "behavior" }),
+  );
+  renderMapCards(
+    "parameterFamilyList",
+    parameterFamilies.slice(0, 8),
+    family => parameterFamilyCard(family),
+  );
+  renderMapCards(
+    "nearDuplicateList",
+    (map.near_duplicates || []).slice(0, 8),
+    duplicate => nearDuplicateCard(duplicate),
+  );
+  renderAnnualHeatmap(map.annual_heatmap || {});
+}
+
+function renderMapCards(id, items, renderer) {
+  const node = document.getElementById(id);
+  node.replaceChildren();
+  if (!items.length) {
+    node.append(element("p", "empty-data-state", "暂无可折叠对象"));
+    return;
+  }
+  node.replaceChildren(...items.map(renderer));
+}
+
+function mapClusterCard(cluster, { filterType }) {
+  const card = element("button", "factor-map-card");
+  card.type = "button";
+  const clusterId = cluster.cluster_id || cluster.mechanism || cluster.parameter_family || "--";
+  const size = cluster.size || cluster.factor_count || 0;
+  const score = cluster.average_score ?? cluster.average_long_only_score ?? cluster.leader_score;
+  card.innerHTML = `
+    <strong>${escapeHtml(clusterId)}</strong>
+    <span>${escapeHtml(cluster.leader_name)} · ${escapeHtml(cluster.leader_factor_id)}</span>
+    <small>${size} 个因子 · 均分 ${number(score, 2)} · 近重复 ${cluster.near_duplicate_count || 0}</small>
+  `;
+  card.onclick = () => {
+    if (filterType === "mechanism") {
+      libraryState.category = "all";
+      libraryState.query = String(clusterId).toLowerCase();
+      document.getElementById("factorSearch").value = clusterId;
+    } else {
+      libraryState.behavior = "all";
+      libraryState.query = String(clusterId).toLowerCase();
+      document.getElementById("factorSearch").value = clusterId;
+    }
+    renderFactorTable();
+  };
+  return card;
+}
+
+function parameterFamilyCard(family) {
+  const card = element("button", "factor-map-card");
+  card.type = "button";
+  const familyId = family.parameter_family || "--";
+  card.innerHTML = `
+    <strong>${escapeHtml(familyId)}</strong>
+    <span>${escapeHtml(family.leader_name || "--")} · ${escapeHtml(family.leader_factor_id || "--")}</span>
+    <small>${family.factor_count || 0} 个因子 · ${escapeHtml((family.mechanisms || []).slice(0, 2).join(", ") || "机制待识别")}</small>
+  `;
+  card.onclick = () => {
+    libraryState.query = String(familyId).toLowerCase();
+    document.getElementById("factorSearch").value = familyId;
+    renderFactorTable();
+  };
+  return card;
+}
+
+function nearDuplicateCard(duplicate) {
+  const card = element("button", "factor-map-card warning");
+  card.type = "button";
+  card.innerHTML = `
+    <strong>${escapeHtml(duplicate.name)}</strong>
+    <span>${escapeHtml(duplicate.factor_id)} ↔ ${escapeHtml(duplicate.nearest_factor_id || "--")}</span>
+    <small>${escapeHtml(duplicate.cluster_id || "--")} · 相似度 ${number4(duplicate.similarity)}</small>
+  `;
+  card.onclick = () => {
+    libraryState.query = duplicate.factor_id.toLowerCase();
+    document.getElementById("factorSearch").value = duplicate.factor_id;
+    renderFactorTable();
+  };
+  return card;
+}
+
+function renderAnnualHeatmap(heatmap) {
+  const node = document.getElementById("annualHeatmap");
+  const years = heatmap.years || [];
+  const rows = heatmap.rows || [];
+  node.replaceChildren();
+  if (!years.length || !rows.length) {
+    node.append(element("p", "empty-data-state", "暂无年度折叠数据"));
+    return;
+  }
+  const columns = `minmax(160px, 1.2fr) repeat(${years.length}, minmax(48px, 1fr))`;
+  const header = element("div", "heatmap-row heatmap-header");
+  header.style.gridTemplateColumns = columns;
+  header.append(element("strong", "", "机制"));
+  years.forEach(year => header.append(element("span", "", String(year))));
+  node.append(header);
+  rows.forEach(row => {
+    const line = element("button", "heatmap-row");
+    line.type = "button";
+    line.style.gridTemplateColumns = columns;
+    line.title = `${row.mechanism} · ${row.factor_count} 因子 · 弱年份 ${(row.weak_years || []).join(", ") || "无"}`;
+    line.append(element("strong", "", row.mechanism));
+    years.forEach(year => {
+      const value = row.annual_returns?.[year];
+      const cellNode = element("span", `heat-cell ${heatClass(value)}`, value == null ? "--" : percent(value, 0));
+      line.append(cellNode);
+    });
+    line.onclick = () => {
+      libraryState.query = row.mechanism.toLowerCase();
+      document.getElementById("factorSearch").value = row.mechanism;
+      renderFactorTable();
+    };
+    node.append(line);
+  });
+}
+
+function heatClass(value) {
+  if (value == null || !Number.isFinite(Number(value))) return "missing";
+  if (Number(value) < 0) return "cold";
+  if (Number(value) < 0.05) return "flat";
+  if (Number(value) < 0.15) return "warm";
+  return "hot";
+}
+
+function setDiagnosticState(node, state) {
+  node.classList.remove("good", "warn", "bad");
+  node.classList.add(state);
+}
+
+function gateCategoryLabel(value) {
+  return ({
+    SAMPLE_OR_COVERAGE: "样本/覆盖",
+    MULTIPLE_TESTING_OR_DSR: "DSR/多重检验",
+    DRAWDOWN_OR_RISK: "回撤/风险",
+    CORRELATION_OR_INDEPENDENCE: "相关性/独立性",
+    TURNOVER: "换手",
+    RETURN_OR_SHARPE: "收益/夏普",
+    CAPACITY_OR_LIQUIDITY: "容量/流动性",
+    OTHER: "其他",
+  })[value] || value || "--";
+}
+
+function gateAction(gate) {
+  const backendAction = (gate.operator_actions || [])[0];
+  if (backendAction) {
+    return {
+      level: backendAction.priority === "P0" ? "bad" : "warn",
+      title: gateActionLabel(backendAction.action),
+      note: backendAction.reason || backendAction.action,
+    };
+  }
+  const categories = (gate.failure_categories || []).map(item => item.key);
+  if (!gate.total_candidates) return { level: "warn", title: "先运行组合任务", note: "无组合候选可诊断" };
+  if (Number(gate.passed_candidates || 0) > 0) return { level: "good", title: "进入策略晋级", note: "冻结候选并走盲测/影子/模拟链路" };
+  if (categories.includes("SAMPLE_OR_COVERAGE")) return { level: "bad", title: "先修验证折数", note: "降低样本不足噪音，再比较搜索质量" };
+  if (categories.includes("MULTIPLE_TESTING_OR_DSR")) return { level: "warn", title: "收缩试验预算", note: "减少同质候选和参数换皮惩罚" };
+  if (categories.includes("CORRELATION_OR_INDEPENDENCE")) return { level: "warn", title: "提高独立性", note: "跨机制簇选因子，降低同源暴露" };
+  if (categories.includes("DRAWDOWN_OR_RISK")) return { level: "warn", title: "切换风险优先", note: "降低回撤目标和单因子集中度" };
+  return { level: "warn", title: "复查门禁", note: "查看失败项分布后调整约束" };
+}
+
+function gateActionLabel(value) {
+  return ({
+    RUN_COMBINATION_EXPERIMENTS: "先运行组合任务",
+    PROMOTE_GATE_PASSING_CANDIDATES_TO_STRATEGY_LIBRARY: "进入策略晋级",
+    REPAIR_WALK_FORWARD_CAPACITY_OR_COVERAGE: "先修验证折数",
+    REDUCE_EFFECTIVE_TRIAL_COUNT_AND_DEDUPLICATE_SEARCH_SPACE: "压缩同质试验",
+    FORCE_CROSS_MECHANISM_AND_CROSS_CLUSTER_SELECTION: "强制跨机制选因子",
+    SWITCH_OBJECTIVE_TO_DRAWDOWN_AND_TAIL_RISK_FIRST: "切换风险优先",
+    EXPAND_OR_RESEED_FACTOR_MECHANISMS: "扩展收益来源",
+    INSPECT_UNCATEGORIZED_GATE_FAILURES: "复查门禁遥测",
+  })[value] || value || "--";
 }
 
 function renderCategories() {
@@ -233,12 +484,15 @@ function filteredFactors() {
     .filter(factor => {
       if (libraryState.behavior === "all") return true;
       if (libraryState.behavior === "LEADER") return factor.behavior_cluster_role === "LEADER";
+      if (libraryState.behavior === "CROWDED") {
+        return Number(factor.behavior_cluster_size || factor.homogeneity_cluster_size || 0) >= 8;
+      }
       return (factor.behavior_redundancy || "PENDING") === libraryState.behavior;
     })
     .filter(factor => !libraryState.favoriteOnly || factor.favorite)
     .filter(factor => {
       if (!libraryState.query) return true;
-      const haystack = [factor.factor_id, factor.name, factor.family, factor.category, factor.hypothesis, factor.cluster_id, factor.behavior_cluster_id, factor.behavior_cluster_label, factor.behavior_redundancy, factor.lifecycle_state, factor.source_task_name, factor.source_market, factor.origin, ...(factor.tags || [])]
+      const haystack = [factor.factor_id, factor.name, factor.family, factor.category, factor.canonical_mechanism, factor.mechanism_summary, factor.hypothesis, factor.cluster_id, factor.behavior_cluster_id, factor.behavior_cluster_label, factor.behavior_redundancy, factor.lifecycle_state, factor.source_task_name, factor.source_market, factor.origin, ...(factor.tags || [])]
         .join(" ").toLowerCase();
       return haystack.includes(libraryState.query);
     })
@@ -347,7 +601,12 @@ function factorRow(factor, rank) {
   source.href = `/research/${encodeURIComponent(factor.source_task_id)}`;
   source.title = `打开来源任务工作台 ${factor.source_task_id}`;
   row.append(cell(source));
-  row.append(cell(tag(factor.category)));
+  const mechanism = element("div", "cluster-cell");
+  mechanism.append(
+    tag(factor.category),
+    element("small", "", factor.canonical_mechanism || factor.family || "未规范化"),
+  );
+  row.append(cell(mechanism));
   const cluster = element("div", "cluster-cell");
   cluster.append(element("strong", "", factor.cluster_id), element("small", "", `${factor.cluster_role} · ${factor.cluster_size}`));
   row.append(cell(cluster));
@@ -414,7 +673,7 @@ async function openFactorDetail(factor) {
   text("factorDetailTitle", factor.name);
   text("factorDetailId", `${factor.factor_id} · ITER ${factor.source_iteration} · ${factor.source_task_name || factor.source_task_id}`);
   text("factorDetailHypothesis", factor.hypothesis || "该因子尚未记录经济假设。");
-  document.getElementById("factorDetailTags").replaceChildren(tag(factor.family || "未分类家族"), tag(factor.origin || "AUTO_LLM_RESEARCH"), ...(factor.tags || []).map(value => tag(value)), tag(`结构簇 ${factor.cluster_id || "--"}`), tag(`行为簇 ${factor.behavior_cluster_id || "待计算"}`), statusPill(factor.research_state), statusPill(factor.lifecycle_state));
+  document.getElementById("factorDetailTags").replaceChildren(tag(factor.family || "未分类家族"), tag(factor.canonical_mechanism || "机制待规范"), tag(factor.origin || "AUTO_LLM_RESEARCH"), ...(factor.tags || []).map(value => tag(value)), ...(factor.knowledge_tags || []).slice(0, 5).map(value => tag(value)), tag(`结构簇 ${factor.cluster_id || "--"}`), tag(`行为簇 ${factor.behavior_cluster_id || "待计算"}`), statusPill(factor.research_state), statusPill(factor.lifecycle_state));
   const latex = expressionToLatex(factor.expression);
   const stats = expressionStats(factor.expression);
   document.getElementById("factorLatex").textContent = `\\[${latex}\\]`;
@@ -425,6 +684,8 @@ async function openFactorDetail(factor) {
   const metrics = historicalMetrics ? (factor.historical_metric_summary || {}) : (factor.metric_summary || {}), marginal = factor.marginal_contribution || {};
   renderDefinitionList("factorMetrics", [
     ["主评价口径", historicalMetrics ? "历史协议，仅供诊断" : "统一主榜 2015–2024 · A股纯多周频代理"],
+    ["规范机制标签", factor.canonical_mechanism || "待知识回填"],
+    ["机制摘要", factor.mechanism_summary || "暂无机制知识摘要"],
     ["单因子纯多门禁", factor.status === "SCREENED_OUT" ? `未通过：${factor.status_reason || "未记录原因"}` : "通过"],
     ["统一主榜综合分", factor.long_only_score_available ? number(factor.scores?.long_only_overall) : "待统一重评"],
     ["主榜夏普 / 年化", `${number(metrics.long_only_sharpe_ratio)} / ${percent(metrics.long_only_simple_annual_return)}`],
@@ -437,6 +698,9 @@ async function openFactorDetail(factor) {
     ["主榜年化换手", number(metrics.long_only_annual_turnover)],
     ["主榜容量", currency(metrics.long_only_capacity_cny)],
     ["组合边际净 IR", marginal.incremental_net_ir == null ? "未进入策略晋级" : number(marginal.incremental_net_ir)],
+    ["同质化门禁", metrics.homogeneity_gate_passed === false ? `拦截：${metrics.homogeneity_gate_failure || "INSUFFICIENT_BEHAVIOR_NOVELTY"}` : (metrics.homogeneity_gate_passed === true ? "通过" : "未执行")],
+    ["同质化新颖度", metrics.homogeneity_novelty_score == null ? "--" : number(metrics.homogeneity_novelty_score, 3)],
+    ["同质化最近因子", metrics.homogeneity_nearest_factor_id ? `${metrics.homogeneity_nearest_factor_id} · ${number4(metrics.homogeneity_nearest_similarity)}` : "--"],
     ["行为分类", factor.behavior_cluster_id ? `${factor.behavior_cluster_label} · ${factor.behavior_cluster_role} · ${behaviorLabel(factor.behavior_redundancy)}` : "待向量行为重算"],
     ["最近行为因子", factor.behavior_nearest_factor_id ? `${factor.behavior_nearest_factor_id} · ${number4(factor.behavior_nearest_similarity)}` : "--"],
     ["信号 / 残差收益相关", `${number4(factor.behavior_signal_correlation)} / ${number4(factor.behavior_return_correlation)}`],
