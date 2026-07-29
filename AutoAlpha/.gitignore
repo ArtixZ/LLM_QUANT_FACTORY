@@ -32,5 +32,16 @@ pids/
 *.sqlite3-shm
 *.sqlite3-wal
 *.sqlite3.*
+*.db
+*.db-shm
+*.db-wal
+*.duckdb
+*.duckdb.wal
 *.bak
 *.log
+
+# Local credential material
+.secrets/
+*.key
+*.p12
+*.pem

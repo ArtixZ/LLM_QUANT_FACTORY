@@ -8,9 +8,33 @@ version = "0.1.0"
 description = "Data and research tooling for A-share cross-sectional multi-factor strategies."
 readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Jiang Jingzhe", email = "contact@jiangjingzhe.com" },
+]
+keywords = [
+  "a-shares",
+  "factor-research",
+  "portfolio-optimization",
+  "quantitative-finance",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: Other/Proprietary License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
 dependencies = [
   "duckdb>=1.3,<2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/khakhasshi/MultiFactorAshare"
+Documentation = "https://github.com/khakhasshi/MultiFactorAshare#readme"
+Issues = "https://github.com/khakhasshi/MultiFactorAshare/issues"
+Source = "https://github.com/khakhasshi/MultiFactorAshare"
 
 [project.scripts]
 mf-data = "multifactor_ashare.data:main"
@@ -23,6 +47,25 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/multifactor_ashare"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/scripts",
+  "/README.md",
+  "/README_EN.md",
+  "/AGENTS.md",
+  "/LICENSE",
+  "/NOTICE",
+  "/CONTRIBUTING.md",
+  "/SECURITY.md",
+  "/CODE_OF_CONDUCT.md",
+  "/ROADMAP.md",
+  "/CITATION.cff",
+  "/pyproject.toml",
+  "/uv.lock",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

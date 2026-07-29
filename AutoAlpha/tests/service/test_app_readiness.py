@@ -11,8 +11,8 @@ from autoalpha.service.app import (
     _materialized_snapshot_policy,
     _production_data_readiness,
 )
-from autoalpha.service.strategy_bus import stable_experiment_id
 from autoalpha.service.store import ServiceStore
+from autoalpha.service.strategy_bus import stable_experiment_id
 
 
 def test_production_readiness_blocks_non_pit_research_proxy() -> None:
@@ -666,7 +666,11 @@ def test_strategy_library_can_create_paper_portfolio_from_execution_seed(
         }
 
     monkeypatch.setattr(service_app, "store", test_store)
-    monkeypatch.setattr(service_app.data_sync_worker, "alive", False)
+    monkeypatch.setattr(
+        type(service_app.data_sync_worker),
+        "alive",
+        property(lambda self: False),
+    )
     monkeypatch.setattr(service_app.PaperTradingEngine, "create", fake_create)
     monkeypatch.setattr(service_app, "_paper_event", lambda *_, **__: None)
 

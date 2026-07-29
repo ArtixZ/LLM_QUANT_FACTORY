@@ -1,0 +1,38 @@
+name: Research or architecture proposal
+description: Propose an evidence-backed improvement
+title: "[Proposal]: "
+labels: ["research"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Research question
+      description: What uncertainty or system limitation should this address?
+    validations:
+      required: true
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis and mechanism
+      description: State the expected mechanism and how it differs from existing work.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Proposed evidence contract
+      description: Data basis, splits, metrics, gates, costs, trial budget and falsification tests.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration
+      description: Which schemas, APIs, metrics or stored artifacts change?
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Boundary
+      options:
+        - label: The proposal does not require publishing licensed data or hidden-test metrics.
+          required: true

@@ -1,9 +1,18 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 # 停止 AutoAlpha (8788) / AutoCombine (8888) / QuantCombine (8889)
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 RT="$ROOT/runtime-full-llm"
+
+port_pid() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n1
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser -n tcp "$port" 2>/dev/null | awk '{print $1}'
+  fi
+}
 
 stop_one() {
   local name="$1" port="$2"
@@ -13,11 +22,13 @@ stop_one() {
   [[ -f "$pidfile" ]] && pid="$(cat "$pidfile")"
   # PID 文件失效时按端口兜底查找
   if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-    pid="$(lsof -nP -tiTCP:$port -sTCP:LISTEN 2>/dev/null | head -n1)"
+    pid="$(port_pid "$port")"
   fi
 
   if [[ -z "$pid" ]]; then
-    launchctl remove "$label" >/dev/null 2>&1 || true
+    if command -v launchctl >/dev/null 2>&1; then
+      launchctl remove "$label" >/dev/null 2>&1 || true
+    fi
     echo "[skip] $name 未在运行"
     rm -f "$pidfile"
     return

@@ -1,0 +1,34 @@
+{
+  "audit_chain_note": "Event hashes were recomputed after sanitization and authenticate only this public sample.",
+  "contains_credentials": false,
+  "contains_hidden_test_metrics": false,
+  "contains_market_data": false,
+  "files": {
+    "audit_events.jsonl": {
+      "bytes": 8129,
+      "sha256": "9541ccfa0e08a22ecd213387454838a1ee4fe1024fb465f41af0538f81e98702"
+    },
+    "combinations.jsonl": {
+      "bytes": 5672,
+      "sha256": "7d070726740b855fbfac655c8ec7be94a99bc9a9eee3ab83352403fa153d774b"
+    },
+    "factors.jsonl": {
+      "bytes": 23085,
+      "sha256": "0674a6516f4af6730de8bdc7d295c7975d0b00cd6e65a797837cdb1431ef66e4"
+    },
+    "strategy_spec.json": {
+      "bytes": 1928,
+      "sha256": "d74c9f6d08d874a27f2cc5bf7cd6b5d7544c6ae77c5e711197512815f8deee98"
+    }
+  },
+  "generated_at_utc": "2026-07-29T08:06:34.592677+00:00",
+  "record_counts": {
+    "audit_events": 20,
+    "combinations": 3,
+    "factors": 12,
+    "strategies": 1
+  },
+  "research_only": true,
+  "schema_version": "autoalpha-public-research-snapshot-v1",
+  "source": "sanitized local AutoAlpha research database"
+}

@@ -8,6 +8,25 @@ version = "0.5.0"
 description = "Auditable LLM-assisted cross-sectional factor research platform."
 readme = "README.md"
 requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Jiang Jingzhe", email = "contact@jiangjingzhe.com" },
+]
+keywords = [
+  "a-shares",
+  "factor-research",
+  "large-language-models",
+  "multi-agent",
+  "portfolio-optimization",
+  "quantitative-finance",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: Other/Proprietary License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
 dependencies = [
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
@@ -21,6 +40,12 @@ dependencies = [
   "tushare>=1.4,<2",
   "uvicorn[standard]>=0.35,<1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/khakhasshi/MultiFactorAshare"
+Documentation = "https://github.com/khakhasshi/MultiFactorAshare#readme"
+Issues = "https://github.com/khakhasshi/MultiFactorAshare/issues"
+Source = "https://github.com/khakhasshi/MultiFactorAshare/tree/main/AutoAlpha"
 
 [project.scripts]
 autoalpha = "autoalpha.cli:main"
@@ -39,6 +64,28 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/autoalpha"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/scripts",
+  "/config",
+  "/docs",
+  "/README.md",
+  "/LICENSE",
+  "/NOTICE",
+  "/evaluation.md",
+  "/IMPLEMENTATION_STATUS.md",
+  "/INSTITUTIONAL_IMPROVEMENT_GOALS.md",
+  "/program.md",
+  "/Dockerfile",
+  "/start-services.sh",
+  "/stop-services.sh",
+  "/.env.example",
+  "/pyproject.toml",
+  "/uv.lock",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

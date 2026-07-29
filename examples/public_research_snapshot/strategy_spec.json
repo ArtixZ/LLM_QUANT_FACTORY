@@ -1,0 +1,76 @@
+{
+  "cost_policy": {
+    "commission_bps_each_side": 2.5,
+    "slippage_model": "CONFIGURABLE_BPS",
+    "stamp_duty_bps_sell": 5.0,
+    "transfer_fee_bps_each_side": 0.1
+  },
+  "created_at": "2026-07-28T17:17:17.151949+00:00",
+  "evidence": {
+    "factor_ids": [
+      "F_d71e1a660cf9e59a",
+      "F_ef07361a8dad587a"
+    ],
+    "failed_gates": [
+      "coverage",
+      "worst_fold",
+      "drawdown",
+      "deflated_sharpe",
+      "marginal_contribution"
+    ],
+    "gate_status": "REJECTED",
+    "maximum_positions": 30,
+    "primary_metric_convention": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+    "source_system": "QUANTCOMBINE",
+    "target_gross_exposure": 0.9,
+    "weights": [
+      0.5,
+      0.5
+    ]
+  },
+  "execution_policy": {
+    "engine": "EVENT_LEDGER_OR_VECTOR_PROXY",
+    "execution_lag_sessions": 1,
+    "execution_time": "NEXT_SESSION_OPEN",
+    "product_template": "LONG_ONLY_CAPITAL"
+  },
+  "lifecycle": "RESEARCH",
+  "market": "CN_A",
+  "monitoring_policy": {
+    "decay_checks": [
+      "rolling_sharpe",
+      "drawdown",
+      "turnover",
+      "factor_correlation"
+    ],
+    "paper_first": true,
+    "review_frequency": "DAILY_AFTER_CLOSE"
+  },
+  "name": "QuantCombine 独立机制烟雾测试 · #1",
+  "rebalance_policy": {
+    "holding_period_days": 5,
+    "schedule": "WEEKLY_FIRST_SESSION",
+    "selection_count": 30
+  },
+  "risk_policy": {
+    "capacity_cny": 6011780.475000001,
+    "gross_exposure": 0.9,
+    "maximum_drawdown": -0.24070876811482178,
+    "maximum_positions": 30
+  },
+  "signal_policy": {
+    "factor_ids": [
+      "F_d71e1a660cf9e59a",
+      "F_ef07361a8dad587a"
+    ],
+    "score_method": "weighted_cross_sectional_zscore",
+    "signal_time": "END_OF_DAY_AFTER_CLOSE",
+    "weights": [
+      0.5,
+      0.5
+    ]
+  },
+  "source_specification_hash": "c2c3d232cdcf2a61cc91e2218912c12e99a27723c6bc838866d7bf7ae553254b",
+  "strategy_uid": "STR_PUBLIC_DEMO",
+  "version": 1
+}

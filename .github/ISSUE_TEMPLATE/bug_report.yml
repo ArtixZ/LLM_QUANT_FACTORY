@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible software or research-control defect
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, licensed market data, private prompts or hidden-test results.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or version
+      placeholder: git rev-parse --short HEAD
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Data pipeline
+        - AutoAlpha
+        - AutoCombine
+        - QuantCombine
+        - Factor knowledge base
+        - Backtest or execution
+        - Job system
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include sanitized commands, inputs and logs.
+    validations:
+      required: true
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Research-semantic impact
+      description: Could this affect timing, returns, gates, lineage or promotion?
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: I removed credentials, private data and hidden-test details.
+          required: true

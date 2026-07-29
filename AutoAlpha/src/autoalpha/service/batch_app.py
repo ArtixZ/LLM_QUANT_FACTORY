@@ -41,7 +41,7 @@ SOURCE_DATABASE = Path(
     os.getenv("AUTOALPHA_SOURCE_DB", PROJECT_ROOT / "runtime-full-llm/autoalpha.sqlite3")
 ).expanduser()
 DEFAULT_DATA_PATH = Path(
-    os.getenv("AUTOALPHA_BATCH_DATA", "/Users/jiangjingzhe/Portfolios/MultiFactorAshare/data")
+    os.getenv("AUTOALPHA_BATCH_DATA", PROJECT_ROOT.parent / "data")
 ).expanduser()
 CONFIG_PATH = Path(os.getenv("AUTOALPHA_CONFIG", PROJECT_ROOT / "config/research.toml"))
 

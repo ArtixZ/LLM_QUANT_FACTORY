@@ -426,7 +426,7 @@ def runtime_snapshot(
     database_config = database_runtime_config()
     autoalpha_address = (
         f"http://{os.getenv('AUTOALPHA_HOST', '127.0.0.1')}:"
-        f"{os.getenv('AUTOALPHA_PORT', '8787')}"
+        f"{os.getenv('AUTOALPHA_PORT', '8788')}"
     )
     autocombine_address = (
         f"http://{os.getenv('AUTOCOMBINE_HOST', '127.0.0.1')}:"

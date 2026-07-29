@@ -188,7 +188,8 @@ function openTaskDialog(task = null) {
   text("taskDialogTitle", task ? "编辑自动研究任务" : "新建自动研究任务");
   document.getElementById("taskName").value = task?.name || "";
   document.getElementById("taskMarket").value = task?.market || "CN_A";
-  document.getElementById("taskDataPath").value = task?.data_path || "/Users/jiangjingzhe/Portfolios/MultiFactorAshare/data";
+  document.getElementById("taskDataPath").value =
+    task?.data_path || taskState.data?.defaults?.data_path || "";
   const reference = task || taskState.data?.tasks.find(item => item.task_id === "legacy-ashare") || null;
   document.getElementById("taskDataStart").value = task?.data_start || reference?.data_start || "";
   document.getElementById("taskDataEnd").value = task?.data_end || reference?.data_end || "";

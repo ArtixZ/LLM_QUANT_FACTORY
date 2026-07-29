@@ -2816,10 +2816,15 @@ async def data_center_snapshot() -> dict[str, Any]:
 async def research_task_index() -> dict[str, Any]:
     tasks = [_research_task_view(task) for task in store.research_tasks()]
     favorite_tasks = store.favorite_ids("research_task")
+    settings = store.settings()
+    default_data_path = Path(
+        settings.get("data_path", PROJECT_ROOT.parent / "data")
+    ).expanduser().resolve()
     for task in tasks:
         task["favorite"] = task["task_id"] in favorite_tasks
     return {
         "tasks": tasks,
+        "defaults": {"data_path": str(default_data_path)},
         "markets": [
             {"value": "CN_A", "label": "A 股", "enabled": True},
             {"value": "HK", "label": "港股", "enabled": True},
@@ -4904,7 +4909,7 @@ def main() -> None:
     uvicorn.run(
         "autoalpha.service.app:app",
         host=os.getenv("AUTOALPHA_HOST", "127.0.0.1"),
-        port=int(os.getenv("AUTOALPHA_PORT", "8787")),
+        port=int(os.getenv("AUTOALPHA_PORT", "8788")),
         reload=False,
     )
 

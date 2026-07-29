@@ -56,7 +56,7 @@ Daily net and active-return artifacts are written beneath
 ## Run
 
 ```bash
-cd /Users/jiangjingzhe/Portfolios/MultiFactorAshare/AutoAlpha
+cd MultiFactorAshare/AutoAlpha
 AUTOALPHA_RUNTIME="$PWD/runtime-full-llm" QUANTCOMBINE_PORT=8889 \
   .venv/bin/quantcombine-service
 ```
