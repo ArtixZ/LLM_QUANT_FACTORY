@@ -58,6 +58,7 @@ def test_ready_exposes_module_level_data_capability_matrix(monkeypatch) -> None:
         first_trade_date = "2020-01-02"
         last_trade_date = "2026-07-28"
         panel_path = "/tmp/panel"
+        fingerprint = "test-data-fingerprint"
 
         def to_dict(self) -> dict[str, object]:
             return {
