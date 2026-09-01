@@ -266,7 +266,7 @@ function openCandidateWorkflow(target) {
       ...common,
       start_date: task.protocol.validation_start,
       end_date: task.protocol.validation_end,
-      backtest_preset: "A_SHARE_NON_PIT_PROXY_WEEKLY_V1",
+      backtest_preset: "US_EQUITY_ADJUSTED_PROXY_WEEKLY_V1",
       backtest_engine: "EVENT_LEDGER",
       execution_data_mode: "NON_PIT_PROXY",
       product_template: "LONG_ONLY_CAPITAL",

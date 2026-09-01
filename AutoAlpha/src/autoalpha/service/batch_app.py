@@ -191,9 +191,8 @@ async def create_job(payload: BatchJobRequest) -> dict[str, Any]:
             holding_period_tests=tuple(payload.holding_period_tests),
             **(
                 {
-                    "initial_cash_cny": 1_000_000.0,
-                    "minimum_commission_cny": 5.0,
-                    "use_historical_fee_schedule": True,
+                    "initial_cash_usd": 1_000_000.0,
+                    "minimum_commission_usd": 5.0,
                     "rebalance_schedule": "WEEKLY_FIRST_SESSION",
                     "execution_data_mode": "NON_PIT_PROXY",
                 }

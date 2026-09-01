@@ -23,7 +23,7 @@ def _market() -> pd.DataFrame:
 
 def test_execution_records_partial_fills_costs_and_unfilled() -> None:
     report = ExecutionSimulator(MarketImpactModel(half_spread_bps=2)).execute(
-        Order("O1", "600000.SH", "BUY", 1_000, 10.0, ExecutionStyle.POV, 0.10),
+        Order("O1", "AAPL", "BUY", 1_000, 10.0, ExecutionStyle.POV, 0.10),
         _market(),
         adv_shares=100_000,
         daily_volatility=0.02,
@@ -59,13 +59,13 @@ def test_capacity_declines_with_capital_and_returns_recommendation() -> None:
     report = CapacityAnalyzer().analyze(
         returns,
         annual_turnover=10,
-        aggregate_adv_cny=100_000_000,
+        aggregate_adv_usd=100_000_000,
         daily_volatility=0.02,
-        capital_grid_cny=(10_000_000, 100_000_000, 1_000_000_000),
+        capital_grid_usd=(10_000_000, 100_000_000, 1_000_000_000),
         minimum_net_ir=0.0,
     )
     assert report.points[0].net_ir > report.points[-1].net_ir
-    assert report.recommended_capacity_cny > 0
+    assert report.recommended_capacity_usd > 0
 
 
 def test_tca_reconciles_fill_records() -> None:
@@ -76,6 +76,6 @@ def test_tca_reconciles_fill_records() -> None:
         daily_volatility=0.01,
     )
     tca = transaction_cost_analysis(report.fills, decision_price=10.0, close_price=10.3, side="BUY")
-    assert tca["filled_quantity"] == 200
+    assert tca["filled_quantity"] == 150
     assert tca["implementation_shortfall_bps"] > 0
     assert tca["fees"] == report.explicit_fees

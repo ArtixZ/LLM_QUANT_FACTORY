@@ -7,18 +7,23 @@ from typing import Any
 
 import pyarrow.dataset as ds
 
+# US equities have no daily price limits and no ST designation, so the
+# point-in-time state a cash ledger needs is listing lifecycle plus halt and
+# side-specific open eligibility.
 CAPITAL_EXECUTION_FIELDS = frozenset(
     {
         "listing_date",
         "delisting_date",
-        "is_st",
-        "is_suspended",
-        "limit_up",
-        "limit_down",
+        "is_halted",
         "can_buy_open",
         "can_sell_open",
     }
 )
+
+# IBKR does not serve truly unadjusted bars; TRADES is split-adjusted, which is
+# the most raw execution basis available and is accepted here as such.
+EXECUTION_PRICE_BASES = frozenset({"unadjusted", "raw", "split_adjusted"})
+CURRENCY_UNITS = frozenset({"usd", "dollar"})
 
 
 @dataclass(frozen=True)
@@ -57,8 +62,8 @@ def inspect_execution_data_basis(panel_path: Path) -> ExecutionDataBasis:
 
     source = str(metadata.get("source", "")).casefold()
     price_adjustment = str(metadata.get("price_adjustment", "unknown")).casefold()
-    if price_adjustment == "unknown" and "qfq" in source:
-        price_adjustment = "forward_adjusted"
+    if price_adjustment == "unknown" and "adjusted" in source:
+        price_adjustment = "split_and_dividend_adjusted"
     volume_unit = str(metadata.get("volume_unit", "unknown")).casefold()
     amount_unit = str(metadata.get("amount_unit", "unknown")).casefold()
     execution_price_adjustment = str(
@@ -66,15 +71,15 @@ def inspect_execution_data_basis(panel_path: Path) -> ExecutionDataBasis:
     ).casefold()
 
     blockers = []
-    if execution_price_adjustment not in {"unadjusted", "raw"}:
+    if execution_price_adjustment not in EXECUTION_PRICE_BASES:
         blockers.append(
-            "cash execution requires unadjusted OHLC, got "
+            "cash execution requires split-adjusted or unadjusted OHLC, got "
             f"{execution_price_adjustment}"
         )
     if volume_unit != "shares":
         blockers.append(f"cash execution requires volume in shares, got {volume_unit}")
-    if amount_unit not in {"cny", "yuan"}:
-        blockers.append(f"cash execution requires amount in CNY, got {amount_unit}")
+    if amount_unit not in CURRENCY_UNITS:
+        blockers.append(f"cash execution requires dollar volume in USD, got {amount_unit}")
     declared_ready = metadata.get("capital_ledger_ready")
     if declared_ready is False:
         blockers.append("panel metadata explicitly blocks capital-ledger use")
@@ -86,21 +91,23 @@ def inspect_execution_data_basis(panel_path: Path) -> ExecutionDataBasis:
         if missing:
             blockers.append(f"cash execution requires point-in-time market state: {missing}")
     proxy_blockers = []
-    if execution_price_adjustment not in {"unadjusted", "raw"}:
+    if execution_price_adjustment not in EXECUTION_PRICE_BASES:
         proxy_blockers.append(
-            "non-PIT proxy execution requires unadjusted OHLC, got "
+            "non-PIT proxy execution requires split-adjusted or unadjusted OHLC, got "
             f"{execution_price_adjustment}"
         )
     if volume_unit != "shares":
         proxy_blockers.append(
             f"non-PIT proxy execution requires volume in shares, got {volume_unit}"
         )
-    if amount_unit not in {"cny", "yuan"}:
-        proxy_blockers.append(f"non-PIT proxy execution requires amount in CNY, got {amount_unit}")
+    if amount_unit not in CURRENCY_UNITS:
+        proxy_blockers.append(
+            f"non-PIT proxy execution requires dollar volume in USD, got {amount_unit}"
+        )
     if columns:
         required_proxy_prices = (
             {"raw_open", "raw_close"}
-            if price_adjustment not in {"unadjusted", "raw"}
+            if price_adjustment not in EXECUTION_PRICE_BASES
             else {"open", "close"}
         )
         missing_proxy_prices = sorted(required_proxy_prices - columns)

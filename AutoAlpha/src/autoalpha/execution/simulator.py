@@ -7,7 +7,7 @@ from enum import StrEnum
 import numpy as np
 import pandas as pd
 
-from autoalpha.backtest.costs import ChinaAExecutionCosts, Side
+from autoalpha.backtest.costs import Side, USEquityExecutionCosts
 
 
 class ExecutionStyle(StrEnum):
@@ -27,7 +27,7 @@ class Order:
     decision_price: float
     style: ExecutionStyle = ExecutionStyle.VWAP
     maximum_participation: float = 0.10
-    lot_size: int = 100
+    lot_size: int = 1
 
 
 @dataclass(frozen=True)
@@ -68,10 +68,10 @@ class ExecutionSimulator:
     def __init__(
         self,
         impact: MarketImpactModel | None = None,
-        fees: ChinaAExecutionCosts | None = None,
+        fees: USEquityExecutionCosts | None = None,
     ) -> None:
         self.impact = impact or MarketImpactModel()
-        self.fees = fees or ChinaAExecutionCosts()
+        self.fees = fees or USEquityExecutionCosts()
 
     def execute(
         self,
@@ -110,7 +110,7 @@ class ExecutionSimulator:
             direction = 1.0 if order.side == "BUY" else -1.0
             fill_price = market_price * (1 + direction * total_move_bps / 10_000)
             notional = quantity * fill_price
-            fees = self.fees.fees(order.side, notional)
+            fees = self.fees.fees(order.side, notional, quantity)
             slice_spread = quantity * market_price * self.impact.half_spread_bps / 10_000
             slice_impact = quantity * market_price * impact_bps / 10_000
             records.append(

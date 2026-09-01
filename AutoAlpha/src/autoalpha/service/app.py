@@ -23,14 +23,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from autoalpha.backtest.presets import (
-    A_SHARE_NON_PIT_PROXY_WEEKLY_V1,
+    US_EQUITY_ADJUSTED_PROXY_WEEKLY_V1,
     manual_backtest_preset_catalog,
     validate_preset_settings,
 )
 from autoalpha.config import ResearchConfig
 from autoalpha.data.execution_basis import inspect_execution_data_basis
+from autoalpha.data.product_catalog import DEFAULT_PRODUCT_IDS, resolve_products
 from autoalpha.data.research_fields import build_research_data_capabilities
-from autoalpha.data.tushare_catalog import DEFAULT_PRODUCT_IDS, resolve_products
 from autoalpha.data.workspace import inspect_data_workspace
 from autoalpha.portfolio.products import product_template, product_template_catalog
 from autoalpha.service.autocombine import (
@@ -171,14 +171,14 @@ TRADE_STATEMENT_FIELDS = (
     "security_name",
     "side",
     "quantity",
-    "price_cny",
-    "notional_cny",
-    "commission_cny",
-    "transfer_fee_cny",
-    "stamp_duty_cny",
-    "total_fees_cny",
-    "net_cash_flow_cny",
-    "sleeve_cash_after_cny",
+    "price_usd",
+    "notional_usd",
+    "commission_usd",
+    "finra_taf_usd",
+    "sec_fee_usd",
+    "total_fees_usd",
+    "net_cash_flow_usd",
+    "sleeve_cash_after_usd",
 )
 
 
@@ -345,13 +345,13 @@ class ManualBacktestRequest(BaseModel):
     weights: list[float] | None = None
     start_date: date
     end_date: date
-    initial_cash_cny: float = Field(default=1_000_000, ge=10_000, le=10_000_000_000)
+    initial_cash_usd: float = Field(default=1_000_000, ge=10_000, le=10_000_000_000)
     gross_exposure: float = Field(default=0.5, ge=0.05, le=1.0)
     holding_period_days: int = Field(default=5, ge=1, le=60)
     backtest_preset: Literal[
         "CUSTOM",
-        "A_SHARE_REALISTIC_WEEKLY_V1",
-        "A_SHARE_NON_PIT_PROXY_WEEKLY_V1",
+        "US_EQUITY_REALISTIC_WEEKLY_V1",
+        "US_EQUITY_ADJUSTED_PROXY_WEEKLY_V1",
     ] = "CUSTOM"
     backtest_engine: Literal["VECTOR", "EVENT_LEDGER"] = "VECTOR"
     execution_data_mode: Literal["STRICT_PIT", "NON_PIT_PROXY"] = "STRICT_PIT"
@@ -371,13 +371,10 @@ class ManualBacktestRequest(BaseModel):
     maximum_positions: int = Field(default=30, ge=1, le=300)
     lot_size: int = Field(default=100, ge=100, le=10_000)
     maximum_volume_participation: float = Field(default=0.05, gt=0, le=0.50)
-    opening_limit_threshold: float = Field(default=0.095, ge=0.01, le=0.30)
     commission_bps_each_side: float = Field(default=1.5, ge=0, le=100)
-    stamp_duty_bps_sell: float = Field(default=5.0, ge=0, le=100)
-    transfer_fee_bps_each_side: float = Field(default=0.1, ge=0, le=100)
-    minimum_commission_cny: float = Field(default=5.0, ge=0, le=1000)
+    sec_fee_bps_sell: float = Field(default=5.0, ge=0, le=100)
+    minimum_commission_usd: float = Field(default=5.0, ge=0, le=1000)
     slippage_bps_each_side: float = Field(default=0.0, ge=0, le=500)
-    use_historical_fee_schedule: bool = False
     cost_stress_multiplier: float = Field(default=2.0, ge=1, le=10)
 
     @field_validator("factor_ids")
@@ -460,13 +457,13 @@ class QuickAutoCombineRequest(BaseModel):
 
 class PaperPortfolioRequest(FactorScreenRequest):
     name: str = Field(min_length=1, max_length=80)
-    initial_cash_cny: float = Field(default=1_000_000, ge=10_000, le=10_000_000_000)
+    initial_cash_usd: float = Field(default=1_000_000, ge=10_000, le=10_000_000_000)
     gross_exposure: float = Field(default=0.95, gt=0.05, le=1.0)
     slippage_bps_each_side: float = Field(default=5.0, ge=0, le=500)
 
 
 class StrategyPaperPortfolioRequest(BaseModel):
-    initial_cash_cny: float = Field(default=1_000_000, ge=10_000, le=10_000_000_000)
+    initial_cash_usd: float = Field(default=1_000_000, ge=10_000, le=10_000_000_000)
     as_of_date: date
     name: str | None = Field(default=None, max_length=80)
     gross_exposure: float | None = Field(default=None, gt=0.05, le=1.0)
@@ -1654,7 +1651,7 @@ def _research_workspace_snapshot(task_id: str) -> dict[str, Any]:
             "portfolio": {
                 "holding_period_days": research_config.portfolio.holding_period_days,
                 "target_gross_exposure": (research_config.strategy_evaluation.gross_exposure),
-                "initial_cash_cny": (research_config.strategy_evaluation.initial_cash_cny),
+                "initial_cash_usd": (research_config.strategy_evaluation.initial_cash_usd),
                 "maximum_positions": (research_config.strategy_evaluation.maximum_positions),
                 "rebalance_schedule": (research_config.strategy_evaluation.rebalance_schedule),
                 "execution_protocol": (research_config.strategy_evaluation.engine_protocol),
@@ -2106,7 +2103,7 @@ async def create_paper_portfolio_from_strategy(
                 name=payload.name or str(seed.get("name") or package["name"]),
                 factor_ids=[str(item) for item in factor_ids],
                 weights=[float(item) for item in weights],
-                initial_cash_cny=payload.initial_cash_cny,
+                initial_cash_usd=payload.initial_cash_usd,
                 selection_count=int(payload.selection_count or seed.get("selection_count") or 30),
                 gross_exposure=float(
                     payload.gross_exposure
@@ -3881,7 +3878,7 @@ async def create_paper_portfolio(payload: PaperPortfolioRequest) -> dict[str, An
                 name=payload.name,
                 factor_ids=payload.factor_ids,
                 weights=weights,
-                initial_cash_cny=payload.initial_cash_cny,
+                initial_cash_usd=payload.initial_cash_usd,
                 selection_count=payload.selection_count,
                 gross_exposure=payload.gross_exposure,
                 slippage_bps_each_side=payload.slippage_bps_each_side,
@@ -3962,7 +3959,7 @@ async def product_templates() -> dict[str, Any]:
 @app.get("/api/backtest-presets", dependencies=[Depends(_authorized)])
 async def backtest_presets() -> dict[str, Any]:
     return {
-        "default": A_SHARE_NON_PIT_PROXY_WEEKLY_V1,
+        "default": US_EQUITY_ADJUSTED_PROXY_WEEKLY_V1,
         "presets": manual_backtest_preset_catalog(),
     }
 
@@ -4227,7 +4224,7 @@ async def run_manual_backtest(payload: ManualBacktestRequest) -> dict[str, Any]:
                 ManualBacktestSpec(
                     start_date=payload.start_date,
                     end_date=payload.end_date,
-                    initial_cash_cny=payload.initial_cash_cny,
+                    initial_cash_usd=payload.initial_cash_usd,
                     gross_exposure=payload.gross_exposure,
                     holding_period_days=payload.holding_period_days,
                     backtest_preset=payload.backtest_preset,
@@ -4240,13 +4237,10 @@ async def run_manual_backtest(payload: ManualBacktestRequest) -> dict[str, Any]:
                     maximum_positions=payload.maximum_positions,
                     lot_size=payload.lot_size,
                     maximum_volume_participation=payload.maximum_volume_participation,
-                    opening_limit_threshold=payload.opening_limit_threshold,
                     commission_bps_each_side=payload.commission_bps_each_side,
-                    stamp_duty_bps_sell=payload.stamp_duty_bps_sell,
-                    transfer_fee_bps_each_side=payload.transfer_fee_bps_each_side,
-                    minimum_commission_cny=payload.minimum_commission_cny,
+                    sec_fee_bps_sell=payload.sec_fee_bps_sell,
+                    minimum_commission_usd=payload.minimum_commission_usd,
                     slippage_bps_each_side=payload.slippage_bps_each_side,
-                    use_historical_fee_schedule=payload.use_historical_fee_schedule,
                     cost_stress_multiplier=payload.cost_stress_multiplier,
                 ),
                 multiple_testing_trials=len(store.factor_pool(limit=5000)),
@@ -4875,14 +4869,14 @@ def _manual_trade_artifact(
 def _typed_trade_row(row: dict[str, str]) -> dict[str, Any]:
     integer_fields = {"trade_id", "sleeve", "quantity"}
     float_fields = {
-        "price_cny",
-        "notional_cny",
-        "commission_cny",
-        "transfer_fee_cny",
-        "stamp_duty_cny",
-        "total_fees_cny",
-        "net_cash_flow_cny",
-        "sleeve_cash_after_cny",
+        "price_usd",
+        "notional_usd",
+        "commission_usd",
+        "finra_taf_usd",
+        "sec_fee_usd",
+        "total_fees_usd",
+        "net_cash_flow_usd",
+        "sleeve_cash_after_usd",
     }
     return {
         key: int(value) if key in integer_fields else float(value) if key in float_fields else value

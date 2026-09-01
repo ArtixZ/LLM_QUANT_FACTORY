@@ -41,9 +41,8 @@ class MassiveBatchConfig:
     gross_exposure: float = 1.0
     selection_fraction: float = 0.10
     maximum_positions_per_side: int = 30
-    commission_bps_each_side: float = 1.5
-    stamp_duty_bps_sell: float = 5.0
-    transfer_fee_bps_each_side: float = 0.1
+    commission_bps_each_side: float = 0.5
+    sec_fee_bps_sell: float = 0.278
     slippage_bps_each_side: float = 2.0
     cost_stress_multiplier: float = 2.0
     window_months: int = 36
@@ -88,9 +87,8 @@ class MassiveBatchConfig:
             gross_exposure=float(value.get("gross_exposure", 1.0)),
             selection_fraction=float(value.get("selection_fraction", 0.10)),
             maximum_positions_per_side=int(value.get("maximum_positions_per_side", 30)),
-            commission_bps_each_side=float(value.get("commission_bps_each_side", 1.5)),
-            stamp_duty_bps_sell=float(value.get("stamp_duty_bps_sell", 5.0)),
-            transfer_fee_bps_each_side=float(value.get("transfer_fee_bps_each_side", 0.1)),
+            commission_bps_each_side=float(value.get("commission_bps_each_side", 0.5)),
+            sec_fee_bps_sell=float(value.get("sec_fee_bps_sell", 0.278)),
             slippage_bps_each_side=float(value.get("slippage_bps_each_side", 2.0)),
             cost_stress_multiplier=float(value.get("cost_stress_multiplier", 2.0)),
             window_months=int(value.get("window_months", 36)),
@@ -224,13 +222,12 @@ class MassiveVectorBatchEngine:
                 maximum_positions_per_side=self.config.maximum_positions_per_side,
                 long_only=False,
                 commission_bps_each_side=self.config.commission_bps_each_side,
-                stamp_duty_bps_sell=self.config.stamp_duty_bps_sell,
-                transfer_fee_bps_each_side=self.config.transfer_fee_bps_each_side,
+                sec_fee_bps_sell=self.config.sec_fee_bps_sell,
                 slippage_bps_each_side=self.config.slippage_bps_each_side,
                 cost_stress_multiplier=self.config.cost_stress_multiplier,
                 cost_model="side_aware",
                 path_index="entry_session",
-                initial_cash_cny=1_000_000.0,
+                initial_cash_usd=1_000_000.0,
             )
         ).run(
             signal,
@@ -395,7 +392,7 @@ class MassiveVectorBatchEngine:
             dict.fromkeys(
                 [
                     "trade_date",
-                    "ts_code",
+                    "symbol",
                     "open",
                     *factor_columns,
                     "is_valid_ohlc",
@@ -416,7 +413,7 @@ class MassiveVectorBatchEngine:
         value_columns = list(dict.fromkeys(["open", *factor_columns]))
         data.loc[~valid, value_columns] = np.nan
         fields = {
-            name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
+            name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
             for name in value_columns
         }
         del data, frames
@@ -467,17 +464,17 @@ def summarize_path(path: pd.DataFrame) -> dict[str, Any]:
     wealth = (1.0 + net).cumprod()
     bankrupt = bool((net <= -1.0).any() or wealth.iloc[-1] <= 0)
     drawdown = (wealth / wealth.cummax() - 1.0).clip(lower=-1.0)
-    compound_return = -1.0 if bankrupt else float(wealth.iloc[-1] ** (245 / len(net)) - 1.0)
+    compound_return = -1.0 if bankrupt else float(wealth.iloc[-1] ** (252 / len(net)) - 1.0)
     return {
-        "simple_annual_return": float(net.mean() * 245),
+        "simple_annual_return": float(net.mean() * 252),
         "compound_annual_return": compound_return,
         "total_return": -1.0 if bankrupt else float(wealth.iloc[-1] - 1.0),
         "sharpe_ratio": _annualized_ratio(net),
         "sortino_ratio": _sortino(net),
         "max_drawdown": float(drawdown.min()),
         "calmar_ratio": -1.0 if bankrupt else _calmar(net),
-        "annual_volatility": float(net.std(ddof=1) * math.sqrt(245)),
-        "annual_turnover": float(path["turnover"].mean() * 245),
+        "annual_volatility": float(net.std(ddof=1) * math.sqrt(252)),
+        "annual_turnover": float(path["turnover"].mean() * 252),
         "cost_stress_sharpe": _annualized_ratio(path["stressed"]),
         "observations": len(net),
         "backtest_start": net.index.min().date().isoformat(),
@@ -517,9 +514,9 @@ def moving_block_monte_carlo(
         wealth = np.cumprod(1.0 + simulated, axis=1)
         peaks = np.maximum.accumulate(wealth, axis=1)
         selected = slice(cursor, cursor + size)
-        output["simple_annual_return"][selected] = means * 245
+        output["simple_annual_return"][selected] = means * 252
         output["sharpe_ratio"][selected] = np.divide(
-            means * math.sqrt(245),
+            means * math.sqrt(252),
             standard_deviations,
             out=np.zeros(size),
             where=standard_deviations > 0,
@@ -576,13 +573,13 @@ def _robustness_pass_fraction(results: list[dict[str, Any]], base_sharpe: float)
 
 def _annualized_ratio(values: pd.Series) -> float:
     standard_deviation = float(values.std(ddof=1))
-    return float(values.mean() / standard_deviation * math.sqrt(245)) if standard_deviation else 0.0
+    return float(values.mean() / standard_deviation * math.sqrt(252)) if standard_deviation else 0.0
 
 
 def _sortino(values: pd.Series) -> float:
     downside = values[values < 0].std(ddof=1)
     return (
-        float(values.mean() / downside * math.sqrt(245))
+        float(values.mean() / downside * math.sqrt(252))
         if downside and np.isfinite(downside)
         else 0.0
     )
@@ -591,7 +588,7 @@ def _sortino(values: pd.Series) -> float:
 def _calmar(values: pd.Series) -> float:
     wealth = (1.0 + values).cumprod()
     drawdown = float((wealth / wealth.cummax() - 1.0).min())
-    annual = float(wealth.iloc[-1] ** (245 / len(values)) - 1.0)
+    annual = float(wealth.iloc[-1] ** (252 / len(values)) - 1.0)
     return float(annual / abs(drawdown)) if drawdown else 0.0
 
 

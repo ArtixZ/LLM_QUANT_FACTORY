@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from autoalpha.backtest.ashare_vector import ASHARE_PROXY_RETURN_CONVENTION
 from autoalpha.backtest.timing import EOD_NEXT_OPEN_RETURN_CONVENTION
+from autoalpha.backtest.us_vector import US_PROXY_RETURN_CONVENTION
 from autoalpha.config import ResearchConfig
 from autoalpha.dsl.expression import Expression, FactorDefinition
 from autoalpha.service.canonical_evaluation import CANONICAL_LIBRARY_PROTOCOL
@@ -572,7 +572,7 @@ def _candidate_screen_failures(metrics: dict[str, Any], config: ResearchConfig) 
             metrics.get("evaluation_protocol") == config.governance.protocol_version
         ),
         "invalid_return_convention": (
-            metrics.get("long_only_return_convention") == ASHARE_PROXY_RETURN_CONVENTION
+            metrics.get("long_only_return_convention") == US_PROXY_RETURN_CONVENTION
         ),
         "capital_survival": not bool(metrics.get("long_only_bankrupt", False)),
         "non_positive_sharpe": float(metrics.get("long_only_sharpe_ratio", -1)) > 0,
@@ -621,7 +621,7 @@ def _library_admission_failures(metrics: dict[str, Any], config: ResearchConfig)
             metrics.get("evaluation_protocol") == CANONICAL_LIBRARY_PROTOCOL
         ),
         "invalid_return_convention": (
-            metrics.get("long_only_return_convention") == ASHARE_PROXY_RETURN_CONVENTION
+            metrics.get("long_only_return_convention") == US_PROXY_RETURN_CONVENTION
         ),
         "capital_survival": not bool(metrics.get("long_only_bankrupt", False)),
         "insufficient_coverage": float(metrics.get("long_only_coverage", 0.0))
@@ -683,7 +683,7 @@ def _absolute_portfolio_gate_failures(metrics: dict[str, Any], config: ResearchC
     policy = config.evaluation
     strategy_basis = metrics.get("portfolio_strategy_gate_basis")
     expected_return_convention = (
-        ASHARE_PROXY_RETURN_CONVENTION
+        US_PROXY_RETURN_CONVENTION
         if strategy_basis == "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
         else EOD_NEXT_OPEN_RETURN_CONVENTION
     )
@@ -702,7 +702,7 @@ def _absolute_portfolio_gate_failures(metrics: dict[str, Any], config: ResearchC
         "coverage": metrics["portfolio_coverage"] >= policy.minimum_coverage,
         "cost_stress": metrics["portfolio_cost_stress_net_ir"] >= policy.minimum_cost_stress_net_ir,
         "turnover": metrics["portfolio_annual_turnover"] <= policy.maximum_annual_turnover,
-        "capacity": metrics["portfolio_capacity_cny"] >= policy.minimum_capacity_cny,
+        "capacity": metrics["portfolio_capacity_usd"] >= policy.minimum_capacity_usd,
         "residual_positions": int(
             metrics.get(
                 "portfolio_maximum_observed_positions",
@@ -831,10 +831,10 @@ def _absolute_gate_measurements(
             1.0,
         ),
         "capacity": (
-            metrics["portfolio_capacity_cny"],
-            policy.minimum_capacity_cny,
+            metrics["portfolio_capacity_usd"],
+            policy.minimum_capacity_usd,
             "min",
-            0.05 * policy.minimum_capacity_cny,
+            0.05 * policy.minimum_capacity_usd,
         ),
         "residual_positions": (
             float(

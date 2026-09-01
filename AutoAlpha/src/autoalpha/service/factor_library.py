@@ -39,7 +39,7 @@ SCORE_DIMENSIONS: dict[str, list[tuple[str, bool, float]]] = {
     "execution": [
         ("annual_turnover", False, 0.35),
         ("coverage", True, 0.35),
-        ("capacity_cny", True, 0.30),
+        ("capacity_usd", True, 0.30),
     ],
     "information": [
         ("rank_ic_ir", True, 0.45),
@@ -65,7 +65,7 @@ SCORE_DIMENSIONS: dict[str, list[tuple[str, bool, float]]] = {
     "long_only_execution": [
         ("long_only_annual_turnover", False, 0.35),
         ("long_only_coverage", True, 0.35),
-        ("long_only_capacity_cny", True, 0.30),
+        ("long_only_capacity_usd", True, 0.30),
     ],
     "recent_long_only_return": [
         ("recent_long_only_sharpe_ratio", True, 0.55),
@@ -85,7 +85,7 @@ SCORE_DIMENSIONS: dict[str, list[tuple[str, bool, float]]] = {
     "recent_long_only_execution": [
         ("recent_long_only_annual_turnover", False, 0.35),
         ("recent_long_only_coverage", True, 0.35),
-        ("recent_long_only_capacity_cny", True, 0.30),
+        ("recent_long_only_capacity_usd", True, 0.30),
     ],
 }
 
@@ -98,7 +98,7 @@ SUMMARY_KEYS = (
     "pearson_ic_mean",
     "annual_turnover",
     "coverage",
-    "capacity_cny",
+    "capacity_usd",
     "walk_forward_positive_fraction",
     "walk_forward_worst_sharpe",
     "annual_return_dispersion",
@@ -109,7 +109,7 @@ SUMMARY_KEYS = (
     "long_only_max_drawdown",
     "long_only_annual_turnover",
     "long_only_coverage",
-    "long_only_capacity_cny",
+    "long_only_capacity_usd",
     "long_only_positive_year_ratio",
     "long_only_worst_year_return",
     "long_only_annual_return_dispersion",
@@ -139,7 +139,7 @@ SUMMARY_KEYS = (
     "recent_long_only_max_drawdown",
     "recent_long_only_annual_turnover",
     "recent_long_only_coverage",
-    "recent_long_only_capacity_cny",
+    "recent_long_only_capacity_usd",
     "recent_long_only_positive_year_ratio",
     "recent_long_only_worst_year_return",
     "recent_long_only_annual_return_dispersion",
@@ -354,7 +354,7 @@ RANKING_OPTIONS: tuple[dict[str, Any], ...] = (
         "higher_is_better": True,
     },
     {
-        "id": "long_only_capacity_cny",
+        "id": "long_only_capacity_usd",
         "label": "纯多容量",
         "group": "纯多原始指标",
         "format": "currency",
@@ -466,7 +466,7 @@ RANKING_OPTIONS: tuple[dict[str, Any], ...] = (
         "higher_is_better": True,
     },
     {
-        "id": "capacity_cny",
+        "id": "capacity_usd",
         "label": "多空容量",
         "group": "信息与交易",
         "format": "currency",

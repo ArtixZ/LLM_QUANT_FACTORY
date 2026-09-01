@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from autoalpha.backtest.ashare_vector import ASHARE_PROXY_RETURN_CONVENTION
 from autoalpha.backtest.timing import EOD_NEXT_OPEN_RETURN_CONVENTION
+from autoalpha.backtest.us_vector import US_PROXY_RETURN_CONVENTION
 from autoalpha.config import ResearchConfig
 from autoalpha.dsl.expression import FactorDefinition, field
 from autoalpha.service.canonical_evaluation import CANONICAL_LIBRARY_PROTOCOL
@@ -42,7 +42,7 @@ class FakeEvaluator:
             "portfolio_cost_stress_net_ir": 0.8,
             "portfolio_annual_turnover": 12.0,
             "portfolio_coverage": 0.95,
-            "portfolio_capacity_cny": 50_000_000.0,
+            "portfolio_capacity_usd": 50_000_000.0,
             "portfolio_positive_year_ratio": 1.0,
             "portfolio_worst_year_return": 0.01,
             "portfolio_annual_return_dispersion": 0.04,
@@ -145,7 +145,7 @@ def test_strategy_gate_rejects_long_short_return_convention() -> None:
 
     assert "invalid_return_convention" in _portfolio_action_gate_failures(metrics, config)
 
-    metrics["portfolio_return_convention"] = ASHARE_PROXY_RETURN_CONVENTION
+    metrics["portfolio_return_convention"] = US_PROXY_RETURN_CONVENTION
     assert "invalid_return_convention" not in _portfolio_action_gate_failures(metrics, config)
 
     metrics["portfolio_maximum_observed_positions"] = 46
@@ -406,7 +406,7 @@ def test_candidate_registration_uses_task_metrics_for_promotion(tmp_path: Path) 
     factor = _factor("namespace", "amount")
     canonical = {
         "evaluation_protocol": CANONICAL_LIBRARY_PROTOCOL,
-        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_return_convention": US_PROXY_RETURN_CONVENTION,
         "long_only_sharpe_ratio": 0.25,
         "long_only_active_information_ratio": 0.15,
         "long_only_simple_annual_return": 0.04,
@@ -416,7 +416,7 @@ def test_candidate_registration_uses_task_metrics_for_promotion(tmp_path: Path) 
     }
     task = {
         "evaluation_protocol": config.governance.protocol_version,
-        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_return_convention": US_PROXY_RETURN_CONVENTION,
         "long_only_sharpe_ratio": 1.0,
         "long_only_simple_annual_return": 0.10,
         "long_only_coverage": 0.95,
@@ -470,7 +470,7 @@ def test_candidate_screen_uses_long_only_metrics_before_alpha_diagnostics() -> N
     config = ResearchConfig.from_toml(Path("config/research.toml"))
     metrics = {
         "evaluation_protocol": config.governance.protocol_version,
-        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_return_convention": US_PROXY_RETURN_CONVENTION,
         "long_only_sharpe_ratio": -0.2,
         "long_only_simple_annual_return": -0.01,
         "long_only_coverage": 0.95,
@@ -501,7 +501,7 @@ def test_library_admission_retains_weak_signal_without_relaxing_promotion() -> N
     config = ResearchConfig.from_toml(Path("config/research.toml"))
     metrics = {
         "evaluation_protocol": CANONICAL_LIBRARY_PROTOCOL,
-        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_return_convention": US_PROXY_RETURN_CONVENTION,
         "long_only_sharpe_ratio": 0.25,
         "long_only_active_information_ratio": 0.15,
         "long_only_simple_annual_return": 0.04,
@@ -519,7 +519,7 @@ def test_library_admission_screens_behaviorally_redundant_weak_signal() -> None:
     config = ResearchConfig.from_toml(Path("config/research.toml"))
     metrics = {
         "evaluation_protocol": CANONICAL_LIBRARY_PROTOCOL,
-        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_return_convention": US_PROXY_RETURN_CONVENTION,
         "long_only_sharpe_ratio": 0.10,
         "long_only_active_information_ratio": 0.05,
         "long_only_coverage": 0.93,

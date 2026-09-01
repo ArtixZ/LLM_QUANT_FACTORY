@@ -70,7 +70,7 @@ def _store_with_factors(tmp_path: Path) -> ServiceStore:
                 "long_only_max_drawdown": -0.15,
                 "long_only_walk_forward_worst_sharpe": 0.1,
                 "long_only_annual_turnover": 5.0,
-                "long_only_capacity_cny": 10_000_000,
+                "long_only_capacity_usd": 10_000_000,
                 "online_behavior_cluster_id": "C001",
             },
             status="ELIGIBLE",
@@ -158,7 +158,7 @@ def test_formal_strategy_created_from_combination_experiment(tmp_path: Path) -> 
         market="CN_A",
         metrics={
             "portfolio_max_drawdown": -0.12,
-            "portfolio_capacity_cny": 8_000_000,
+            "portfolio_capacity_usd": 8_000_000,
         },
         evidence={
             "factor_ids": ["F_1", "F_2"],
@@ -174,7 +174,7 @@ def test_formal_strategy_created_from_combination_experiment(tmp_path: Path) -> 
     assert strategy["signal_policy"]["factor_ids"] == ["F_1", "F_2"]
     assert strategy["rebalance_policy"]["schedule"] == "WEEKLY_FIRST_SESSION"
     assert strategy["execution_policy"]["execution_time"] == "NEXT_SESSION_OPEN"
-    assert strategy["cost_policy"]["stamp_duty_bps_sell"] == 5.0
+    assert strategy["cost_policy"]["sec_fee_bps_sell"] == 0.278
     assert strategy["monitoring_policy"]["paper_first"] is True
     library = formal_strategy_library(store)
     summary = library["strategies"][0]["production_evidence_summary"]
@@ -218,7 +218,7 @@ def test_strategy_execution_package_exposes_trade_rules_and_blockers(tmp_path: P
     assert paper_contract["compatible_engine"] == "PaperTradingEngine"
     assert paper_contract["execution_protocol"] == "A_SHARE_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2"
     assert paper_contract["proxy_only"] is True
-    assert paper_contract["required_operator_inputs"] == ["initial_cash_cny", "as_of_date"]
+    assert paper_contract["required_operator_inputs"] == ["initial_cash_usd", "as_of_date"]
     assert paper_contract["paper_portfolio_seed"]["factor_ids"] == ["F_1", "F_2"]
     assert paper_contract["paper_portfolio_seed"]["weights"] == [0.6, 0.4]
     assert paper_contract["paper_portfolio_seed"]["gross_exposure"] == 0.9

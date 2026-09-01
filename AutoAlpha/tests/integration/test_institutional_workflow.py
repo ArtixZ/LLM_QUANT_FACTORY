@@ -34,7 +34,7 @@ def test_point_in_time_factor_to_execution_artifact_is_replayable(tmp_path) -> N
         (
             FieldSpec("event_date", "date", False, "trading date"),
             FieldSpec("symbol", "string", False, "security identifier"),
-            FieldSpec("close", "float", False, "unadjusted close", "CNY/share"),
+            FieldSpec("close", "float", False, "unadjusted close", "USD/share"),
             FieldSpec("knowledge_time", "timestamp", False, "source-visible timestamp"),
         ),
         primary_key=("event_date", "symbol", "knowledge_time"),

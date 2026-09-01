@@ -45,11 +45,7 @@ def _legacy_reference(
     held = target.rolling(config.holding_period_days, min_periods=1).mean().shift(1)
     gross_return = (held * entry_aligned_open_return(open_prices)).sum(axis=1, min_count=1).dropna()
     turnover = held.diff().abs().sum(axis=1).mul(0.5).reindex(gross_return.index).fillna(0)
-    one_way_bps = (
-        config.commission_bps_each_side
-        + config.transfer_fee_bps_each_side
-        + config.stamp_duty_bps_sell / 2
-    )
+    one_way_bps = config.commission_bps_each_side + config.sec_fee_bps_sell / 2
     return pd.DataFrame(
         {
             "gross": gross_return,
@@ -94,8 +90,9 @@ def test_side_aware_costs_charge_each_traded_side() -> None:
     )
 
     assert corrected.path["transaction_cost"].sum() > legacy.path["transaction_cost"].sum()
+    # Buys pay commission only; sells additionally pay the SEC Section 31 fee.
     expected = (
-        corrected.path["buy_turnover"] * 1.6 + corrected.path["sell_turnover"] * 6.6
+        corrected.path["buy_turnover"] * 0.5 + corrected.path["sell_turnover"] * 0.778
     ) / 10_000
     pd.testing.assert_series_equal(corrected.path["transaction_cost"], expected, check_names=False)
 

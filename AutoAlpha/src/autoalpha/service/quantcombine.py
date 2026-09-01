@@ -1041,8 +1041,8 @@ class QuantCombineWorker:
             [self._standalone_returns[value] for value in factor_ids], axis=1
         ).dropna()
         matrix = aligned.to_numpy(dtype=float)
-        annual_mean = np.nanmean(matrix, axis=0) * 245 if len(matrix) else np.zeros(n)
-        sample_cov = np.cov(matrix, rowvar=False) * 245 if len(matrix) > 2 else np.eye(n)
+        annual_mean = np.nanmean(matrix, axis=0) * 252 if len(matrix) else np.zeros(n)
+        sample_cov = np.cov(matrix, rowvar=False) * 252 if len(matrix) > 2 else np.eye(n)
         sample_cov = np.atleast_2d(sample_cov)
         diagonal = np.diag(np.diag(sample_cov))
         shrinkage = float(task["engine"]["covariance_shrinkage"])

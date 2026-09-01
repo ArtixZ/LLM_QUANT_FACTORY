@@ -15,7 +15,7 @@ def _workspace(tmp_path: Path, *, quality_passed: bool = True) -> Path:
     panel.mkdir(parents=True)
     frame = pd.DataFrame(
         {
-            "ts_code": ["000001.SZ"],
+            "symbol": ["000001.SZ"],
             "trade_date": [pd.Timestamp("2024-01-02")],
             "open": [10.0],
             "high": [10.5],
@@ -33,7 +33,7 @@ def _workspace(tmp_path: Path, *, quality_passed: bool = True) -> Path:
     source.mkdir()
     catalog = root / "catalog"
     catalog.mkdir()
-    (catalog / "daily_catalog.csv").write_text("ts_code\n000001.SZ\n", encoding="utf-8")
+    (catalog / "daily_catalog.csv").write_text("symbol\n000001.SZ\n", encoding="utf-8")
     (catalog / "data_quality.json").write_text(
         json.dumps(
             {

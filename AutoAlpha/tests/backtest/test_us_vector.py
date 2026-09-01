@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from autoalpha.backtest.ashare_vector import AshareVectorBacktester, AshareVectorConfig
+from autoalpha.backtest.us_vector import USVectorBacktester, USVectorConfig
 
 
 def _panels() -> tuple[pd.DataFrame, ...]:
@@ -27,15 +27,13 @@ def _panels() -> tuple[pd.DataFrame, ...]:
 
 def test_weekly_long_only_proxy_uses_prior_close_signal_and_position_cap() -> None:
     panels = _panels()
-    result = AshareVectorBacktester(
-        AshareVectorConfig(
+    result = USVectorBacktester(
+        USVectorConfig(
             gross_exposure=0.90,
             selection_fraction=0.50,
             maximum_positions=1,
             commission_bps_each_side=0.0,
-            transfer_fee_bps_each_side=0.0,
-            stamp_duty_bps_sell=0.0,
-            minimum_commission_cny=0.0,
+            sec_fee_bps_sell=0.0,
             slippage_bps_each_side=0.0,
         )
     ).run(*panels, start="2024-01-02", end="2024-05-31")
@@ -49,14 +47,12 @@ def test_weekly_long_only_proxy_uses_prior_close_signal_and_position_cap() -> No
 def test_open_buy_constraint_blocks_untradeable_top_name() -> None:
     signal, adjusted_open, raw_open, can_buy, can_sell = _panels()
     can_buy["A"] = False
-    result = AshareVectorBacktester(
-        AshareVectorConfig(
+    result = USVectorBacktester(
+        USVectorConfig(
             selection_fraction=0.50,
             maximum_positions=1,
             commission_bps_each_side=0.0,
-            transfer_fee_bps_each_side=0.0,
-            stamp_duty_bps_sell=0.0,
-            minimum_commission_cny=0.0,
+            sec_fee_bps_sell=0.0,
             slippage_bps_each_side=0.0,
         )
     ).run(
@@ -72,38 +68,34 @@ def test_open_buy_constraint_blocks_untradeable_top_name() -> None:
     assert result.path["gross"].mean() < 0.0015
 
 
-def test_realistic_costs_reduce_equity_and_are_reported_in_cny() -> None:
+def test_realistic_costs_reduce_equity_and_are_reported_in_usd() -> None:
     panels = _panels()
-    free = AshareVectorBacktester(
-        AshareVectorConfig(
+    free = USVectorBacktester(
+        USVectorConfig(
             maximum_positions=1,
             commission_bps_each_side=0.0,
-            transfer_fee_bps_each_side=0.0,
-            stamp_duty_bps_sell=0.0,
-            minimum_commission_cny=0.0,
+            sec_fee_bps_sell=0.0,
             slippage_bps_each_side=0.0,
         )
     ).run(*panels, start="2024-01-02", end="2024-05-31")
-    costed = AshareVectorBacktester(AshareVectorConfig(maximum_positions=1)).run(
+    costed = USVectorBacktester(USVectorConfig(maximum_positions=1)).run(
         *panels, start="2024-01-02", end="2024-05-31"
     )
 
     assert costed.equity.iloc[-1] < free.equity.iloc[-1]
-    assert costed.metrics["total_transaction_cost_cny"] > 0
+    assert costed.metrics["total_transaction_cost_usd"] > 0
 
 
 def test_bankruptcy_is_a_terminal_screening_outcome_not_an_engine_error() -> None:
     signal, adjusted_open, raw_open, can_buy, can_sell = _panels()
     adjusted_open.loc[adjusted_open.index[10], "A"] = 0.000001
-    result = AshareVectorBacktester(
-        AshareVectorConfig(
+    result = USVectorBacktester(
+        USVectorConfig(
             gross_exposure=1.0,
             selection_fraction=0.50,
             maximum_positions=1,
             commission_bps_each_side=0.0,
-            transfer_fee_bps_each_side=0.0,
-            stamp_duty_bps_sell=0.0,
-            minimum_commission_cny=0.0,
+            sec_fee_bps_sell=0.0,
             slippage_bps_each_side=20_000.0,
         )
     ).run(

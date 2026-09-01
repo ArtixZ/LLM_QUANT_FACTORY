@@ -7,7 +7,7 @@ from autoalpha.backtest.capital import (
     run_capital_backtest,
     write_capital_backtest_artifacts,
 )
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.backtest.ledger import LedgerBacktester, LedgerConfig, LedgerResult
 from autoalpha.backtest.vector import (
     VectorBacktestConfig,
@@ -20,7 +20,7 @@ from autoalpha.backtest.vector import (
 __all__ = [
     "CapitalBacktestReport",
     "CapitalBacktestSpec",
-    "ChinaAExecutionCosts",
+    "USEquityExecutionCosts",
     "LedgerBacktester",
     "LedgerConfig",
     "LedgerResult",

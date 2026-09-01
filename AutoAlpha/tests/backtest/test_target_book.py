@@ -3,14 +3,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from autoalpha.backtest.ashare_vector import AshareVectorBacktester, AshareVectorConfig
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.backtest.ledger import LedgerBacktester, LedgerConfig
 from autoalpha.backtest.target_book import (
     rebalance_mask,
     select_target_positions,
     select_target_symbols,
 )
+from autoalpha.backtest.us_vector import USVectorBacktester, USVectorConfig
 
 
 def test_numpy_and_series_target_selection_are_identical_and_stable() -> None:
@@ -68,18 +68,15 @@ def test_vector_and_event_engines_align_in_fractional_ideal_case() -> None:
         index=dates,
     )
     tradable = pd.DataFrame(True, index=dates, columns=symbols)
-    vector = AshareVectorBacktester(
-        AshareVectorConfig(
-            initial_cash_cny=100_000_000.0,
+    vector = USVectorBacktester(
+        USVectorConfig(
+            initial_cash_usd=100_000_000.0,
             gross_exposure=0.90,
             selection_fraction=0.50,
             maximum_positions=2,
             commission_bps_each_side=0.0,
-            stamp_duty_bps_sell=0.0,
-            transfer_fee_bps_each_side=0.0,
-            minimum_commission_cny=0.0,
+            sec_fee_bps_sell=0.0,
             slippage_bps_each_side=0.0,
-            use_historical_fee_schedule=False,
         )
     ).run(signal, price, price, tradable, tradable, start=dates[0], end=dates[-1])
     market = (
@@ -103,11 +100,10 @@ def test_vector_and_event_engines_align_in_fractional_ideal_case() -> None:
             investment_buffer=0.10,
             rebalance_schedule="WEEKLY_FIRST_SESSION",
         ),
-        ChinaAExecutionCosts(
-            commission_bps_each_side=0.0,
-            stamp_duty_bps_sell=0.0,
-            transfer_fee_bps_each_side=0.0,
-            minimum_commission_cny=0.0,
+        USEquityExecutionCosts(
+            commission_per_share=0.0,
+            sec_fee_per_million_usd_sell=0.0,
+            finra_taf_per_share_sell=0.0,
         ),
     ).run(signal, market)
 

@@ -442,7 +442,7 @@ def test_worker_freezes_stability_campaign_before_model_proposal(tmp_path: Path)
                 "portfolio_annual_return_dispersion": 0.22,
                 "portfolio_walk_forward_worst_sharpe": 0.2,
                 "portfolio_coverage": 0.95,
-                "portfolio_capacity_cny": 100_000_000.0,
+                "portfolio_capacity_usd": 100_000_000.0,
                 "portfolio_annual_turnover": 10.0,
                 "portfolio_cost_stress_net_ir": 1.0,
                 "portfolio_max_drawdown": -0.08,

@@ -10,9 +10,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from autoalpha.backtest.ashare_vector import AshareVectorBacktester, AshareVectorConfig
 from autoalpha.backtest.capital import CapitalBacktestSpec, run_capital_backtest
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
+from autoalpha.backtest.us_vector import USVectorBacktester, USVectorConfig
 from autoalpha.config import ResearchConfig
 from autoalpha.data.execution_basis import inspect_execution_data_basis
 from autoalpha.data.research_fields import field_definitions
@@ -116,7 +116,7 @@ class BlindEvaluationBoundary:
         spec = CapitalBacktestSpec(
             start=split.train.start,
             end=split.test.end,
-            initial_cash=portfolio.initial_cash_cny,
+            initial_cash=portfolio.initial_cash_usd,
             target_gross_exposure=portfolio.target_gross_exposure,
             top_fraction=portfolio.top_fraction,
             max_positions=portfolio.maximum_positions,
@@ -127,11 +127,12 @@ class BlindEvaluationBoundary:
             composite,
             self.panel_path,
             spec,
-            costs=ChinaAExecutionCosts(
-                commission_bps_each_side=self.config.costs.commission_bps_each_side,
-                stamp_duty_bps_sell=self.config.costs.stamp_duty_bps_sell,
-                transfer_fee_bps_each_side=self.config.costs.transfer_fee_bps_each_side,
-                minimum_commission_cny=self.config.costs.minimum_commission_cny,
+            costs=USEquityExecutionCosts(
+                commission_per_share=self.config.costs.commission_per_share,
+                minimum_commission_usd=self.config.costs.minimum_commission_usd,
+                maximum_commission_fraction=self.config.costs.maximum_commission_fraction,
+                sec_fee_per_million_usd_sell=self.config.costs.sec_fee_per_million_usd_sell,
+                finra_taf_per_share_sell=self.config.costs.finra_taf_per_share_sell,
             ),
         )
         metrics = report.metrics
@@ -160,7 +161,7 @@ class BlindEvaluationBoundary:
         factor_columns = list(self.factor_fields)
         columns = list(dict.fromkeys([
             "trade_date",
-            "ts_code",
+            "symbol",
             "open",
             "raw_open",
             "can_buy_open_proxy",
@@ -184,14 +185,14 @@ class BlindEvaluationBoundary:
         value_columns = list(dict.fromkeys(["open", "raw_open", *factor_columns]))
         data.loc[~valid, value_columns] = np.nan
         result = {
-            name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
+            name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
             for name in value_columns
         }
         result["can_buy_open_proxy"] = data.pivot(
-            index="trade_date", columns="ts_code", values="can_buy_open_proxy"
+            index="trade_date", columns="symbol", values="can_buy_open_proxy"
         ).sort_index()
         result["can_sell_open_proxy"] = data.pivot(
-            index="trade_date", columns="ts_code", values="can_sell_open_proxy"
+            index="trade_date", columns="symbol", values="can_sell_open_proxy"
         ).sort_index()
         return result
 
@@ -224,19 +225,16 @@ class BlindEvaluationBoundary:
             "can_sell_open_proxy",
             pd.DataFrame(True, index=adjusted_open.index, columns=adjusted_open.columns),
         )
-        result = AshareVectorBacktester(
-            AshareVectorConfig(
-                initial_cash_cny=strategy.initial_cash_cny,
+        result = USVectorBacktester(
+            USVectorConfig(
+                initial_cash_usd=strategy.initial_cash_usd,
                 gross_exposure=strategy.gross_exposure,
                 selection_fraction=strategy.selection_fraction,
                 maximum_positions=strategy.maximum_positions,
                 rebalance_schedule=strategy.rebalance_schedule,
                 commission_bps_each_side=strategy.commission_bps_each_side,
-                stamp_duty_bps_sell=strategy.stamp_duty_bps_sell,
-                transfer_fee_bps_each_side=strategy.transfer_fee_bps_each_side,
-                minimum_commission_cny=strategy.minimum_commission_cny,
+                sec_fee_bps_sell=strategy.sec_fee_bps_sell,
                 slippage_bps_each_side=strategy.slippage_bps_each_side,
-                use_historical_fee_schedule=strategy.use_historical_fee_schedule,
                 cost_stress_multiplier=strategy.cost_stress_multiplier,
             )
         ).run(
@@ -257,10 +255,10 @@ def _path_metrics(path: pd.DataFrame) -> dict[str, float]:
     wealth = (1 + net).cumprod()
     return {
         "sharpe": _annualized_ir(net),
-        "annual_return": float(net.mean() * 245),
+        "annual_return": float(net.mean() * 252),
         "max_drawdown": float((wealth / wealth.cummax() - 1).min()),
         "cost_stress_sharpe": _annualized_ir(stressed),
-        "annual_turnover": float(path["turnover"].mean() * 245),
+        "annual_turnover": float(path["turnover"].mean() * 252),
         "observations": float(len(path)),
     }
 
@@ -301,7 +299,7 @@ def _normalize_weights(weights: tuple[float, ...], count: int) -> tuple[float, .
 def _annualized_ir(values: pd.Series) -> float:
     clean = values.dropna()
     volatility = float(clean.std(ddof=1))
-    return float(clean.mean() / volatility * math.sqrt(245)) if volatility > 0 else 0.0
+    return float(clean.mean() / volatility * math.sqrt(252)) if volatility > 0 else 0.0
 
 
 def _evidence_hash(metrics: dict[str, Any]) -> str:

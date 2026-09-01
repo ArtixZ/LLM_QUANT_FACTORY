@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "multifactor-ashare"
+name = "multifactor-us"
 version = "0.1.0"
-description = "Data and research tooling for A-share cross-sectional multi-factor strategies."
+description = "Data and research tooling for US equity cross-sectional multi-factor strategies."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -13,7 +13,7 @@ authors = [
   { name = "Jiang Jingzhe", email = "contact@jiangjingzhe.com" },
 ]
 keywords = [
-  "a-shares",
+  "us-equities",
   "factor-research",
   "portfolio-optimization",
   "quantitative-finance",
@@ -37,7 +37,7 @@ Issues = "https://github.com/khakhasshi/LLM_QUANT_FACTORY/issues"
 Source = "https://github.com/khakhasshi/LLM_QUANT_FACTORY"
 
 [project.scripts]
-mf-data = "multifactor_ashare.data:main"
+mf-us = "multifactor_us.data:main"
 
 [dependency-groups]
 dev = [
@@ -46,7 +46,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/multifactor_ashare"]
+packages = ["src/multifactor_us"]
 
 [tool.hatch.build.targets.sdist]
 include = [

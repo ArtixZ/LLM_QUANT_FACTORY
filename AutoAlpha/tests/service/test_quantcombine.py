@@ -607,7 +607,7 @@ def test_quantcombine_best_candidate_links_to_prefilled_workflows() -> None:
     assert 'strategy_reference_limit' in script
     assert 'run: "1"' in script
     assert 'task.protocol.validation_start' in script
-    assert 'backtest_preset: "A_SHARE_NON_PIT_PROXY_WEEKLY_V1"' in script
+    assert 'backtest_preset: "US_EQUITY_ADJUSTED_PROXY_WEEKLY_V1"' in script
     assert 'backtest_engine: "EVENT_LEDGER"' in script
     assert 'execution_data_mode: "NON_PIT_PROXY"' in script
     assert 'queryParameters.get("weights")' in screener

@@ -112,7 +112,7 @@ def _public_metrics(result: dict[str, Any]) -> dict[str, Any]:
         "rank_ic_hac_t",
         "net_information_ratio",
         "maximum_drawdown",
-        "capacity_cny",
+        "capacity_usd",
     }
     return {key: result[key] for key in sorted(allowed & result.keys())}
 

@@ -70,7 +70,7 @@ def main() -> None:
         transfer_fee_bps_each_side=config.costs.transfer_fee_bps_each_side,
         cost_stress_multiplier=2.0,
         path_index="signal_session",
-        initial_cash_cny=config.portfolio.initial_cash_cny,
+        initial_cash_usd=config.portfolio.initial_cash_usd,
     )
     legacy_config = VectorBacktestConfig(**base, cost_model="legacy_half_turnover")
     existing_path = evaluator._signal_path(signal).copy()

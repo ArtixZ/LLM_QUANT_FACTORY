@@ -46,10 +46,13 @@ class SplitConfig:
 
 @dataclass(frozen=True)
 class CostConfig:
-    commission_bps_each_side: float = 1.5
-    stamp_duty_bps_sell: float = 5.0
-    transfer_fee_bps_each_side: float = 0.1
-    minimum_commission_cny: float = 5.0
+    """US equity explicit costs. Commission is per share, not basis points."""
+
+    commission_per_share: float = 0.0035
+    minimum_commission_usd: float = 0.35
+    maximum_commission_fraction: float = 0.01
+    sec_fee_per_million_usd_sell: float = 27.80
+    finra_taf_per_share_sell: float = 0.000166
     max_adv_participation: float = 0.05
 
     def __post_init__(self) -> None:
@@ -58,6 +61,25 @@ class CostConfig:
             raise ValueError("Cost parameters must be non-negative")
         if not 0 < self.max_adv_participation <= 1:
             raise ValueError("max_adv_participation must be in (0, 1]")
+        if not 0 < self.maximum_commission_fraction <= 1:
+            raise ValueError("maximum_commission_fraction must be in (0, 1]")
+
+    @property
+    def sec_fee_bps_sell(self) -> float:
+        """SEC Section 31 fee as basis points; $27.80 per $1M is 0.278 bps."""
+        return self.sec_fee_per_million_usd_sell / 100.0
+
+    @property
+    def commission_bps_each_side(self) -> float:
+        """Per-share commission expressed as bps for weight-space engines.
+
+        Vector engines never see share counts, so a per-share schedule has to be
+        approximated by a notional-proportional rate. This assumes a
+        representative $50 share price and is capped by the commission ceiling.
+        """
+        representative_price = 50.0
+        rate = self.commission_per_share / representative_price * 10_000.0
+        return min(rate, self.maximum_commission_fraction * 10_000.0)
 
 
 @dataclass(frozen=True)
@@ -125,7 +147,7 @@ class WalkForwardConfig:
 
 @dataclass(frozen=True)
 class GovernanceConfig:
-    protocol_version: str = "institutional_walkforward_v8_ashare_long_only_primary"
+    protocol_version: str = "institutional_walkforward_v8_us_equity_long_only_primary"
     maximum_holdout_evaluations_per_generation: int = 10
     minimum_public_gates_before_holdout: int = 1
     holdout_minimum_sharpe: float = 0.0
@@ -146,7 +168,7 @@ class GovernanceConfig:
 @dataclass(frozen=True)
 class PortfolioConstructionConfig:
     holding_period_days: int = 5
-    initial_cash_cny: float = 1_000_000.0
+    initial_cash_usd: float = 1_000_000.0
     target_gross_exposure: float = 0.50
     top_fraction: float = 0.10
     maximum_positions: int = 30
@@ -156,7 +178,7 @@ class PortfolioConstructionConfig:
     maximum_residual_position_multiplier: float = 1.50
 
     def __post_init__(self) -> None:
-        if self.holding_period_days <= 0 or self.initial_cash_cny <= 0:
+        if self.holding_period_days <= 0 or self.initial_cash_usd <= 0:
             raise ValueError("Holding period and initial cash must be positive")
         if not 0 < self.target_gross_exposure <= 1 or not 0 < self.top_fraction <= 1:
             raise ValueError("Portfolio exposure and top_fraction must be in (0, 1]")
@@ -169,20 +191,19 @@ class PortfolioConstructionConfig:
 @dataclass(frozen=True)
 class StrategyEvaluationConfig:
     enabled: bool = True
-    engine_protocol: str = "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
+    engine_protocol: str = "US_EQUITY_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
     execution_data_mode: str = "NON_PIT_PROXY"
-    initial_cash_cny: float = 1_000_000.0
+    initial_cash_usd: float = 1_000_000.0
     gross_exposure: float = 0.90
     selection_fraction: float = 0.10
     maximum_positions: int = 30
     rebalance_schedule: str = "WEEKLY_FIRST_SESSION"
-    opening_limit_threshold: float = 0.095
-    commission_bps_each_side: float = 2.5
-    stamp_duty_bps_sell: float = 5.0
-    transfer_fee_bps_each_side: float = 0.1
-    minimum_commission_cny: float = 5.0
+    commission_per_share: float = 0.0035
+    minimum_commission_usd: float = 0.35
+    maximum_commission_fraction: float = 0.01
+    sec_fee_per_million_usd_sell: float = 27.80
+    finra_taf_per_share_sell: float = 0.000166
     slippage_bps_each_side: float = 5.0
-    use_historical_fee_schedule: bool = True
     cost_stress_multiplier: float = 3.0
     maximum_volume_participation: float = 0.01
 
@@ -195,23 +216,40 @@ class StrategyEvaluationConfig:
             "MONTHLY_FIRST_SESSION",
         }:
             raise ValueError("Strategy rebalance schedule is invalid")
-        if not 0 < self.opening_limit_threshold <= 0.30:
-            raise ValueError("Strategy opening limit threshold is invalid")
-        if self.initial_cash_cny <= 0 or not 0 < self.gross_exposure <= 1:
+        if self.initial_cash_usd <= 0 or not 0 < self.gross_exposure <= 1:
             raise ValueError("Strategy capital and exposure are invalid")
         if not 0 < self.selection_fraction <= 0.5 or self.maximum_positions <= 0:
             raise ValueError("Strategy selection settings are invalid")
         if not 0 < self.maximum_volume_participation <= 1:
             raise ValueError("Strategy volume participation must be in (0, 1]")
         costs = (
-            self.commission_bps_each_side,
-            self.stamp_duty_bps_sell,
-            self.transfer_fee_bps_each_side,
-            self.minimum_commission_cny,
+            self.commission_per_share,
+            self.minimum_commission_usd,
+            self.sec_fee_per_million_usd_sell,
+            self.finra_taf_per_share_sell,
             self.slippage_bps_each_side,
         )
         if any(value < 0 for value in costs) or self.cost_stress_multiplier < 1:
             raise ValueError("Strategy execution costs are invalid")
+        if not 0 < self.maximum_commission_fraction <= 1:
+            raise ValueError("Strategy commission cap must be in (0, 1]")
+
+    @property
+    def sec_fee_bps_sell(self) -> float:
+        """SEC Section 31 fee as basis points; $27.80 per $1M is 0.278 bps."""
+        return self.sec_fee_per_million_usd_sell / 100.0
+
+    @property
+    def commission_bps_each_side(self) -> float:
+        """Per-share commission expressed as bps for weight-space engines.
+
+        Vector engines never see share counts, so a per-share schedule has to be
+        approximated by a notional-proportional rate. This assumes a
+        representative $50 share price and is capped by the commission ceiling.
+        """
+        representative_price = 50.0
+        rate = self.commission_per_share / representative_price * 10_000.0
+        return min(rate, self.maximum_commission_fraction * 10_000.0)
 
 
 @dataclass(frozen=True)
@@ -237,7 +275,7 @@ class EvaluationConfig:
     maximum_industry_active_weight: float = 0.05
     maximum_stress_loss: float = 0.10
     maximum_annual_turnover: float = 30.0
-    minimum_capacity_cny: float = 10_000_000.0
+    minimum_capacity_usd: float = 10_000_000.0
     minimum_break_even_cost_multiplier: float = 1.50
     maximum_untradeable_fraction: float = 0.05
     minimum_paper_days: int = 60
@@ -277,7 +315,7 @@ class EvaluationConfig:
                 self.maximum_industry_active_weight,
                 self.maximum_stress_loss,
                 self.maximum_annual_turnover,
-                self.minimum_capacity_cny,
+                self.minimum_capacity_usd,
                 self.minimum_break_even_cost_multiplier,
                 self.minimum_paper_days,
                 self.minimum_diversification_sharpe_improvement,

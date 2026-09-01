@@ -15,7 +15,7 @@ from autoalpha.backtest.capital import (
     factor_from_iteration,
     run_capital_backtest,
 )
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.dsl.expression import FactorDefinition, field, operation
 from autoalpha.research.evaluation import cross_sectional_ic
 from autoalpha.service.evaluator import PriceVolumeEvaluator
@@ -201,8 +201,8 @@ def _capital_diagnostics(factor: FactorDefinition) -> dict[str, dict[str, Any]]:
         max_positions=30,
         max_volume_participation=0.05,
     )
-    zero_cost = ChinaAExecutionCosts(0, 0, 0, 0)
-    double_cost = ChinaAExecutionCosts(3.0, 10.0, 0.2, 10.0)
+    zero_cost = USEquityExecutionCosts(0, 0, 0, 0)
+    double_cost = USEquityExecutionCosts(3.0, 10.0, 0.2, 10.0)
     delayed_factor = FactorDefinition(
         name=f"{factor.name}_extra_delay_1d",
         family=factor.family,
@@ -214,19 +214,19 @@ def _capital_diagnostics(factor: FactorDefinition) -> dict[str, dict[str, Any]]:
         "zero_explicit_cost": run_capital_backtest(factor, PANEL, spec, costs=zero_cost),
         "double_explicit_cost": run_capital_backtest(factor, PANEL, spec, costs=double_cost),
         "extra_signal_delay_1d": run_capital_backtest(
-            delayed_factor, PANEL, spec, costs=ChinaAExecutionCosts()
+            delayed_factor, PANEL, spec, costs=USEquityExecutionCosts()
         ),
     }
     return {
         name: {
             key: report.metrics[key]
             for key in (
-                "final_nav_cny",
+                "final_nav_usd",
                 "total_return",
                 "compound_annual_return",
                 "sharpe_ratio",
                 "max_drawdown",
-                "total_fees_cny",
+                "total_fees_usd",
                 "annualized_one_way_turnover",
                 "average_gross_exposure",
             )
@@ -248,7 +248,7 @@ def _temporal_diagnostics(curve: pd.DataFrame) -> dict[str, Any]:
         rolling_mean.div(rolling_std).mul(math.sqrt(245)).replace([np.inf, -np.inf], np.nan)
     )
     monthly = (1 + returns).groupby(returns.index.to_period("M")).prod() - 1
-    episodes = _drawdown_episodes(curve["nav_cny"])
+    episodes = _drawdown_episodes(curve["nav_usd"])
     return {
         "rolling_245d_sharpe_latest": float(rolling_sharpe.dropna().iloc[-1]),
         "rolling_245d_sharpe_min": float(rolling_sharpe.min()),
@@ -354,9 +354,9 @@ def _plot_performance(curve: pd.DataFrame, temporal: dict[str, Any]) -> None:
         * math.sqrt(245)
     )
     fig, axes = plt.subplots(3, 1, figsize=(11.5, 9), sharex=True, height_ratios=[2.2, 1, 1])
-    axes[0].plot(curve.index, curve["nav_cny"] / 1_000_000, color="#175CD3", lw=1.8)
+    axes[0].plot(curve.index, curve["nav_usd"] / 1_000_000, color="#175CD3", lw=1.8)
     axes[0].axhline(1, color="#667085", lw=0.8, ls="--")
-    axes[0].set_ylabel("NAV (CNY mn)")
+    axes[0].set_ylabel("NAV (USD mn)")
     axes[0].set_title("Iteration 36 capital replay: performance and stability")
     axes[1].fill_between(curve.index, curve["drawdown"] * 100, 0, color="#D92D20", alpha=0.28)
     axes[1].plot(curve.index, curve["drawdown"] * 100, color="#D92D20", lw=0.8)

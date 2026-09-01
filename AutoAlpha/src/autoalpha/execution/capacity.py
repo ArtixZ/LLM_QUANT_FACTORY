@@ -10,7 +10,7 @@ from autoalpha.execution.simulator import MarketImpactModel
 
 @dataclass(frozen=True)
 class CapacityPoint:
-    capital_cny: float
+    capital_usd: float
     average_participation: float
     annual_explicit_cost: float
     annual_impact_cost: float
@@ -21,7 +21,7 @@ class CapacityPoint:
 @dataclass(frozen=True)
 class CapacityReport:
     points: tuple[CapacityPoint, ...]
-    recommended_capacity_cny: float
+    recommended_capacity_usd: float
     binding_reason: str
 
 
@@ -34,23 +34,23 @@ class CapacityAnalyzer:
         gross_daily_returns: pd.Series,
         *,
         annual_turnover: float,
-        aggregate_adv_cny: float,
+        aggregate_adv_usd: float,
         daily_volatility: float,
-        capital_grid_cny: tuple[float, ...],
+        capital_grid_usd: tuple[float, ...],
         explicit_cost_bps: float = 8.0,
         maximum_participation: float = 0.10,
         minimum_net_ir: float = 0.0,
     ) -> CapacityReport:
-        if aggregate_adv_cny <= 0 or not capital_grid_cny:
+        if aggregate_adv_usd <= 0 or not capital_grid_usd:
             raise ValueError("Positive ADV and a non-empty capital grid are required")
         gross_return = float(gross_daily_returns.mean() * 252)
         annual_volatility = float(gross_daily_returns.std(ddof=1) * np.sqrt(252))
         points: list[CapacityPoint] = []
         recommended = 0.0
         reason = "minimum net IR"
-        for capital in sorted(capital_grid_cny):
+        for capital in sorted(capital_grid_usd):
             daily_traded = capital * annual_turnover / 252
-            participation = daily_traded / aggregate_adv_cny
+            participation = daily_traded / aggregate_adv_usd
             explicit = annual_turnover * explicit_cost_bps / 10_000
             impact_bps = self.impact.impact_bps(1, 1 / max(participation, 1e-12), daily_volatility)
             impact_cost = annual_turnover * impact_bps / 10_000

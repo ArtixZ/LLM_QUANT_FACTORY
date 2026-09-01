@@ -9,13 +9,13 @@ from typing import Any
 import pandas as pd
 import pyarrow.parquet as pq
 
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.service.multifactor import factor_from_pool_record
 from autoalpha.service.screener import CrossSectionalScreener, ScreenerSpec
 from autoalpha.service.store import ServiceStore
 
 PAPER_EXECUTION_PROTOCOL = {
-    "protocol": "A_SHARE_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2",
+    "protocol": "US_EQUITY_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2",
     "execution_assumption": "NEXT_SESSION_RAW_OPEN_PROXY_FILL_V1",
     "signal_time": "END_OF_DAY_AFTER_CLOSE",
     "execution_time": "NEXT_SESSION_OPEN",
@@ -23,8 +23,8 @@ PAPER_EXECUTION_PROTOCOL = {
     "price_basis": "RAW_OPEN",
     "mark_to_market_price_basis": "RAW_CLOSE",
     "portfolio_mode": "LONG_ONLY_CASH",
-    "lot_size": 100,
-    "t_plus_one_sell_lock": True,
+    "lot_size": 1,
+    "t_plus_one_sell_lock": False,
     "blocked_order_policy": "SKIP_ORDER_AND_AUDIT",
     "tradability_fields": [
         "raw_open",
@@ -34,7 +34,7 @@ PAPER_EXECUTION_PROTOCOL = {
         "can_buy_open_proxy",
         "can_sell_open_proxy",
     ],
-    "fee_model": "CHINA_A_HISTORICAL_FEE_SCHEDULE_WITH_CONFIGURED_SLIPPAGE",
+    "fee_model": "US_EQUITY_PER_SHARE_COMMISSION_PLUS_SEC_TAF_WITH_CONFIGURED_SLIPPAGE",
     "production_caveat": "NON_PIT_PROXY_RESEARCH_AND_PAPER_ONLY",
 }
 
@@ -44,18 +44,18 @@ class PaperStrategySpec:
     name: str
     factor_ids: list[str]
     weights: list[float]
-    initial_cash_cny: float
+    initial_cash_usd: float
     selection_count: int
     gross_exposure: float
     slippage_bps_each_side: float
     as_of_date: date
-    market: str = "CN_A"
+    market: str = "US_EQUITY"
     data_path: str = ""
     source_task_ids: tuple[str, ...] = ()
 
 
 class PaperTradingEngine:
-    """Persistent A-share paper portfolios using next-session open proxy fills."""
+    """Persistent US equity paper portfolios using next-session open proxy fills."""
 
     def __init__(self, store: ServiceStore, data_path: Path) -> None:
         self.store = store
@@ -83,7 +83,7 @@ class PaperTradingEngine:
             "source_task_ids": list(spec.source_task_ids),
         }
         portfolio = self.store.create_paper_portfolio(
-            name=spec.name, config=config, initial_cash_cny=spec.initial_cash_cny
+            name=spec.name, config=config, initial_cash_usd=spec.initial_cash_usd
         )
         try:
             self._rebalance(portfolio, records, spec.as_of_date, reason="INITIAL_ALLOCATION")
@@ -124,7 +124,7 @@ class PaperTradingEngine:
         if not positions:
             return portfolio
         prices, trade_date = self._prices([item["symbol"] for item in positions], None)
-        cash = float(portfolio["cash_cny"])
+        cash = float(portfolio["cash_usd"])
         market_value = sum(
             int(position["quantity"]) * float(prices.get(position["symbol"], 0.0))
             for position in positions
@@ -132,13 +132,13 @@ class PaperTradingEngine:
         nav = cash + market_value
         self.store.apply_paper_portfolio_update(
             portfolio_id=portfolio_id,
-            cash_cny=cash,
+            cash_usd=cash,
             positions=[
                 {
                     "symbol": item["symbol"],
                     "security_name": item["security_name"],
                     "quantity": item["quantity"],
-                    "average_cost_cny": item["average_cost_cny"],
+                    "average_cost_usd": item["average_cost_usd"],
                     "acquired_trade_date": item.get("acquired_trade_date"),
                     "last_trade_date": item.get("last_trade_date"),
                 }
@@ -147,8 +147,8 @@ class PaperTradingEngine:
             trades=[],
             nav={
                 "trade_date": trade_date,
-                "nav_cny": nav,
-                "market_value_cny": market_value,
+                "nav_usd": nav,
+                "market_value_usd": market_value,
                 "gross_exposure": market_value / nav if nav else 0.0,
             },
             rebalanced=False,
@@ -171,7 +171,7 @@ class PaperTradingEngine:
             list(config["weights"]),
             ScreenerSpec(as_of_date=as_of_date, selection_count=int(config["selection_count"])),
         )
-        targets = {row["ts_code"]: row for row in screen["rows"]}
+        targets = {row["symbol"]: row for row in screen["rows"]}
         if not targets:
             raise ValueError("No target securities selected by the EOD screener")
         signal_date = str(screen["as_of_date"])
@@ -191,13 +191,13 @@ class PaperTradingEngine:
         }
         if not buyable_targets and not previous_positions:
             raise ValueError("No target securities have usable next-session raw open prices")
-        cash = float(portfolio["cash_cny"])
+        cash = float(portfolio["cash_usd"])
         market_value = sum(
             int(item["quantity"]) * float(prices.get(symbol, 0.0))
             for symbol, item in previous_positions.items()
         )
         nav_before = cash + market_value
-        lot_size = int(config.get("lot_size", 100))
+        lot_size = int(config.get("lot_size", 1))
         allocation_count = max(1, len(buyable_targets) or len(targets))
         target_value = nav_before * float(config["gross_exposure"]) / allocation_count
         desired = {
@@ -205,13 +205,7 @@ class PaperTradingEngine:
             for symbol, price in prices.items()
             if symbol in targets and price > 0
         }
-        costs = ChinaAExecutionCosts(
-            commission_bps_each_side=2.5,
-            stamp_duty_bps_sell=5.0,
-            transfer_fee_bps_each_side=0.1,
-            minimum_commission_cny=5.0,
-            use_historical_fee_schedule=True,
-        )
+        costs = USEquityExecutionCosts()
         slippage = float(config["slippage_bps_each_side"])
         positions = {symbol: dict(item) for symbol, item in previous_positions.items()}
         trades = []
@@ -230,21 +224,9 @@ class PaperTradingEngine:
                     _blocked_order(trade_date, symbol, "SELL", quantity, "OPEN_SELL_BLOCKED")
                 )
                 continue
-            acquired_trade_date = positions[symbol].get("acquired_trade_date")
-            last_trade_date = positions[symbol].get("last_trade_date")
-            if (
-                acquired_trade_date
-                and str(acquired_trade_date) >= str(trade_date)
-                or last_trade_date
-                and str(last_trade_date) >= str(trade_date)
-            ):
-                blocked_orders.append(
-                    _blocked_order(trade_date, symbol, "SELL", quantity, "T_PLUS_ONE_LOCKED")
-                )
-                continue
             price = reference * (1.0 - slippage / 10_000.0)
             notional = quantity * price
-            fees = costs.fees("SELL", notional, trade_date)
+            fees = costs.fees("SELL", notional, quantity, trade_date)
             cash += notional - fees
             positions[symbol]["quantity"] = target
             positions[symbol]["last_trade_date"] = trade_date
@@ -264,10 +246,10 @@ class PaperTradingEngine:
                         "execution_assumption": config.get("execution_assumption"),
                         "execution_protocol": config.get("execution_protocol"),
                         "execution_lag_sessions": config.get("execution_lag_sessions"),
-                        "reference_price_cny": reference,
+                        "reference_price_usd": reference,
                         "price_basis": "RAW_OPEN",
                         "slippage_bps_each_side": slippage,
-                        "t_plus_one_sell_lock": True,
+                        "t_plus_one_sell_lock": False,
                     },
                 )
             )
@@ -289,21 +271,21 @@ class PaperTradingEngine:
                 continue
             reference = prices[symbol]
             price = reference * (1.0 + slippage / 10_000.0)
-            affordable = _round_lot(costs.affordable_notional(cash, trade_date) / price, lot_size)
+            affordable = _round_lot(costs.affordable_shares(cash, price, trade_date), lot_size)
             quantity = min(target - current, affordable)
             if quantity <= 0:
                 continue
             notional = quantity * price
-            fees = costs.fees("BUY", notional, trade_date)
+            fees = costs.fees("BUY", notional, quantity, trade_date)
             cash -= notional + fees
             old_quantity = current
-            old_cost = float(positions.get(symbol, {}).get("average_cost_cny", 0.0))
+            old_cost = float(positions.get(symbol, {}).get("average_cost_usd", 0.0))
             average_cost = (old_quantity * old_cost + quantity * price) / (old_quantity + quantity)
             positions[symbol] = {
                 "symbol": symbol,
                 "security_name": targets[symbol]["name"],
                 "quantity": old_quantity + quantity,
-                "average_cost_cny": average_cost,
+                "average_cost_usd": average_cost,
                 "acquired_trade_date": positions.get(symbol, {}).get("acquired_trade_date")
                 or trade_date,
                 "last_trade_date": trade_date,
@@ -324,10 +306,10 @@ class PaperTradingEngine:
                         "execution_assumption": config.get("execution_assumption"),
                         "execution_protocol": config.get("execution_protocol"),
                         "execution_lag_sessions": config.get("execution_lag_sessions"),
-                        "reference_price_cny": reference,
+                        "reference_price_usd": reference,
                         "price_basis": "RAW_OPEN",
                         "slippage_bps_each_side": slippage,
-                        "t_plus_one_sell_lock": True,
+                        "t_plus_one_sell_lock": False,
                     },
                 )
             )
@@ -338,13 +320,13 @@ class PaperTradingEngine:
         nav = cash + market_value
         self.store.apply_paper_portfolio_update(
             portfolio_id=int(portfolio["id"]),
-            cash_cny=cash,
+            cash_usd=cash,
             positions=list(positions.values()),
             trades=trades,
             nav={
                 "trade_date": trade_date,
-                "nav_cny": nav,
-                "market_value_cny": market_value,
+                "nav_usd": nav,
+                "market_value_usd": market_value,
                 "gross_exposure": market_value / nav if nav else 0.0,
             },
             rebalanced=True,
@@ -409,7 +391,7 @@ class PaperTradingEngine:
         frames = []
         columns = [
             "trade_date",
-            "ts_code",
+            "symbol",
             "raw_open",
             "raw_pre_close",
             "is_valid_ohlc",
@@ -433,12 +415,12 @@ class PaperTradingEngine:
         data = data[
             (data["trade_date"] > signal_date)
             & (data["trade_date"] <= end_date)
-            & (data["ts_code"].isin(unique_symbols))
+            & (data["symbol"].isin(unique_symbols))
         ]
         if data.empty:
             raise ValueError(f"No next-session raw open prices found after {signal_as_of_date}")
         execution_date = data["trade_date"].min()
-        selected = data[data["trade_date"] == execution_date].set_index("ts_code")
+        selected = data[data["trade_date"] == execution_date].set_index("symbol")
         market_state: dict[str, dict[str, Any]] = {}
         for symbol, row in selected.iterrows():
             raw_open = row.get("raw_open")
@@ -459,9 +441,13 @@ def _round_lot(quantity: float, lot_size: int) -> int:
     return max(0, int(math.floor(quantity / lot_size)) * lot_size)
 
 
-def _open_trade_permissions(
-    row: pd.Series, opening_limit_threshold: float = 0.0995
-) -> tuple[bool, bool]:
+def _open_trade_permissions(row: pd.Series) -> tuple[bool, bool]:
+    """Side-specific open eligibility for a US equity session.
+
+    There are no daily price limits to test for, so eligibility reduces to a
+    valid, actually-traded bar with a usable opening print. Panel-supplied
+    proxy flags take precedence when present.
+    """
     valid = True
     if "is_valid_ohlc" in row.index:
         valid = valid and bool(row.get("is_valid_ohlc"))
@@ -475,14 +461,7 @@ def _open_trade_permissions(
             valid and bool(row.get("can_buy_open_proxy")),
             valid and bool(row.get("can_sell_open_proxy")),
         )
-    raw_pre_close = row.get("raw_pre_close")
-    if pd.isna(raw_pre_close) or float(raw_pre_close) <= 0:
-        return valid, valid
-    open_move = float(raw_open) / float(raw_pre_close) - 1.0
-    return (
-        valid and open_move < opening_limit_threshold,
-        valid and open_move > -opening_limit_threshold,
-    )
+    return valid, valid
 
 
 def _blocked_order(
@@ -514,9 +493,9 @@ def _trade(
         "security_name": security_name,
         "side": side,
         "quantity": quantity,
-        "price_cny": price,
-        "notional_cny": quantity * price,
-        "fees_cny": fees,
+        "price_usd": price,
+        "notional_usd": quantity * price,
+        "fees_usd": fees,
         "reason": reason,
         "execution": execution or {},
     }

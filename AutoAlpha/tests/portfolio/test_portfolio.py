@@ -45,7 +45,7 @@ def test_optimizer_respects_weight_turnover_exposure_and_adv() -> None:
         exposures,
         constraints,
         portfolio_value=1_000_000,
-        adv_cny=pd.Series(500_000, index=assets),
+        adv_usd=pd.Series(500_000, index=assets),
     )
     assert result.success
     assert abs(result.target_weights.sum() - 1) < 1e-8

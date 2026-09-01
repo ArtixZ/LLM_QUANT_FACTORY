@@ -7,7 +7,7 @@ from autoalpha.data.current_panel import inspect_current_panel
 def test_panel_inspection_does_not_invent_missing_pit_fields(tmp_path) -> None:
     frame = pd.DataFrame(
         {
-            "ts_code": ["000001.SZ"],
+            "symbol": ["000001.SZ"],
             "trade_date": [pd.Timestamp("2024-01-02")],
             "open": [10.0],
             "high": [10.5],

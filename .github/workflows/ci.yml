@@ -31,7 +31,7 @@ jobs:
       - run: uv run ruff format --check scripts/check_public_release.py scripts/export_public_research_snapshot.py
       - run: uv run pytest -q
       - run: uv run python scripts/check_public_release.py
-      - run: uv build --out-dir /tmp/multifactor-ashare-dist
+      - run: uv build --out-dir /tmp/multifactor-us-dist
 
   autoalpha:
     name: AutoAlpha platform

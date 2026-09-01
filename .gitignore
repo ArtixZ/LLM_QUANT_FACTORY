@@ -55,3 +55,6 @@ env/
 
 # Backup of the pre-merge nested AutoAlpha git directory
 /.git-autoalpha-backup/
+
+# Claude Code session state and worktrees
+.claude/

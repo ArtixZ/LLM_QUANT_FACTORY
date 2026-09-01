@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from autoalpha.backtest.ashare_vector import AshareVectorBacktester, AshareVectorConfig
+from autoalpha.backtest.us_vector import USVectorBacktester, USVectorConfig
 from autoalpha.dsl.compiler import FactorCompiler
 from autoalpha.dsl.expression import Expression, FactorDefinition
 from autoalpha.dsl.semantics import SemanticValidator
@@ -23,12 +23,11 @@ from autoalpha.service.batch_engine import (
 @dataclass(frozen=True)
 class RealisticAshareBatchConfig(MassiveBatchConfig):
     gross_exposure: float = 0.90
-    commission_bps_each_side: float = 2.5
+    commission_bps_each_side: float = 0.5
     slippage_bps_each_side: float = 5.0
     protocol: str = "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
-    initial_cash_cny: float = 1_000_000.0
-    minimum_commission_cny: float = 5.0
-    use_historical_fee_schedule: bool = True
+    initial_cash_usd: float = 1_000_000.0
+    minimum_commission_usd: float = 5.0
     rebalance_schedule: str = "WEEKLY_FIRST_SESSION"
     execution_data_mode: str = "NON_PIT_PROXY"
 
@@ -38,9 +37,8 @@ class RealisticAshareBatchConfig(MassiveBatchConfig):
         return cls(
             **base.__dict__,
             protocol=str(value.get("protocol", "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1")),
-            initial_cash_cny=float(value.get("initial_cash_cny", 1_000_000.0)),
-            minimum_commission_cny=float(value.get("minimum_commission_cny", 5.0)),
-            use_historical_fee_schedule=bool(value.get("use_historical_fee_schedule", True)),
+            initial_cash_usd=float(value.get("initial_cash_usd", 1_000_000.0)),
+            minimum_commission_usd=float(value.get("minimum_commission_usd", 5.0)),
             rebalance_schedule=str(value.get("rebalance_schedule", "WEEKLY_FIRST_SESSION")),
             execution_data_mode=str(value.get("execution_data_mode", "NON_PIT_PROXY")),
         )
@@ -72,19 +70,16 @@ class RealisticAshareBatchEngine(MassiveVectorBatchEngine):
         schedule: str | None = None,
         maximum_positions: int | None = None,
     ):
-        return AshareVectorBacktester(
-            AshareVectorConfig(
-                initial_cash_cny=self.config.initial_cash_cny,
+        return USVectorBacktester(
+            USVectorConfig(
+                initial_cash_usd=self.config.initial_cash_usd,
                 gross_exposure=self.config.gross_exposure,
                 selection_fraction=self.config.selection_fraction,
                 maximum_positions=maximum_positions or self.config.maximum_positions_per_side,
                 rebalance_schedule=schedule or self.config.rebalance_schedule,  # type: ignore[arg-type]
                 commission_bps_each_side=self.config.commission_bps_each_side,
-                stamp_duty_bps_sell=self.config.stamp_duty_bps_sell,
-                transfer_fee_bps_each_side=self.config.transfer_fee_bps_each_side,
-                minimum_commission_cny=self.config.minimum_commission_cny,
+                sec_fee_bps_sell=self.config.sec_fee_bps_sell,
                 slippage_bps_each_side=self.config.slippage_bps_each_side,
-                use_historical_fee_schedule=self.config.use_historical_fee_schedule,
                 cost_stress_multiplier=self.config.cost_stress_multiplier,
             )
         ).run(
@@ -204,7 +199,7 @@ class RealisticAshareBatchEngine(MassiveVectorBatchEngine):
             dict.fromkeys(
                 [
                     "trade_date",
-                    "ts_code",
+                    "symbol",
                     "open",
                     *factor_columns,
                     "raw_open",
@@ -228,12 +223,12 @@ class RealisticAshareBatchEngine(MassiveVectorBatchEngine):
         value_columns = list(dict.fromkeys(["open", *factor_columns, "raw_open"]))
         data.loc[~valid, value_columns] = np.nan
         fields = {
-            name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
+            name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
             for name in value_columns
         }
         for name in ("can_buy_open_proxy", "can_sell_open_proxy"):
             fields[name] = (
-                data.pivot(index="trade_date", columns="ts_code", values=name)
+                data.pivot(index="trade_date", columns="symbol", values=name)
                 .sort_index()
                 .fillna(False)
                 .astype(bool)

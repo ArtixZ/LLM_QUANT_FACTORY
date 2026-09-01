@@ -24,7 +24,7 @@ class CandidateEvidence:
     maximum_library_correlation: float
     incremental_net_ir: float
     annual_turnover: float
-    capacity_cny: float
+    capacity_usd: float
     net_excess_hac_p_value: float
     deflated_sharpe_probability: float
     probability_backtest_overfitting: float
@@ -72,7 +72,7 @@ class GatePolicy:
     maximum_industry_active_weight: float = 0.05
     maximum_stress_loss: float = 0.10
     maximum_annual_turnover: float = 30.0
-    minimum_capacity_cny: float = 10_000_000.0
+    minimum_capacity_usd: float = 10_000_000.0
     minimum_break_even_cost_multiplier: float = 1.50
     maximum_untradeable_fraction: float = 0.05
     minimum_paper_days: int = 60
@@ -257,7 +257,7 @@ class InstitutionalAdmission:
                         "annual turnover exceeds limit",
                     ),
                     (
-                        evidence.capacity_cny >= self.policy.minimum_capacity_cny,
+                        evidence.capacity_usd >= self.policy.minimum_capacity_usd,
                         "capacity is below minimum",
                     ),
                     (

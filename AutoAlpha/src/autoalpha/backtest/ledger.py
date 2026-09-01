@@ -7,7 +7,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.backtest.target_book import is_rebalance_session, select_target_symbols
 
 REQUIRED_MARKET_COLUMNS = frozenset(
@@ -26,10 +26,10 @@ class LedgerConfig:
     initial_cash: float = 100_000_000.0
     top_fraction: float = 0.10
     max_positions: int | None = None
-    lot_size: int = 100
+    lot_size: int = 1
     max_volume_participation: float = 0.05
     investment_buffer: float = 0.002
-    trading_days_per_year: int = 245
+    trading_days_per_year: int = 252
     rebalance_schedule: RebalanceSchedule = "DAILY_ROLLING"
     slippage_bps_each_side: float = 0.0
 
@@ -79,10 +79,10 @@ class LedgerBacktester:
     def __init__(
         self,
         config: LedgerConfig,
-        costs: ChinaAExecutionCosts | None = None,
+        costs: USEquityExecutionCosts | None = None,
     ) -> None:
         self.config = config
-        self.costs = costs or ChinaAExecutionCosts()
+        self.costs = costs or USEquityExecutionCosts()
 
     def run(self, signal: pd.DataFrame, market: pd.DataFrame) -> LedgerResult:
         _validate_inputs(signal, market)
@@ -234,10 +234,7 @@ class LedgerBacktester:
                 continue
             quantity = self._volume_limited_quantity(deficit, volumes.get(symbol))
             execution_price = self._execution_price(float(price), "BUY")
-            affordable = _round_lot(
-                self.costs.affordable_notional(sleeve.cash, trade_date) / execution_price,
-                self.config.lot_size,
-            )
+            affordable = self.costs.affordable_shares(sleeve.cash, execution_price, trade_date)
             quantity = min(quantity, affordable)
             if quantity <= 0:
                 if any(
@@ -287,13 +284,14 @@ class LedgerBacktester:
         breakdown = self.costs.fee_breakdown(  # type: ignore[arg-type]
             side,
             notional,
+            quantity,
             trade_date,
         )
         fees = sum(breakdown.values())
         if side == "SELL":
             quantity = min(quantity, sleeve.positions.get(symbol, 0))
             notional = quantity * price
-            breakdown = self.costs.fee_breakdown("SELL", notional, trade_date)
+            breakdown = self.costs.fee_breakdown("SELL", notional, quantity, trade_date)
             fees = sum(breakdown.values())
             sleeve.positions[symbol] = sleeve.positions.get(symbol, 0) - quantity
             if sleeve.positions[symbol] == 0:
@@ -410,8 +408,8 @@ def _trade_columns() -> list[str]:
         "slippage_bps",
         "notional",
         "commission",
-        "transfer_fee",
-        "stamp_duty",
+        "sec_fee",
+        "finra_taf",
         "fees",
         "net_cash_flow",
         "cash_after",

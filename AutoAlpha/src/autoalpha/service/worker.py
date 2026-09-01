@@ -2319,7 +2319,7 @@ class ContinuousResearchWorker:
                 "maximum_annual_turnover": policy.maximum_annual_turnover,
                 "maximum_annual_return_dispersion": policy.maximum_annual_return_dispersion,
                 "maximum_factor_correlation": policy.maximum_library_correlation,
-                "minimum_capacity_cny": policy.minimum_capacity_cny,
+                "minimum_capacity_usd": policy.minimum_capacity_usd,
                 "minimum_walk_forward_positive_fraction": (policy.minimum_positive_fold_fraction),
                 "minimum_deflated_sharpe_probability": (policy.minimum_deflated_sharpe_probability),
                 "maximum_probability_backtest_overfitting": (

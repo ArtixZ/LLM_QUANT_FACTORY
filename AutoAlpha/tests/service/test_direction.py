@@ -22,7 +22,7 @@ def test_absolute_stability_gap_determines_next_public_direction() -> None:
         "portfolio_annual_return_dispersion": 0.22,
         "portfolio_walk_forward_worst_sharpe": 0.3,
         "portfolio_coverage": 0.95,
-        "portfolio_capacity_cny": 100_000_000.0,
+        "portfolio_capacity_usd": 100_000_000.0,
         "portfolio_annual_turnover": 12.0,
         "portfolio_cost_stress_net_ir": 1.0,
         "portfolio_max_drawdown": -0.08,

@@ -16,7 +16,7 @@ def test_global_settings_round_trip_structured_values(tmp_path: Path) -> None:
     defaults = default_settings(tmp_path / "AutoAlpha")
     defaults["data_path"] = str(tmp_path / "data")
     defaults["market_data_root"] = str(tmp_path / "market")
-    defaults["data_product_ids"] = ["core_market", "daily_basic"]
+    defaults["data_product_ids"] = ["core_market", "execution_market"]
     defaults["full_llm_enabled"] = False
     defaults["proposal_batch_size"] = 2
     values = GlobalSettingsValues.model_validate(defaults)
@@ -26,10 +26,10 @@ def test_global_settings_round_trip_structured_values(tmp_path: Path) -> None:
     )
 
     assert restored == values
-    assert restored.data_product_ids == ["core_market", "daily_basic"]
+    assert restored.data_product_ids == ["core_market", "execution_market"]
     assert restored.full_llm_enabled is False
     assert restored.proposal_batch_size == 2
-    assert values.to_store()["data_product_ids"] == '["core_market","daily_basic"]'
+    assert values.to_store()["data_product_ids"] == '["core_market","execution_market"]'
 
 
 def test_global_settings_reject_infeasible_combine_weights(tmp_path: Path) -> None:
@@ -59,7 +59,7 @@ def test_settings_catalog_marks_secrets_without_exposing_values() -> None:
         option["value"]: option for option in fields["data_product_ids"]["options"]
     }
     assert product_options["core_market"]["disabled"]
-    assert product_options["index_weight"]["disabled"]
-    assert not product_options["daily_basic"]["disabled"]
+    assert product_options["fundamentals"]["disabled"]
+    assert not product_options["execution_market"]["disabled"]
     assert "value" not in fields["api_key"]
     assert "value" not in fields["tushare_token"]

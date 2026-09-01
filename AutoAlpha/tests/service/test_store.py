@@ -524,7 +524,7 @@ def test_manual_backtest_records_are_persistent_and_isolated(tmp_path: Path) -> 
         "weights": [1.0, 1.0],
         "start_date": "2020-01-02",
         "end_date": "2024-12-31",
-        "initial_cash_cny": 1_000_000,
+        "initial_cash_usd": 1_000_000,
         "gross_exposure": 0.5,
         "holding_period_days": 5,
         "portfolio_mode": "long_short",

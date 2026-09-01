@@ -33,7 +33,7 @@ def _evidence() -> CandidateEvidence:
         maximum_industry_active_weight=0.03,
         stress_loss=-0.05,
         annual_turnover=20.0,
-        capacity_cny=100_000_000,
+        capacity_usd=100_000_000,
         break_even_cost_multiplier=2.0,
         untradeable_fraction=0.01,
     )

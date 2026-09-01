@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.backtest.ledger import LedgerBacktester, LedgerConfig
 
 
@@ -54,14 +54,14 @@ def _backtester(horizon: int = 1) -> LedgerBacktester:
             horizon=horizon,
             initial_cash=1_000_000,
             top_fraction=0.5,
-            lot_size=100,
+            lot_size=1,
             max_volume_participation=1.0,
         ),
-        ChinaAExecutionCosts(
-            commission_bps_each_side=0,
-            stamp_duty_bps_sell=0,
-            transfer_fee_bps_each_side=0,
-            minimum_commission_cny=0,
+        USEquityExecutionCosts(
+            commission_per_share=0.0,
+            minimum_commission_usd=0.0,
+            sec_fee_per_million_usd_sell=0.0,
+            finra_taf_per_share_sell=0.0,
         ),
     )
 
@@ -76,8 +76,8 @@ def test_signal_executes_at_next_open_and_marks_real_daily_path() -> None:
     assert first_trade["price"] == 11.0
     assert {
         "commission",
-        "transfer_fee",
-        "stamp_duty",
+        "sec_fee",
+        "finra_taf",
         "fees",
         "net_cash_flow",
         "cash_after",
@@ -121,11 +121,11 @@ def test_max_positions_caps_fractional_selection() -> None:
             max_positions=1,
             max_volume_participation=1.0,
         ),
-        ChinaAExecutionCosts(
-            commission_bps_each_side=0,
-            stamp_duty_bps_sell=0,
-            transfer_fee_bps_each_side=0,
-            minimum_commission_cny=0,
+        USEquityExecutionCosts(
+            commission_per_share=0.0,
+            minimum_commission_usd=0.0,
+            sec_fee_per_million_usd_sell=0.0,
+            finra_taf_per_share_sell=0.0,
         ),
     )
 
@@ -146,11 +146,11 @@ def test_weekly_schedule_rebalances_on_first_actual_session_only() -> None:
             max_volume_participation=1.0,
             rebalance_schedule="WEEKLY_FIRST_SESSION",
         ),
-        ChinaAExecutionCosts(
-            commission_bps_each_side=0,
-            stamp_duty_bps_sell=0,
-            transfer_fee_bps_each_side=0,
-            minimum_commission_cny=0,
+        USEquityExecutionCosts(
+            commission_per_share=0.0,
+            minimum_commission_usd=0.0,
+            sec_fee_per_million_usd_sell=0.0,
+            finra_taf_per_share_sell=0.0,
         ),
     ).run(_signal(), _market())
 
@@ -168,11 +168,11 @@ def test_modeled_slippage_records_reference_and_execution_prices() -> None:
             max_volume_participation=1.0,
             slippage_bps_each_side=10.0,
         ),
-        ChinaAExecutionCosts(
-            commission_bps_each_side=0,
-            stamp_duty_bps_sell=0,
-            transfer_fee_bps_each_side=0,
-            minimum_commission_cny=0,
+        USEquityExecutionCosts(
+            commission_per_share=0.0,
+            minimum_commission_usd=0.0,
+            sec_fee_per_million_usd_sell=0.0,
+            finra_taf_per_share_sell=0.0,
         ),
     )
 

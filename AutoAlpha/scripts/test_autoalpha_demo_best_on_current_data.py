@@ -125,7 +125,7 @@ def _sha256(path: Path) -> str:
 def _load_years(years: range | list[int]) -> pd.DataFrame:
     columns = [
         "trade_date",
-        "ts_code",
+        "symbol",
         "open",
         "high",
         "low",
@@ -156,7 +156,7 @@ def _load_years(years: range | list[int]) -> pd.DataFrame:
 
 def _wide_fields(data: pd.DataFrame) -> dict[str, pd.DataFrame]:
     fields = {
-        name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
+        name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
         for name in ("open", "high", "low", "close", "adj_close", "vol", "amount")
     }
     fields["volume"] = fields.pop("vol")
@@ -834,7 +834,7 @@ def main() -> None:
         train_fields = _wide_fields(train_data)
         validation_fields = _wide_fields(validation_data)
         return_prices = return_data.pivot(
-            index="trade_date", columns="ts_code", values="adj_close"
+            index="trade_date", columns="symbol", values="adj_close"
         ).sort_index()
         del data, train_data, validation_data, return_data
 

@@ -315,8 +315,8 @@ class ServiceStore:
                     name TEXT NOT NULL UNIQUE,
                     status TEXT NOT NULL,
                     config_json TEXT NOT NULL,
-                    initial_cash_cny REAL NOT NULL,
-                    cash_cny REAL NOT NULL,
+                    initial_cash_usd REAL NOT NULL,
+                    cash_usd REAL NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     last_rebalanced_date TEXT
@@ -326,7 +326,7 @@ class ServiceStore:
                     symbol TEXT NOT NULL,
                     security_name TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
-                    average_cost_cny REAL NOT NULL,
+                    average_cost_usd REAL NOT NULL,
                     acquired_trade_date TEXT,
                     last_trade_date TEXT,
                     updated_at TEXT NOT NULL,
@@ -340,9 +340,9 @@ class ServiceStore:
                     security_name TEXT NOT NULL,
                     side TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
-                    price_cny REAL NOT NULL,
-                    notional_cny REAL NOT NULL,
-                    fees_cny REAL NOT NULL,
+                    price_usd REAL NOT NULL,
+                    notional_usd REAL NOT NULL,
+                    fees_usd REAL NOT NULL,
                     reason TEXT NOT NULL,
                     execution_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
@@ -350,9 +350,9 @@ class ServiceStore:
                 CREATE TABLE IF NOT EXISTS paper_nav (
                     portfolio_id INTEGER NOT NULL REFERENCES paper_portfolios(id) ON DELETE CASCADE,
                     trade_date TEXT NOT NULL,
-                    nav_cny REAL NOT NULL,
-                    cash_cny REAL NOT NULL,
-                    market_value_cny REAL NOT NULL,
+                    nav_usd REAL NOT NULL,
+                    cash_usd REAL NOT NULL,
+                    market_value_usd REAL NOT NULL,
                     gross_exposure REAL NOT NULL,
                     daily_return REAL,
                     updated_at TEXT NOT NULL,
@@ -2070,15 +2070,15 @@ class ServiceStore:
         return item
 
     def create_paper_portfolio(
-        self, *, name: str, config: dict[str, Any], initial_cash_cny: float
+        self, *, name: str, config: dict[str, Any], initial_cash_usd: float
     ) -> dict[str, Any]:
         now = _now()
         with self.connection() as connection:
             cursor = connection.execute(
                 """INSERT INTO paper_portfolios
-                (name, status, config_json, initial_cash_cny, cash_cny, created_at, updated_at)
+                (name, status, config_json, initial_cash_usd, cash_usd, created_at, updated_at)
                 VALUES (?, 'ACTIVE', ?, ?, ?, ?, ?)""",
-                (name.strip(), _canonical(config), initial_cash_cny, initial_cash_cny, now, now),
+                (name.strip(), _canonical(config), initial_cash_usd, initial_cash_usd, now, now),
             )
             portfolio_id = int(cursor.lastrowid)
         record = self.paper_portfolio(portfolio_id)
@@ -2088,7 +2088,7 @@ class ServiceStore:
     def paper_portfolios(self, *, limit: int = 100) -> list[dict[str, Any]]:
         with self.connection() as connection:
             rows = connection.execute(
-                """SELECT portfolio.*, nav.trade_date, nav.nav_cny, nav.market_value_cny,
+                """SELECT portfolio.*, nav.trade_date, nav.nav_usd, nav.market_value_usd,
                           nav.gross_exposure, nav.daily_return
                 FROM paper_portfolios portfolio
                 LEFT JOIN paper_nav nav ON nav.portfolio_id=portfolio.id
@@ -2103,7 +2103,7 @@ class ServiceStore:
     def paper_portfolio(self, portfolio_id: int) -> dict[str, Any] | None:
         with self.connection() as connection:
             row = connection.execute(
-                """SELECT portfolio.*, nav.trade_date, nav.nav_cny, nav.market_value_cny,
+                """SELECT portfolio.*, nav.trade_date, nav.nav_usd, nav.market_value_usd,
                           nav.gross_exposure, nav.daily_return
                 FROM paper_portfolios portfolio
                 LEFT JOIN paper_nav nav ON nav.portfolio_id=portfolio.id
@@ -2156,7 +2156,7 @@ class ServiceStore:
         self,
         *,
         portfolio_id: int,
-        cash_cny: float,
+        cash_usd: float,
         positions: list[dict[str, Any]],
         trades: list[dict[str, Any]],
         nav: dict[str, Any],
@@ -2167,7 +2167,7 @@ class ServiceStore:
             connection.execute("DELETE FROM paper_positions WHERE portfolio_id=?", (portfolio_id,))
             connection.executemany(
                 """INSERT INTO paper_positions
-                (portfolio_id, symbol, security_name, quantity, average_cost_cny,
+                (portfolio_id, symbol, security_name, quantity, average_cost_usd,
                  acquired_trade_date, last_trade_date, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
@@ -2176,7 +2176,7 @@ class ServiceStore:
                         position["symbol"],
                         position["security_name"],
                         position["quantity"],
-                        position["average_cost_cny"],
+                        position["average_cost_usd"],
                         position.get("acquired_trade_date"),
                         position.get("last_trade_date"),
                         now,
@@ -2187,8 +2187,8 @@ class ServiceStore:
             )
             connection.executemany(
                 """INSERT INTO paper_trades
-                (portfolio_id, trade_date, symbol, security_name, side, quantity, price_cny,
-                 notional_cny, fees_cny, reason, execution_json, created_at)
+                (portfolio_id, trade_date, symbol, security_name, side, quantity, price_usd,
+                 notional_usd, fees_usd, reason, execution_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
@@ -2198,9 +2198,9 @@ class ServiceStore:
                         trade["security_name"],
                         trade["side"],
                         trade["quantity"],
-                        trade["price_cny"],
-                        trade["notional_cny"],
-                        trade["fees_cny"],
+                        trade["price_usd"],
+                        trade["notional_usd"],
+                        trade["fees_usd"],
                         trade["reason"],
                         _canonical(trade.get("execution") or {}),
                         now,
@@ -2209,39 +2209,39 @@ class ServiceStore:
                 ],
             )
             previous = connection.execute(
-                """SELECT nav_cny FROM paper_nav WHERE portfolio_id=?
+                """SELECT nav_usd FROM paper_nav WHERE portfolio_id=?
                 ORDER BY trade_date DESC LIMIT 1""",
                 (portfolio_id,),
             ).fetchone()
             daily_return = (
-                nav["nav_cny"] / float(previous["nav_cny"]) - 1.0
-                if previous and float(previous["nav_cny"])
+                nav["nav_usd"] / float(previous["nav_usd"]) - 1.0
+                if previous and float(previous["nav_usd"])
                 else None
             )
             connection.execute(
                 """INSERT INTO paper_nav
-                (portfolio_id, trade_date, nav_cny, cash_cny, market_value_cny, gross_exposure,
+                (portfolio_id, trade_date, nav_usd, cash_usd, market_value_usd, gross_exposure,
                  daily_return, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(portfolio_id, trade_date) DO UPDATE SET
-                nav_cny=excluded.nav_cny, cash_cny=excluded.cash_cny,
-                market_value_cny=excluded.market_value_cny, gross_exposure=excluded.gross_exposure,
+                nav_usd=excluded.nav_usd, cash_usd=excluded.cash_usd,
+                market_value_usd=excluded.market_value_usd, gross_exposure=excluded.gross_exposure,
                 daily_return=excluded.daily_return, updated_at=excluded.updated_at""",
                 (
                     portfolio_id,
                     nav["trade_date"],
-                    nav["nav_cny"],
-                    cash_cny,
-                    nav["market_value_cny"],
+                    nav["nav_usd"],
+                    cash_usd,
+                    nav["market_value_usd"],
                     nav["gross_exposure"],
                     daily_return,
                     now,
                 ),
             )
             connection.execute(
-                """UPDATE paper_portfolios SET cash_cny=?, updated_at=?,
+                """UPDATE paper_portfolios SET cash_usd=?, updated_at=?,
                 last_rebalanced_date=CASE WHEN ? THEN ? ELSE last_rebalanced_date END WHERE id=?""",
-                (cash_cny, now, int(rebalanced), nav["trade_date"], portfolio_id),
+                (cash_usd, now, int(rebalanced), nav["trade_date"], portfolio_id),
             )
 
     @staticmethod

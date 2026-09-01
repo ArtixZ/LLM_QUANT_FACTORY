@@ -13,13 +13,13 @@ from autoalpha.data.execution_basis import (
 )
 
 
-def test_forward_adjusted_board_lot_panel_blocks_cash_ledger(tmp_path: Path) -> None:
+def test_dividend_adjusted_panel_blocks_cash_ledger(tmp_path: Path) -> None:
     (tmp_path / "_metadata.json").write_text(
         json.dumps(
             {
-                "price_adjustment": "forward_adjusted",
+                "price_adjustment": "split_and_dividend_adjusted",
                 "volume_unit": "board_lot_100_shares",
-                "amount_unit": "thousand_cny",
+                "amount_unit": "thousand_usd",
                 "capital_ledger_ready": False,
             }
         ),
@@ -39,7 +39,7 @@ def test_unadjusted_normalized_panel_allows_cash_ledger(tmp_path: Path) -> None:
             {
                 "price_adjustment": "unadjusted",
                 "volume_unit": "shares",
-                "amount_unit": "cny",
+                "amount_unit": "usd",
                 "capital_ledger_ready": True,
             }
         ),
@@ -55,7 +55,7 @@ def test_cash_ledger_requires_point_in_time_execution_state(tmp_path: Path) -> N
             {
                 "price_adjustment": "unadjusted",
                 "volume_unit": "shares",
-                "amount_unit": "cny",
+                "amount_unit": "usd",
                 "capital_ledger_ready": True,
             }
         ),
@@ -69,14 +69,14 @@ def test_cash_ledger_requires_point_in_time_execution_state(tmp_path: Path) -> N
     assert any("point-in-time market state" in blocker for blocker in basis.blockers)
 
 
-def test_forward_adjusted_price_and_raw_activity_cannot_mix() -> None:
+def test_adjusted_price_and_raw_activity_cannot_mix() -> None:
     from autoalpha.data.execution_basis import ExecutionDataBasis
 
     basis = ExecutionDataBasis(
-        price_adjustment="forward_adjusted",
-        execution_price_adjustment="forward_adjusted",
+        price_adjustment="split_and_dividend_adjusted",
+        execution_price_adjustment="split_and_dividend_adjusted",
         volume_unit="board_lot_100_shares",
-        amount_unit="thousand_cny",
+        amount_unit="thousand_usd",
         capital_ledger_ready=False,
         capital_ledger_proxy_ready=False,
         blockers=(),
@@ -104,10 +104,10 @@ def test_hybrid_panel_allows_only_explicit_non_pit_proxy(tmp_path: Path) -> None
     (tmp_path / "_metadata.json").write_text(
         json.dumps(
             {
-                "price_adjustment": "forward_adjusted",
+                "price_adjustment": "split_and_dividend_adjusted",
                 "execution_price_adjustment": "unadjusted",
                 "volume_unit": "shares",
-                "amount_unit": "cny",
+                "amount_unit": "usd",
                 "capital_ledger_ready": False,
                 "capital_ledger_proxy_ready": True,
             }

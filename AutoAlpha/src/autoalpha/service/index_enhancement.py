@@ -61,7 +61,7 @@ def index_enhancement_diagnostic(
         estimate.latest_exposures,
         constraints,
         portfolio_value=portfolio_value,
-        adv_cny=adv.reindex(assets),
+        adv_usd=adv.reindex(assets),
         tradable=pd.Series(True, index=assets),
     )
     active = result.target_weights - benchmark.reindex(result.target_weights.index)

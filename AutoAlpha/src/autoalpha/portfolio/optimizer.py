@@ -53,7 +53,7 @@ class PortfolioOptimizer:
         constraints: PortfolioConstraints,
         *,
         portfolio_value: float = 1.0,
-        adv_cny: pd.Series | None = None,
+        adv_usd: pd.Series | None = None,
         tradable: pd.Series | None = None,
     ) -> OptimizationResult:
         assets = alpha.index
@@ -84,9 +84,9 @@ class PortfolioOptimizer:
         )
         if not constraints.long_only:
             lower = np.maximum(lower, benchmark - constraints.maximum_active_weight)
-        if adv_cny is not None:
+        if adv_usd is not None:
             trade_limit = (
-                adv_cny.reindex(assets).fillna(0.0).to_numpy()
+                adv_usd.reindex(assets).fillna(0.0).to_numpy()
                 * constraints.maximum_adv_participation
                 / portfolio_value
             )

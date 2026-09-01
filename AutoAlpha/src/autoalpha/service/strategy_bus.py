@@ -47,7 +47,7 @@ LONG_ONLY_PRIMARY_METRICS = (
     "long_only_max_drawdown",
     "long_only_walk_forward_worst_sharpe",
     "long_only_annual_turnover",
-    "long_only_capacity_cny",
+    "long_only_capacity_usd",
     "recent_long_only_sharpe_ratio",
     "recent_long_only_simple_annual_return",
     "recent_long_only_max_drawdown",
@@ -1119,7 +1119,7 @@ def _strategy_paper_trading_contract(
         "execution_protocol": "A_SHARE_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2",
         "proxy_only": True,
         "production_caveat": "NON_PIT_PROXY_RESEARCH_AND_PAPER_ONLY",
-        "required_operator_inputs": ["initial_cash_cny", "as_of_date"],
+        "required_operator_inputs": ["initial_cash_usd", "as_of_date"],
         "paper_portfolio_seed": {
             "name": f"{strategy['name']} · PAPER",
             "factor_ids": factor_ids,
@@ -1200,8 +1200,7 @@ def _strategy_trading_playbook(
         },
         "cost_assumptions": {
             "commission_bps_each_side": cost_policy.get("commission_bps_each_side"),
-            "stamp_duty_bps_sell": cost_policy.get("stamp_duty_bps_sell"),
-            "transfer_fee_bps_each_side": cost_policy.get("transfer_fee_bps_each_side"),
+            "sec_fee_bps_sell": cost_policy.get("sec_fee_bps_sell"),
             "slippage_model": cost_policy.get("slippage_model"),
         },
         "disable_conditions": [
@@ -1607,12 +1606,11 @@ def create_formal_strategy_from_experiment(
             "gross_exposure": evidence.get("target_gross_exposure", 0.9),
             "maximum_positions": evidence.get("maximum_positions", 30),
             "maximum_drawdown": _metric(experiment["metrics"], "portfolio_max_drawdown"),
-            "capacity_cny": _metric(experiment["metrics"], "portfolio_capacity_cny"),
+            "capacity_usd": _metric(experiment["metrics"], "portfolio_capacity_usd"),
         },
         cost_policy={
-            "commission_bps_each_side": 2.5,
-            "stamp_duty_bps_sell": 5.0,
-            "transfer_fee_bps_each_side": 0.1,
+            "commission_bps_each_side": 0.5,
+            "sec_fee_bps_sell": 0.278,
             "slippage_model": "CONFIGURABLE_BPS",
         },
         monitoring_policy={
@@ -2136,9 +2134,9 @@ def _sync_paper_portfolios(store: ServiceStore, factor_nodes: dict[str, str]) ->
             status=str(portfolio["status"]),
             market=str(config.get("market") or "CN_A"),
             metrics={
-                "nav_cny": portfolio.get("nav_cny"),
-                "cash_cny": portfolio.get("cash_cny"),
-                "market_value_cny": portfolio.get("market_value_cny"),
+                "nav_usd": portfolio.get("nav_usd"),
+                "cash_usd": portfolio.get("cash_usd"),
+                "market_value_usd": portfolio.get("market_value_usd"),
                 "gross_exposure": portfolio.get("gross_exposure"),
                 "daily_return": portfolio.get("daily_return"),
             },

@@ -11,7 +11,7 @@ import matplotlib
 import numpy as np
 import pandas as pd
 
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.backtest.ledger import LedgerBacktester, LedgerConfig, LedgerResult
 from autoalpha.data.execution_basis import inspect_execution_data_basis
 from autoalpha.data.research_fields import field_definitions
@@ -31,10 +31,9 @@ class CapitalBacktestSpec:
     target_gross_exposure: float = 0.50
     top_fraction: float = 0.10
     max_positions: int = 30
-    lot_size: int = 100
+    lot_size: int = 1
     max_volume_participation: float = 0.05
-    opening_limit_threshold: float = 0.095
-    trading_days_per_year: int = 245
+    trading_days_per_year: int = 252
     holding_period_days: int = 1
 
     def __post_init__(self) -> None:
@@ -62,7 +61,7 @@ def run_capital_backtest(
     panel_path: Path,
     spec: CapitalBacktestSpec,
     *,
-    costs: ChinaAExecutionCosts | None = None,
+    costs: USEquityExecutionCosts | None = None,
 ) -> CapitalBacktestReport:
     inspect_execution_data_basis(panel_path).require_capital_ledger()
     data = _load_panel(panel_path, spec)
@@ -96,8 +95,8 @@ def write_capital_backtest_artifacts(
     nav = report.ledger.nav
     curve = pd.DataFrame(
         {
-            "nav_cny": nav,
-            "pnl_cny": nav - report.spec.initial_cash,
+            "nav_usd": nav,
+            "pnl_usd": nav - report.spec.initial_cash,
             "cumulative_return": nav / report.spec.initial_cash - 1.0,
             "drawdown": nav / nav.cummax() - 1.0,
             "daily_return": report.ledger.daily_return,
@@ -152,15 +151,18 @@ def _load_panel(panel_path: Path, spec: CapitalBacktestSpec) -> pd.DataFrame:
     warmup = pd.Timestamp(spec.start) - pd.Timedelta(days=400)
     columns = [
         "trade_date",
-        "ts_code",
+        "symbol",
         "open",
         "close",
         "adj_close",
-        "pre_close",
         "vol",
         "amount",
         "is_valid_ohlc",
         "is_tradable_observation",
+        # Side-specific open eligibility is point-in-time panel state; without
+        # loading it the market frame would silently fall back to bar validity.
+        "can_buy_open",
+        "can_sell_open",
     ]
     frames = []
     for year in range(warmup.year, spec.end.year + 1):
@@ -180,9 +182,9 @@ def _compile_signal(factor: FactorDefinition, data: pd.DataFrame) -> pd.DataFram
     valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
     required = _expression_fields(factor.expression)
     for name in required:
-        values = data[["trade_date", "ts_code", name]].copy()
+        values = data[["trade_date", "symbol", name]].copy()
         values.loc[~valid, name] = np.nan
-        fields[name] = values.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
+        fields[name] = values.pivot(index="trade_date", columns="symbol", values=name).sort_index()
     validator = SemanticValidator(
         field_definitions(data.columns, include_open=False),
         # Composite portfolios contain several independently validated factor trees.
@@ -198,11 +200,14 @@ def _market_frame(data: pd.DataFrame, spec: CapitalBacktestSpec) -> pd.DataFrame
         & (data["trade_date"] <= pd.Timestamp(spec.end))
     ].copy()
     valid = market["is_valid_ohlc"].fillna(False) & market["is_tradable_observation"].fillna(False)
-    open_move = market["open"] / market["pre_close"] - 1.0
-    market["can_buy_open"] = valid & (open_move < spec.opening_limit_threshold)
-    market["can_sell_open"] = valid & (open_move > -spec.opening_limit_threshold)
+    # US equities have no daily price limits, so open eligibility comes from the
+    # panel's point-in-time tradability flags rather than an open-move threshold.
+    # _load_panel always loads both flags; a missing column should raise here
+    # rather than silently fall back to bar validity.
+    for side in ("can_buy_open", "can_sell_open"):
+        market[side] = valid & market[side].fillna(False)
     market.loc[~market["is_valid_ohlc"].fillna(False), ["open", "close"]] = np.nan
-    return market.rename(columns={"trade_date": "date", "ts_code": "symbol", "vol": "volume"})[
+    return market.rename(columns={"trade_date": "date", "vol": "volume"})[
         ["date", "symbol", "open", "close", "volume", "can_buy_open", "can_sell_open"]
     ]
 
@@ -233,11 +238,11 @@ def _account_metrics(
         "start_date": nav.index[0].date().isoformat(),
         "end_date": nav.index[-1].date().isoformat(),
         "trading_days": len(nav),
-        "initial_cash_cny": spec.initial_cash,
-        "final_nav_cny": float(nav.iloc[-1]),
-        "total_pnl_cny": float(nav.iloc[-1] - spec.initial_cash),
+        "initial_cash_usd": spec.initial_cash,
+        "final_nav_usd": float(nav.iloc[-1]),
+        "total_pnl_usd": float(nav.iloc[-1] - spec.initial_cash),
         "total_return": float(nav.iloc[-1] / spec.initial_cash - 1.0),
-        "peak_nav_cny": float(nav.max()),
+        "peak_nav_usd": float(nav.max()),
         "peak_nav_date": nav.idxmax().date().isoformat(),
         "ending_drawdown": float(drawdown.iloc[-1]),
         "simple_annual_return": float(returns.mean() * spec.trading_days_per_year),
@@ -258,8 +263,8 @@ def _account_metrics(
         "average_gross_exposure": float(ledger.gross_exposure.mean()),
         "maximum_gross_exposure": float(ledger.gross_exposure.max()),
         "annualized_one_way_turnover": 0.5 * total_notional / float(nav.mean()) / years,
-        "total_trade_notional_cny": total_notional,
-        "total_fees_cny": ledger.total_fees,
+        "total_trade_notional_usd": total_notional,
+        "total_fees_usd": ledger.total_fees,
         "trade_count": len(ledger.trades),
         "unique_traded_symbols": int(ledger.trades["symbol"].nunique())
         if not ledger.trades.empty
@@ -339,7 +344,7 @@ def _render_chart(report: CapitalBacktestReport, path: Path) -> None:
         nav.index, report.spec.initial_cash, nav, where=pnl < 0, color="#c33832", alpha=0.12
     )
     axis_nav.set_title(f"A-share Capital Backtest | {report.factor.name} | 50% Target Exposure")
-    axis_nav.set_ylabel("Portfolio value (CNY)")
+    axis_nav.set_ylabel("Portfolio value (USD)")
     axis_nav.grid(alpha=0.2)
     axis_nav.legend(loc="upper left")
     axis_drawdown.fill_between(drawdown.index, drawdown, 0, color="#c33832", alpha=0.35)

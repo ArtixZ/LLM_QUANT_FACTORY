@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from autoalpha.data.execution_basis import inspect_execution_data_basis
-from autoalpha.data.tushare_catalog import DEFAULT_PRODUCT_IDS, data_product_catalog
+from autoalpha.data.product_catalog import DEFAULT_PRODUCT_IDS, data_product_catalog
 from autoalpha.data.workspace import inspect_data_workspace
 
 

@@ -7,51 +7,21 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from autoalpha.data.tushare_catalog import PRODUCT_BY_ID
+from autoalpha.data.product_catalog import PRODUCT_BY_ID
 from autoalpha.dsl.expression import Expression
 from autoalpha.dsl.semantics import FieldDefinition
 
 BASE_RESEARCH_FIELDS = ("open", "high", "low", "close", "adj_close", "amount", "vol")
 PRICE_FIELDS = frozenset({"open", "high", "low", "close", "adj_close"})
-SHARE_FIELDS = frozenset(
-    {
-        "vol",
-        "total_share",
-        "float_share",
-        "free_share",
-        "buy_sm_vol",
-        "sell_sm_vol",
-        "buy_md_vol",
-        "sell_md_vol",
-        "buy_lg_vol",
-        "sell_lg_vol",
-        "buy_elg_vol",
-        "sell_elg_vol",
-        "net_mf_vol",
-    }
-)
-CURRENCY_FIELDS = frozenset(
-    {
-        "amount",
-        "total_mv",
-        "circ_mv",
-        "buy_sm_amount",
-        "sell_sm_amount",
-        "buy_md_amount",
-        "sell_md_amount",
-        "buy_lg_amount",
-        "sell_lg_amount",
-        "buy_elg_amount",
-        "sell_elg_amount",
-        "net_mf_amount",
-    }
-)
-EXTENDED_RESEARCH_FIELDS = tuple(
-    field
-    for dataset_id in ("daily_basic", "moneyflow")
-    for field in PRODUCT_BY_ID[dataset_id].panel_fields
-)
-AUTO_RESEARCH_PRODUCTS = ("daily_basic", "moneyflow")
+SHARE_FIELDS = frozenset({"vol"})
+CURRENCY_FIELDS = frozenset({"amount"})
+# IBKR is a broker feed: it serves prices, volume, and corporate actions, but no
+# valuation ratios, share counts, or order-flow classification. There are
+# therefore no extended research fields beyond the base panel, and nothing to
+# gate on feature coverage. Adding a fundamentals vendor is what would populate
+# these; approximating them from bars would be inventing data.
+EXTENDED_RESEARCH_FIELDS: tuple[str, ...] = ()
+AUTO_RESEARCH_PRODUCTS: tuple[str, ...] = ()
 MAXIMUM_FEATURE_END_LAG_DAYS = 7
 
 
@@ -88,156 +58,23 @@ _FIELD_DETAILS: dict[str, tuple[str, str, str]] = {
     ),
     "close": (
         "Close price",
-        "Unadjusted session close under the workspace price basis.",
+        "Split- and dividend-adjusted session close under the workspace price basis.",
         "core_market",
     ),
     "adj_close": (
         "Adjusted close",
-        "Point-in-time event-adjusted close for return and path research.",
+        "Total-return adjusted close for return and path research.",
         "core_market",
     ),
     "amount": (
-        "Trading amount",
-        "Session trading amount in CNY; a liquidity and activity observation.",
-        "core_market",
+        "Dollar volume",
+        "Session dollar volume in USD; a liquidity and activity observation.",
+        "execution_market",
     ),
     "vol": (
         "Trading volume",
         "Session traded shares; a liquidity and participation observation.",
-        "core_market",
-    ),
-    "turnover_rate": ("Turnover rate", "Turnover as a percentage of total shares.", "daily_basic"),
-    "turnover_rate_f": (
-        "Free-float turnover",
-        "Turnover as a percentage of free-float shares.",
-        "daily_basic",
-    ),
-    "volume_ratio": (
-        "Volume ratio",
-        "Current activity relative to its recent reference activity.",
-        "daily_basic",
-    ),
-    "pe": ("PE", "Price-to-earnings ratio based on reported earnings.", "daily_basic"),
-    "pe_ttm": (
-        "PE TTM",
-        "Price-to-earnings ratio based on trailing-twelve-month earnings.",
-        "daily_basic",
-    ),
-    "pb": ("PB", "Price-to-book ratio.", "daily_basic"),
-    "ps": ("PS", "Price-to-sales ratio based on reported sales.", "daily_basic"),
-    "ps_ttm": (
-        "PS TTM",
-        "Price-to-sales ratio based on trailing-twelve-month sales.",
-        "daily_basic",
-    ),
-    "dv_ratio": (
-        "Dividend yield",
-        "Dividend yield based on the source's reported-period convention.",
-        "daily_basic",
-    ),
-    "dv_ttm": ("Dividend yield TTM", "Trailing-twelve-month dividend yield.", "daily_basic"),
-    "total_share": ("Total shares", "Total shares outstanding in the source unit.", "daily_basic"),
-    "float_share": ("Float shares", "Tradable float shares in the source unit.", "daily_basic"),
-    "free_share": ("Free-float shares", "Free-float shares in the source unit.", "daily_basic"),
-    "total_mv": (
-        "Total market value",
-        "Total market capitalization in the source currency unit.",
-        "daily_basic",
-    ),
-    "circ_mv": (
-        "Float market value",
-        "Tradable-float market capitalization in the source currency unit.",
-        "daily_basic",
-    ),
-    "buy_sm_vol": (
-        "Small-order buy volume",
-        "Buy-side volume classified as small orders.",
-        "moneyflow",
-    ),
-    "buy_sm_amount": (
-        "Small-order buy amount",
-        "Buy-side amount classified as small orders.",
-        "moneyflow",
-    ),
-    "sell_sm_vol": (
-        "Small-order sell volume",
-        "Sell-side volume classified as small orders.",
-        "moneyflow",
-    ),
-    "sell_sm_amount": (
-        "Small-order sell amount",
-        "Sell-side amount classified as small orders.",
-        "moneyflow",
-    ),
-    "buy_md_vol": (
-        "Medium-order buy volume",
-        "Buy-side volume classified as medium orders.",
-        "moneyflow",
-    ),
-    "buy_md_amount": (
-        "Medium-order buy amount",
-        "Buy-side amount classified as medium orders.",
-        "moneyflow",
-    ),
-    "sell_md_vol": (
-        "Medium-order sell volume",
-        "Sell-side volume classified as medium orders.",
-        "moneyflow",
-    ),
-    "sell_md_amount": (
-        "Medium-order sell amount",
-        "Sell-side amount classified as medium orders.",
-        "moneyflow",
-    ),
-    "buy_lg_vol": (
-        "Large-order buy volume",
-        "Buy-side volume classified as large orders.",
-        "moneyflow",
-    ),
-    "buy_lg_amount": (
-        "Large-order buy amount",
-        "Buy-side amount classified as large orders.",
-        "moneyflow",
-    ),
-    "sell_lg_vol": (
-        "Large-order sell volume",
-        "Sell-side volume classified as large orders.",
-        "moneyflow",
-    ),
-    "sell_lg_amount": (
-        "Large-order sell amount",
-        "Sell-side amount classified as large orders.",
-        "moneyflow",
-    ),
-    "buy_elg_vol": (
-        "Extra-large buy volume",
-        "Buy-side volume classified as extra-large orders.",
-        "moneyflow",
-    ),
-    "buy_elg_amount": (
-        "Extra-large buy amount",
-        "Buy-side amount classified as extra-large orders.",
-        "moneyflow",
-    ),
-    "sell_elg_vol": (
-        "Extra-large sell volume",
-        "Sell-side volume classified as extra-large orders.",
-        "moneyflow",
-    ),
-    "sell_elg_amount": (
-        "Extra-large sell amount",
-        "Sell-side amount classified as extra-large orders.",
-        "moneyflow",
-    ),
-    "net_mf_vol": (
-        "Net money-flow volume",
-        "Net classified order-flow volume after the session close.",
-        "moneyflow",
-    ),
-    "net_mf_amount": (
-        "Net money-flow amount",
-        "Net classified order-flow amount after the session close.",
-        "moneyflow",
+        "execution_market",
     ),
 }
 
@@ -249,7 +86,7 @@ def research_field_profiles() -> dict[str, ResearchFieldProfile]:
             label=label,
             description=description,
             source_product=product,
-            unit=_unit(name, amount_unit="cny", volume_unit="shares"),
+            unit=_unit(name, amount_unit="usd", volume_unit="shares"),
             temporal_behavior=_temporal_behavior(name, product),
             research_guidance=_research_guidance(name, product),
         )

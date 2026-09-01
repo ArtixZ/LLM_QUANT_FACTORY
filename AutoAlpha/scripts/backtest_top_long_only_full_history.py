@@ -132,7 +132,7 @@ def main() -> None:
         "execution_assumptions": {
             "protocol": config.strategy_evaluation.engine_protocol,
             "portfolio_mode": "long_only",
-            "initial_cash_cny": config.strategy_evaluation.initial_cash_cny,
+            "initial_cash_usd": config.strategy_evaluation.initial_cash_usd,
             "gross_exposure": config.strategy_evaluation.gross_exposure,
             "selection_fraction": config.strategy_evaluation.selection_fraction,
             "maximum_positions": config.strategy_evaluation.maximum_positions,

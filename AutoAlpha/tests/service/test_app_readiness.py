@@ -637,7 +637,7 @@ def test_strategy_library_can_create_paper_portfolio_from_execution_seed(
         title="Seed Strategy",
         status="QUALIFIED_CHAMPION",
         market="CN_A",
-        metrics={"portfolio_capacity_cny": 1_000_000},
+        metrics={"portfolio_capacity_usd": 1_000_000},
         evidence={
             "factor_ids": ["F_A", "F_B"],
             "weights": [0.7, 0.3],
@@ -680,7 +680,7 @@ def test_strategy_library_can_create_paper_portfolio_from_execution_seed(
         response = client.post(
             f"/api/strategy-library/{strategy['strategy_uid']}/versions/{strategy['version']}/paper-portfolio",
             json={
-                "initial_cash_cny": 2_000_000,
+                "initial_cash_usd": 2_000_000,
                 "as_of_date": "2026-07-29",
                 "name": "Seeded Paper",
             },
@@ -696,7 +696,7 @@ def test_strategy_library_can_create_paper_portfolio_from_execution_seed(
     assert spec.name == "Seeded Paper"
     assert spec.factor_ids == ["F_A", "F_B"]
     assert spec.weights == [0.7, 0.3]
-    assert spec.initial_cash_cny == 2_000_000
+    assert spec.initial_cash_usd == 2_000_000
     assert spec.selection_count == 12
     assert spec.gross_exposure == 0.88
     assert spec.as_of_date.isoformat() == "2026-07-29"

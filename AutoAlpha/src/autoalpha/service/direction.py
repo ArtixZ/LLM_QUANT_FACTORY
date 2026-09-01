@@ -149,8 +149,8 @@ def diagnose_direction(
         scores,
         reasons,
         "EXPAND_TRADABLE_BREADTH",
-        incumbent.get("portfolio_capacity_cny"),
-        policy.minimum_capacity_cny,
+        incumbent.get("portfolio_capacity_usd"),
+        policy.minimum_capacity_usd,
         "当前组合容量不足",
     )
     _score_maximum_violation(
@@ -380,7 +380,7 @@ def assess_direction_outcome(
     annual_change = change("portfolio_simple_annual_return")
     sharpe_change = change("portfolio_sharpe_ratio")
     coverage_change = change("portfolio_coverage")
-    change("portfolio_capacity_cny")
+    change("portfolio_capacity_usd")
     correlation_change = change("portfolio_max_factor_correlation")
 
     policy = config.evaluation
@@ -411,8 +411,8 @@ def assess_direction_outcome(
         "EXPAND_TRADABLE_BREADTH": (
             _at_least(coverage_change, adaptive.minimum_coverage_improvement)
             or _relative_growth(
-                baseline.get("portfolio_capacity_cny"),
-                proposed.get("portfolio_capacity_cny"),
+                baseline.get("portfolio_capacity_usd"),
+                proposed.get("portfolio_capacity_usd"),
                 0.05,
             )
         ),

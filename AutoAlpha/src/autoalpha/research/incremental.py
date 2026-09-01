@@ -44,7 +44,7 @@ def compare_portfolios(
     treatment_net_returns: pd.Series,
     *,
     stressed_treatment_net_returns: pd.Series | None = None,
-    periods_per_year: int = 245,
+    periods_per_year: int = 252,
     hac_lags: int = 5,
     bootstrap_block_size: int = 10,
     bootstrap_samples: int = 2000,

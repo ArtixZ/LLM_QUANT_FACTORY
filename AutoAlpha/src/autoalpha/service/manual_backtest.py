@@ -11,7 +11,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.backtest.ledger import LedgerBacktester, LedgerConfig, RebalanceSchedule
 from autoalpha.backtest.presets import validate_preset_settings
 from autoalpha.backtest.timing import EOD_NEXT_OPEN_RETURN_CONVENTION, entry_aligned_open_return
@@ -34,7 +34,7 @@ from autoalpha.service.index_enhancement import index_enhancement_diagnostic
 class ManualBacktestSpec:
     start_date: date
     end_date: date
-    initial_cash_cny: float
+    initial_cash_usd: float
     gross_exposure: float
     holding_period_days: int
     backtest_preset: str = "CUSTOM"
@@ -45,16 +45,33 @@ class ManualBacktestSpec:
     product_template: str = "MARKET_NEUTRAL_RESEARCH"
     selection_fraction: float = 0.10
     maximum_positions: int = 30
-    lot_size: int = 100
+    lot_size: int = 1
     maximum_volume_participation: float = 0.05
-    opening_limit_threshold: float = 0.095
-    commission_bps_each_side: float = 1.5
-    stamp_duty_bps_sell: float = 5.0
-    transfer_fee_bps_each_side: float = 0.1
-    minimum_commission_cny: float = 5.0
+    commission_per_share: float = 0.0035
+    minimum_commission_usd: float = 0.35
+    maximum_commission_fraction: float = 0.01
+    sec_fee_per_million_usd_sell: float = 27.80
+    finra_taf_per_share_sell: float = 0.000166
     slippage_bps_each_side: float = 0.0
-    use_historical_fee_schedule: bool = False
     cost_stress_multiplier: float = 2.0
+
+    @property
+    def sec_fee_bps_sell(self) -> float:
+        """SEC Section 31 fee as basis points; $27.80 per $1M is 0.278 bps."""
+        return self.sec_fee_per_million_usd_sell / 100.0
+
+    @property
+    def commission_bps_each_side(self) -> float:
+        """Per-share commission expressed as bps for the weight-space vector engine.
+
+        The vector engine has no share counts, so it needs a notional-proportional
+        rate. This uses the commission cap as a conservative ceiling and assumes a
+        representative $50 share price, which is what a bps approximation of a
+        per-share schedule can honestly claim.
+        """
+        representative_price = 50.0
+        rate = self.commission_per_share / representative_price * 10_000.0
+        return min(rate, self.maximum_commission_fraction * 10_000.0)
 
     def __post_init__(self) -> None:
         if not 0 < self.selection_fraction <= 0.50:
@@ -63,14 +80,12 @@ class ManualBacktestSpec:
             raise ValueError("maximum_positions and lot_size must be positive")
         if not 0 < self.maximum_volume_participation <= 1:
             raise ValueError("maximum_volume_participation must be in (0, 1]")
-        if not 0 < self.opening_limit_threshold <= 0.30:
-            raise ValueError("opening_limit_threshold must be in (0, 0.3]")
         if (
             min(
-                self.commission_bps_each_side,
-                self.stamp_duty_bps_sell,
-                self.transfer_fee_bps_each_side,
-                self.minimum_commission_cny,
+                self.commission_per_share,
+                self.minimum_commission_usd,
+                self.sec_fee_per_million_usd_sell,
+                self.finra_taf_per_share_sell,
                 self.slippage_bps_each_side,
             )
             < 0
@@ -161,8 +176,7 @@ class ManualFactorBacktester:
         realized_return = entry_aligned_open_return(fields["open"])
         one_way_bps = (
             spec.commission_bps_each_side
-            + spec.transfer_fee_bps_each_side
-            + spec.stamp_duty_bps_sell / 2
+            + spec.sec_fee_bps_sell / 2
             + spec.slippage_bps_each_side
         )
         vector_result = VectorBacktester(
@@ -173,13 +187,12 @@ class ManualFactorBacktester:
                 maximum_positions_per_side=spec.maximum_positions,
                 long_only=template.portfolio_mode == "long_only",
                 commission_bps_each_side=spec.commission_bps_each_side,
-                stamp_duty_bps_sell=spec.stamp_duty_bps_sell,
-                transfer_fee_bps_each_side=spec.transfer_fee_bps_each_side,
+                sec_fee_bps_sell=spec.sec_fee_bps_sell,
                 slippage_bps_each_side=spec.slippage_bps_each_side,
                 cost_stress_multiplier=spec.cost_stress_multiplier,
                 cost_model=spec.vector_cost_model,
                 path_index="entry_session",
-                initial_cash_cny=spec.initial_cash_cny,
+                initial_cash_usd=spec.initial_cash_usd,
             )
         ).run(composite, fields["open"], start=spec.start_date, end=spec.end_date)
         positions = vector_result.positions
@@ -189,22 +202,22 @@ class ManualFactorBacktester:
             ledger = LedgerBacktester(
                 LedgerConfig(
                     horizon=spec.holding_period_days,
-                    initial_cash=spec.initial_cash_cny,
+                    initial_cash=spec.initial_cash_usd,
                     top_fraction=spec.selection_fraction,
                     max_positions=spec.maximum_positions,
                     lot_size=spec.lot_size,
                     max_volume_participation=spec.maximum_volume_participation,
                     investment_buffer=1.0 - spec.gross_exposure,
-                    trading_days_per_year=245,
+                    trading_days_per_year=252,
                     rebalance_schedule=spec.rebalance_schedule,
                     slippage_bps_each_side=spec.slippage_bps_each_side,
                 ),
-                ChinaAExecutionCosts(
-                    commission_bps_each_side=spec.commission_bps_each_side,
-                    stamp_duty_bps_sell=spec.stamp_duty_bps_sell,
-                    transfer_fee_bps_each_side=spec.transfer_fee_bps_each_side,
-                    minimum_commission_cny=spec.minimum_commission_cny,
-                    use_historical_fee_schedule=spec.use_historical_fee_schedule,
+                USEquityExecutionCosts(
+                    commission_per_share=spec.commission_per_share,
+                    minimum_commission_usd=spec.minimum_commission_usd,
+                    maximum_commission_fraction=spec.maximum_commission_fraction,
+                    sec_fee_per_million_usd_sell=spec.sec_fee_per_million_usd_sell,
+                    finra_taf_per_share_sell=spec.finra_taf_per_share_sell,
                 ),
             ).run(composite, _ledger_market(market_data, spec))
             ledger_turnover = _ledger_turnover(ledger.trades, ledger.nav)
@@ -246,10 +259,10 @@ class ManualFactorBacktester:
         net = path["net"]
         if template.hedge_benchmark:
             net = net - benchmark_return
-        equity = spec.initial_cash_cny * (1.0 + net).cumprod()
-        benchmark_equity = spec.initial_cash_cny * (1.0 + benchmark_return).cumprod()
+        equity = spec.initial_cash_usd * (1.0 + net).cumprod()
+        benchmark_equity = spec.initial_cash_usd * (1.0 + benchmark_return).cumprod()
         active_return = net - benchmark_return
-        running_peak = equity.cummax().clip(lower=spec.initial_cash_cny)
+        running_peak = equity.cummax().clip(lower=spec.initial_cash_usd)
         drawdown = equity / running_peak - 1.0
         dsr = deflated_sharpe_ratio(net.to_numpy(), trials=max(1, int(multiple_testing_trials)))
         inference = hac_mean_inference(net.to_numpy(), lags=min(5, len(net) - 1))
@@ -268,28 +281,28 @@ class ManualFactorBacktester:
             str(year): float((1.0 + values).prod() - 1.0)
             for year, values in net.groupby(net.index.year)
         }
-        tracking_error = float(active_return.std(ddof=1) * math.sqrt(245))
+        tracking_error = float(active_return.std(ddof=1) * math.sqrt(252))
         metrics = {
-            "simple_annual_return": float(net.mean() * 245),
+            "simple_annual_return": float(net.mean() * 252),
             "compound_annual_return": _compound_annual_return(net),
-            "total_return": float(equity.iloc[-1] / spec.initial_cash_cny - 1.0),
-            "net_profit_cny": float(equity.iloc[-1] - spec.initial_cash_cny),
-            "final_equity_cny": float(equity.iloc[-1]),
+            "total_return": float(equity.iloc[-1] / spec.initial_cash_usd - 1.0),
+            "net_profit_usd": float(equity.iloc[-1] - spec.initial_cash_usd),
+            "final_equity_usd": float(equity.iloc[-1]),
             "sharpe_ratio": _annualized_ratio(net),
             "sortino_ratio": _sortino_ratio(net),
-            "annual_volatility": float(net.std(ddof=1) * math.sqrt(245)),
+            "annual_volatility": float(net.std(ddof=1) * math.sqrt(252)),
             "max_drawdown": float(drawdown.min()),
             "calmar_ratio": _calmar_ratio(net, drawdown),
             "daily_win_rate": float((net > 0).mean()),
-            "annual_turnover": float(path["turnover"].mean() * 245),
+            "annual_turnover": float(path["turnover"].mean() * 252),
             "cost_stress_sharpe": _annualized_ratio(path["stressed"]),
-            "transaction_cost_cny": float(
+            "transaction_cost_usd": float(
                 (
-                    (path["gross"] - path["net"]) * equity.shift(1).fillna(spec.initial_cash_cny)
+                    (path["gross"] - path["net"]) * equity.shift(1).fillna(spec.initial_cash_usd)
                 ).sum()
             ),
             "coverage": coverage,
-            "capacity_cny": capacity,
+            "capacity_usd": capacity,
             "rank_ic_mean": _safe_mean(rank_ic),
             "rank_ic_ir": _annualized_ratio(rank_ic) if len(rank_ic) > 1 else None,
             "pearson_ic_mean": _safe_mean(pearson_ic),
@@ -326,8 +339,8 @@ class ManualFactorBacktester:
             ),
             "product_limitation": template.limitation,
             "benchmark_mode": template.benchmark_mode,
-            "benchmark_simple_annual_return": float(benchmark_return.mean() * 245),
-            "active_simple_annual_return": float(active_return.mean() * 245),
+            "benchmark_simple_annual_return": float(benchmark_return.mean() * 252),
+            "active_simple_annual_return": float(active_return.mean() * 252),
             "tracking_error": tracking_error,
             "tracking_error_limit": template.maximum_tracking_error,
             "tracking_error_gate_passed": (
@@ -335,7 +348,7 @@ class ManualFactorBacktester:
                 or tracking_error <= template.maximum_tracking_error
             ),
             "information_ratio": (
-                float(active_return.mean() * 245 / tracking_error) if tracking_error else 0.0
+                float(active_return.mean() * 252 / tracking_error) if tracking_error else 0.0
             ),
             "market_beta": _market_beta(net, benchmark_return),
             "vector_engine": "AUTOALPHA_VECTOR_V1",
@@ -346,15 +359,14 @@ class ManualFactorBacktester:
                 {
                     "capital_ledger_protocol": "A_SHARE_NEXT_OPEN_INTEGER_LOT_V1",
                     "trade_count": len(ledger.trades),
-                    "total_trade_notional_cny": (
+                    "total_trade_notional_usd": (
                         float(ledger.trades["notional"].sum()) if not ledger.trades.empty else 0.0
                     ),
-                    "total_fees_cny": ledger.total_fees,
-                    "transaction_cost_cny": ledger.total_fees,
+                    "total_fees_usd": ledger.total_fees,
+                    "transaction_cost_usd": ledger.total_fees,
                     "average_gross_exposure": float(ledger.gross_exposure.mean()),
                     "final_position_count": len(ledger.final_positions),
                     "slippage_bps_each_side": spec.slippage_bps_each_side,
-                    "historical_fee_schedule": spec.use_historical_fee_schedule,
                 }
             )
         curve = [
@@ -377,7 +389,7 @@ class ManualFactorBacktester:
                     fields["adj_close"].loc[:end],
                     fields["amount"].loc[:end],
                     template,
-                    portfolio_value=spec.initial_cash_cny,
+                    portfolio_value=spec.initial_cash_usd,
                 )
             except Exception as error:
                 optimizer_diagnostic = {
@@ -393,12 +405,12 @@ class ManualFactorBacktester:
             "row_count": len(trade_rows),
             "buy_count": sum(row["side"] == "BUY" for row in trade_rows),
             "sell_count": sum(row["side"] == "SELL" for row in trade_rows),
-            "total_notional_cny": (
+            "total_notional_usd": (
                 float(ledger.trades["notional"].sum())
                 if ledger is not None and not ledger.trades.empty
                 else 0.0
             ),
-            "total_fees_cny": ledger.total_fees if ledger is not None else 0.0,
+            "total_fees_usd": ledger.total_fees if ledger is not None else 0.0,
         }
         execution_assumptions = _execution_assumptions(
             spec,
@@ -455,7 +467,7 @@ class ManualFactorBacktester:
             dict.fromkeys(
                 [
                     "trade_date",
-                    "ts_code",
+                    "symbol",
                     "name",
                     *sorted(required_fields),
                     "open",
@@ -510,7 +522,7 @@ class ManualFactorBacktester:
         valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
         data.loc[~valid, list(required_fields)] = np.nan
         fields = {
-            name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
+            name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
             for name in required_fields
         }
         return fields, data
@@ -532,18 +544,17 @@ def _ledger_market(data: pd.DataFrame, spec: ManualBacktestSpec) -> pd.DataFrame
             selected["can_buy_open"] = valid & selected["can_buy_open_proxy"].fillna(False)
             selected["can_sell_open"] = valid & selected["can_sell_open_proxy"].fillna(False)
         else:
-            open_move = selected["open"] / selected["pre_close"] - 1.0
-            selected["can_buy_open"] = valid & (open_move < spec.opening_limit_threshold)
-            selected["can_sell_open"] = valid & (open_move > -spec.opening_limit_threshold)
+            # US equities have no daily price limits; a valid traded bar is eligible.
+            selected["can_buy_open"] = valid
+            selected["can_sell_open"] = valid
     elif {"can_buy_open", "can_sell_open"}.issubset(selected.columns):
         selected["can_buy_open"] = valid & selected["can_buy_open"].fillna(False)
         selected["can_sell_open"] = valid & selected["can_sell_open"].fillna(False)
     else:
-        open_move = selected["open"] / selected["pre_close"] - 1.0
-        selected["can_buy_open"] = valid & (open_move < spec.opening_limit_threshold)
-        selected["can_sell_open"] = valid & (open_move > -spec.opening_limit_threshold)
+        selected["can_buy_open"] = valid
+        selected["can_sell_open"] = valid
     selected.loc[~selected["is_valid_ohlc"].fillna(False), ["open", "close"]] = np.nan
-    return selected.rename(columns={"trade_date": "date", "ts_code": "symbol", "vol": "volume"})[
+    return selected.rename(columns={"trade_date": "date", "vol": "volume"})[
         ["date", "symbol", "open", "close", "volume", "can_buy_open", "can_sell_open"]
     ]
 
@@ -607,7 +618,6 @@ def _execution_assumptions(
         "execution_price_adjustment": execution_price_adjustment,
         "execution_data_mode": spec.execution_data_mode,
         "slippage_bps_each_side": spec.slippage_bps_each_side,
-        "historical_fee_schedule": spec.use_historical_fee_schedule,
     }
     if use_ledger:
         common.update(
@@ -696,10 +706,10 @@ def _trade_statement_rows(trades: pd.DataFrame, market_data: pd.DataFrame) -> li
     if trades.empty:
         return []
     names = (
-        market_data[["ts_code", "name"]]
+        market_data[["symbol", "name"]]
         .dropna()
-        .drop_duplicates("ts_code", keep="last")
-        .set_index("ts_code")["name"]
+        .drop_duplicates("symbol", keep="last")
+        .set_index("symbol")["name"]
         .astype(str)
         .to_dict()
     )
@@ -719,14 +729,14 @@ def _trade_statement_rows(trades: pd.DataFrame, market_data: pd.DataFrame) -> li
                 "security_name": names.get(str(trade.symbol), ""),
                 "side": str(trade.side),
                 "quantity": int(trade.quantity),
-                "price_cny": round(float(trade.price), 6),
-                "notional_cny": round(float(trade.notional), 4),
-                "commission_cny": round(float(trade.commission), 4),
-                "transfer_fee_cny": round(float(trade.transfer_fee), 4),
-                "stamp_duty_cny": round(float(trade.stamp_duty), 4),
-                "total_fees_cny": round(float(trade.fees), 4),
-                "net_cash_flow_cny": round(float(trade.net_cash_flow), 4),
-                "sleeve_cash_after_cny": round(float(trade.cash_after), 4),
+                "price_usd": round(float(trade.price), 6),
+                "notional_usd": round(float(trade.notional), 4),
+                "commission_usd": round(float(trade.commission), 4),
+                "finra_taf_usd": round(float(trade.finra_taf), 4),
+                "sec_fee_usd": round(float(trade.sec_fee), 4),
+                "total_fees_usd": round(float(trade.fees), 4),
+                "net_cash_flow_usd": round(float(trade.net_cash_flow), 4),
+                "sleeve_cash_after_usd": round(float(trade.cash_after), 4),
             }
         )
     return rows
@@ -775,18 +785,18 @@ def _factor_correlations(
 
 def _annualized_ratio(values: pd.Series) -> float:
     standard_deviation = float(values.std(ddof=1))
-    return float(values.mean() / standard_deviation * math.sqrt(245)) if standard_deviation else 0.0
+    return float(values.mean() / standard_deviation * math.sqrt(252)) if standard_deviation else 0.0
 
 
 def _compound_annual_return(values: pd.Series) -> float:
     total = float((1.0 + values).prod())
-    return float(total ** (245 / len(values)) - 1.0)
+    return float(total ** (252 / len(values)) - 1.0)
 
 
 def _sortino_ratio(values: pd.Series) -> float:
     downside = values[values < 0]
     deviation = float(downside.std(ddof=1)) if len(downside) > 1 else 0.0
-    return float(values.mean() / deviation * math.sqrt(245)) if deviation else 0.0
+    return float(values.mean() / deviation * math.sqrt(252)) if deviation else 0.0
 
 
 def _calmar_ratio(values: pd.Series, drawdown: pd.Series) -> float:

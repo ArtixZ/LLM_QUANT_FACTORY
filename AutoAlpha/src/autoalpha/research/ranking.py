@@ -9,7 +9,7 @@ class CandidateValue:
     incremental_net_ir: float
     incremental_annual_return: float
     drawdown_improvement: float
-    capacity_cny: float
+    capacity_usd: float
     annual_turnover: float
     stress_loss: float
     complexity: int
@@ -20,7 +20,7 @@ class CandidateValue:
             self.incremental_net_ir,
             self.incremental_annual_return,
             self.drawdown_improvement,
-            self.capacity_cny,
+            self.capacity_usd,
             -self.annual_turnover,
             self.stress_loss,
             -float(self.complexity),
@@ -54,7 +54,7 @@ def pareto_rank(
             key=lambda candidate: (
                 candidate.drawdown_improvement,
                 candidate.incremental_net_ir,
-                candidate.capacity_cny,
+                candidate.capacity_usd,
                 -candidate.complexity,
                 candidate.candidate_id,
             ),

@@ -21,7 +21,7 @@ def _evidence() -> CandidateEvidence:
         maximum_library_correlation=0.4,
         incremental_net_ir=0.3,
         annual_turnover=12,
-        capacity_cny=100e6,
+        capacity_usd=100e6,
         net_excess_hac_p_value=0.02,
         deflated_sharpe_probability=0.95,
         probability_backtest_overfitting=0.10,

@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from autoalpha.config import ResearchConfig
-from autoalpha.data.tushare_catalog import (
+from autoalpha.data.product_catalog import (
     DEFAULT_PRODUCT_IDS,
     data_product_catalog,
     resolve_products,
@@ -401,11 +401,11 @@ def settings_catalog() -> list[dict[str, Any]]:
                                 "label": item["label"],
                                 "description": (
                                     "尚未接入可恢复下载契约；" + str(item["description"])
-                                    if item["sync_strategy"] == "CATALOG"
+                                    if item["integration_state"] == "CATALOG"
                                     else item["description"]
                                 ),
                                 "disabled": item["dataset_id"] == "core_market"
-                                or item["sync_strategy"] == "CATALOG",
+                                or item["integration_state"] == "CATALOG",
                         }
                         for item in data_product_catalog()
                     ],

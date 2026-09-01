@@ -12,53 +12,70 @@ from autoalpha.backtest.target_book import rebalance_mask, select_target_positio
 RebalanceSchedule = Literal[
     "WEEKLY_FIRST_SESSION", "BIWEEKLY_FIRST_SESSION", "MONTHLY_FIRST_SESSION"
 ]
-ASHARE_PROXY_RETURN_CONVENTION = "EOD_T__OPEN_T1_TO_OPEN_T2_TOTAL_RETURN_PROXY"
+US_PROXY_RETURN_CONVENTION = "EOD_T__OPEN_T1_TO_OPEN_T2_TOTAL_RETURN_PROXY"
 
 
 @dataclass(frozen=True)
-class AshareVectorConfig:
-    """Long-only A-share execution proxy using total-return prices and raw-open constraints."""
+class USVectorConfig:
+    """Long-only US equity execution proxy using total-return prices.
 
-    initial_cash_cny: float = 1_000_000.0
+    This engine works in weight space and never sees share counts, so the
+    per-share commission schedule modelled exactly in
+    :class:`~autoalpha.backtest.costs.USEquityExecutionCosts` is approximated
+    here as basis points. The SEC Section 31 fee is naturally proportional to
+    notional and converts exactly ($27.80 per $1M is 0.278 bps); the FINRA TAF
+    is per-share and small enough to fold into the commission approximation.
+    Use the event ledger, not this engine, for exact fee accounting.
+    """
+
+    initial_cash_usd: float = 1_000_000.0
     gross_exposure: float = 0.90
     selection_fraction: float = 0.10
     maximum_positions: int = 30
     rebalance_schedule: RebalanceSchedule = "WEEKLY_FIRST_SESSION"
-    commission_bps_each_side: float = 2.5
-    stamp_duty_bps_sell: float = 5.0
-    transfer_fee_bps_each_side: float = 0.1
-    minimum_commission_cny: float = 5.0
+    commission_bps_each_side: float = 0.5
+    sec_fee_bps_sell: float = 0.278
     slippage_bps_each_side: float = 5.0
-    use_historical_fee_schedule: bool = True
     cost_stress_multiplier: float = 2.0
-    trading_days_per_year: int = 245
+    trading_days_per_year: int = 252
 
     def __post_init__(self) -> None:
-        if self.initial_cash_cny <= 0 or not 0 < self.gross_exposure <= 1:
+        if self.initial_cash_usd <= 0 or not 0 < self.gross_exposure <= 1:
             raise ValueError("initial cash and gross exposure are invalid")
         if not 0 < self.selection_fraction <= 0.5 or self.maximum_positions <= 0:
             raise ValueError("selection settings are invalid")
         if self.cost_stress_multiplier < 1:
             raise ValueError("cost stress multiplier must be at least one")
+        if any(
+            value < 0
+            for value in (
+                self.commission_bps_each_side,
+                self.sec_fee_bps_sell,
+                self.slippage_bps_each_side,
+            )
+        ):
+            raise ValueError("execution cost rates must be non-negative")
 
 
 @dataclass(frozen=True)
-class AshareVectorResult:
+class USVectorResult:
     path: pd.DataFrame
     equity: pd.Series
     drawdown: pd.Series
     metrics: dict[str, float | int | str | bool]
 
 
-class AshareVectorBacktester:
+class USVectorBacktester:
     """Weekly long-only vector ledger with side-specific open eligibility.
 
     Signals are formed after the prior session close. Trades occur at the next
     scheduled open. Adjusted open-to-open returns preserve corporate-action total
-    returns while raw-open flags constrain whether target changes can execute.
+    returns while tradability flags constrain whether target changes can execute.
+    US equities have no daily price limits, so those flags reflect halts and
+    absent prints rather than limit-up/limit-down state.
     """
 
-    def __init__(self, config: AshareVectorConfig) -> None:
+    def __init__(self, config: USVectorConfig) -> None:
         self.config = config
 
     def run(
@@ -71,7 +88,7 @@ class AshareVectorBacktester:
         *,
         start: object,
         end: object,
-    ) -> AshareVectorResult:
+    ) -> USVectorResult:
         panels = _align_panels(signal, adjusted_open, raw_open, can_buy_open, can_sell_open)
         signal, adjusted_open, raw_open, can_buy_open, can_sell_open = panels
         entry_return = adjusted_open.pct_change(fill_method=None).shift(-1)
@@ -83,7 +100,7 @@ class AshareVectorBacktester:
         )
         active_positions = np.flatnonzero(active)
         if active_positions.size < 60:
-            raise ValueError("A-share vector backtest requires at least 60 entry sessions")
+            raise ValueError("US vector backtest requires at least 60 entry sessions")
 
         dates = entry_return.index
         schedule = rebalance_mask(dates, self.config.rebalance_schedule, active)
@@ -92,7 +109,7 @@ class AshareVectorBacktester:
         buy_values = can_buy_open.fillna(False).to_numpy(dtype=bool, copy=False)
         sell_values = can_sell_open.fillna(False).to_numpy(dtype=bool, copy=False)
         weights = np.zeros(signal.shape[1], dtype=float)
-        equity = self.config.initial_cash_cny
+        equity = self.config.initial_cash_usd
         rows: list[dict[str, float]] = []
         bankrupt = False
         bankruptcy_date: str | None = None
@@ -108,7 +125,7 @@ class AshareVectorBacktester:
                         "buy_turnover": 0.0,
                         "sell_turnover": 0.0,
                         "transaction_cost": 0.0,
-                        "transaction_cost_cny": 0.0,
+                        "transaction_cost_usd": 0.0,
                         "gross_exposure": 0.0,
                         "position_count": 0.0,
                         "rebalance": 0.0,
@@ -152,7 +169,7 @@ class AshareVectorBacktester:
                     "buy_turnover": buy_turnover,
                     "sell_turnover": sell_turnover,
                     "transaction_cost": transaction_cost,
-                    "transaction_cost_cny": transaction_cost * equity,
+                    "transaction_cost_usd": transaction_cost * equity,
                     "gross_exposure": float(weights.sum()),
                     "position_count": float(np.count_nonzero(weights > 1e-12)),
                     "rebalance": float(schedule[position]),
@@ -166,11 +183,11 @@ class AshareVectorBacktester:
                 weights[~np.isfinite(weights) | (weights < 0)] = 0.0
 
         path = pd.DataFrame(rows, index=dates[active_positions])
-        equity_path = self.config.initial_cash_cny * (1.0 + path["net"]).cumprod()
+        equity_path = self.config.initial_cash_usd * (1.0 + path["net"]).cumprod()
         drawdown = equity_path.div(
-            equity_path.cummax().clip(lower=self.config.initial_cash_cny)
+            equity_path.cummax().clip(lower=self.config.initial_cash_usd)
         ).sub(1)
-        return AshareVectorResult(
+        return USVectorResult(
             path=path,
             equity=equity_path,
             drawdown=drawdown,
@@ -218,41 +235,32 @@ class AshareVectorBacktester:
     def _cost_rate(
         self, buys: np.ndarray, sells: np.ndarray, trade_date: pd.Timestamp, equity: float
     ) -> float:
-        transfer_bps = self.config.transfer_fee_bps_each_side
-        stamp_bps = self.config.stamp_duty_bps_sell
-        if self.config.use_historical_fee_schedule:
-            if trade_date.date() < pd.Timestamp("2022-04-29").date():
-                transfer_bps *= 2.0
-            if trade_date.date() < pd.Timestamp("2023-08-28").date():
-                stamp_bps *= 2.0
+        """Turnover cost as a fraction of equity. Sells additionally pay the SEC fee."""
 
         def side_cost(changes: np.ndarray, extra_bps: float) -> float:
             active = changes[changes > 1e-12]
             if active.size == 0:
                 return 0.0
-            notionals = active * equity
-            commissions = np.maximum(
-                self.config.minimum_commission_cny,
-                notionals * self.config.commission_bps_each_side / 10_000.0,
-            )
-            variable = notionals * (
-                transfer_bps + self.config.slippage_bps_each_side + extra_bps
+            rate = (
+                self.config.commission_bps_each_side
+                + self.config.slippage_bps_each_side
+                + extra_bps
             ) / 10_000.0
-            return float((commissions + variable).sum() / equity)
+            return float(active.sum() * rate)
 
-        return side_cost(buys, 0.0) + side_cost(sells, stamp_bps)
+        return side_cost(buys, 0.0) + side_cost(sells, self.config.sec_fee_bps_sell)
 
 
 def _align_panels(*panels: pd.DataFrame) -> tuple[pd.DataFrame, ...]:
     if any(not isinstance(panel.index, pd.DatetimeIndex) for panel in panels):
-        raise TypeError("all A-share vector panels must use a DatetimeIndex")
+        raise TypeError("all US vector panels must use a DatetimeIndex")
     index = panels[0].index
     columns = panels[0].columns
     for panel in panels[1:]:
         index = index.intersection(panel.index)
         columns = columns.intersection(panel.columns, sort=False)
     if len(index) < 3 or len(columns) == 0:
-        raise ValueError("A-share vector panels do not have enough aligned observations")
+        raise ValueError("US vector panels do not have enough aligned observations")
     return tuple(panel.sort_index().reindex(index=index, columns=columns) for panel in panels)
 
 
@@ -260,7 +268,7 @@ def _metrics(
     path: pd.DataFrame,
     equity: pd.Series,
     drawdown: pd.Series,
-    config: AshareVectorConfig,
+    config: USVectorConfig,
 ) -> dict[str, float | int | str | bool]:
     net = path["net"]
     total_growth = float((1.0 + net).prod())
@@ -271,7 +279,7 @@ def _metrics(
             total_growth ** (config.trading_days_per_year / len(net)) - 1.0
         ),
         "total_return": total_growth - 1.0,
-        "final_equity_cny": float(equity.iloc[-1]),
+        "final_equity_usd": float(equity.iloc[-1]),
         "sharpe_ratio": (
             float(net.mean() / volatility * math.sqrt(config.trading_days_per_year))
             if volatility
@@ -280,7 +288,7 @@ def _metrics(
         "annual_volatility": volatility * math.sqrt(config.trading_days_per_year),
         "max_drawdown": float(drawdown.min()),
         "annual_turnover": float(path["turnover"].mean() * config.trading_days_per_year),
-        "total_transaction_cost_cny": float(path["transaction_cost_cny"].sum()),
+        "total_transaction_cost_usd": float(path["transaction_cost_usd"].sum()),
         "average_gross_exposure": float(path["gross_exposure"].mean()),
         "average_positions": float(path["position_count"].mean()),
         "rebalance_count": int(path["rebalance"].sum()),
@@ -291,7 +299,7 @@ def _metrics(
         "rebalance_schedule": config.rebalance_schedule,
         "execution_lag_sessions": 1,
         "signal_availability": "END_OF_DAY_AFTER_CLOSE",
-        "return_convention": ASHARE_PROXY_RETURN_CONVENTION,
-        "execution_price_basis": "RAW_OPEN_CONSTRAINTS_ADJUSTED_OPEN_TOTAL_RETURN",
+        "return_convention": US_PROXY_RETURN_CONVENTION,
+        "execution_price_basis": "TRADEABILITY_CONSTRAINED_ADJUSTED_OPEN_TOTAL_RETURN",
         "production_eligible": False,
     }

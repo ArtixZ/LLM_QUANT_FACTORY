@@ -11,7 +11,7 @@ from autoalpha.backtest.capital import (
     run_capital_backtest,
     write_capital_backtest_artifacts,
 )
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.service.store import ServiceStore
 
 PRIMARY_SELECTION_METRICS = (
@@ -68,11 +68,11 @@ def main() -> None:
             max_positions=30,
             max_volume_participation=0.05,
         ),
-        costs=ChinaAExecutionCosts(
+        costs=USEquityExecutionCosts(
             commission_bps_each_side=1.5,
             stamp_duty_bps_sell=5.0,
             transfer_fee_bps_each_side=0.1,
-            minimum_commission_cny=5.0,
+            minimum_commission_usd=5.0,
         ),
     )
     paths = write_capital_backtest_artifacts(report, args.output)

@@ -16,7 +16,7 @@ from autoalpha.backtest.capital import (
     run_capital_backtest,
     write_capital_backtest_artifacts,
 )
-from autoalpha.backtest.costs import ChinaAExecutionCosts
+from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.data.current_panel import inspect_current_panel
 from autoalpha.dsl.compiler import FactorCompiler
 from autoalpha.dsl.expression import (
@@ -52,11 +52,11 @@ def main() -> None:
     version = _portfolio_version(store, args.version)
     members = _portfolio_members(store, version)
     composite = _composite_factor(args.version, members)
-    costs = ChinaAExecutionCosts(
+    costs = USEquityExecutionCosts(
         commission_bps_each_side=1.5,
         stamp_duty_bps_sell=5.0,
         transfer_fee_bps_each_side=0.1,
-        minimum_commission_cny=5.0,
+        minimum_commission_usd=5.0,
     )
     research = _run_research_backtest(
         members,
@@ -217,7 +217,7 @@ def _run_research_backtest(
     panel_path: Path,
     start: date,
     end: date,
-    costs: ChinaAExecutionCosts,
+    costs: USEquityExecutionCosts,
     holding_period_days: int,
 ) -> dict[str, Any]:
     if holding_period_days <= 0:
@@ -281,7 +281,7 @@ def _run_research_backtest(
         "cost_stress_net_ir": _annualized_ir(stressed),
         "annual_turnover": float(turnover.mean() * TRADING_DAYS),
         "coverage": float(composite.notna().sum().sum() / composite.size),
-        "capacity_cny": float(selected_amount.median() * 0.05 * 20),
+        "capacity_usd": float(selected_amount.median() * 0.05 * 20),
         "rank_ic_mean": float(rank_ic.mean()),
         "rank_ic_ir": _annualized_ir(rank_ic),
         "positive_year_ratio": robustness.positive_year_ratio,
@@ -298,7 +298,7 @@ def _load_fields(panel_path: Path, start: date, end: date) -> dict[str, pd.DataF
     warmup = pd.Timestamp(start) - pd.Timedelta(days=400)
     columns = [
         "trade_date",
-        "ts_code",
+        "symbol",
         "close",
         "adj_close",
         "amount",
@@ -318,7 +318,7 @@ def _load_fields(panel_path: Path, start: date, end: date) -> dict[str, pd.DataF
     valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
     data.loc[~valid, ["close", "adj_close", "amount", "vol"]] = np.nan
     return {
-        name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
+        name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
         for name in ("close", "adj_close", "amount", "vol")
     }
 

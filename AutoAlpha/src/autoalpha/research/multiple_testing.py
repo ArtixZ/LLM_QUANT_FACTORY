@@ -19,7 +19,7 @@ def deflated_sharpe_ratio(
     returns: np.ndarray | list[float],
     *,
     trials: int,
-    periods_per_year: int = 245,
+    periods_per_year: int = 252,
 ) -> DeflatedSharpeResult:
     values = np.asarray(returns, dtype=float)
     values = values[np.isfinite(values)]

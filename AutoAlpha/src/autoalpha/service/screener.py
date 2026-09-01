@@ -110,14 +110,14 @@ class CrossSectionalScreener:
             rows.append(
                 {
                     "rank": rank,
-                    "ts_code": str(symbol),
+                    "symbol": str(symbol),
                     "name": str(row["name"]),
                     "composite_score": _finite_float(row["composite_score"]),
                     "score_percentile": _finite_float(row["score_percentile"]),
                     "research_close": _finite_float(row["close"]),
                     "raw_open": _finite_float(row.get("raw_open")),
                     "raw_close": _finite_float(row["raw_close"]),
-                    "amount_cny": _finite_float(row["amount"]),
+                    "amount_usd": _finite_float(row["amount"]),
                     "volume_shares": _finite_float(row["vol"]),
                     "factor_scores": factor_scores,
                 }
@@ -150,7 +150,7 @@ class CrossSectionalScreener:
             dict.fromkeys(
                 [
                     "trade_date",
-                    "ts_code",
+                    "symbol",
                     "name",
                     "open",
                     *factor_fields,
@@ -187,10 +187,10 @@ class CrossSectionalScreener:
         field_names = list(dict.fromkeys(["open", *factor_fields]))
         data.loc[~valid, field_names] = np.nan
         fields = {
-            name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
+            name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
             for name in field_names
         }
-        snapshot = data[data["trade_date"] == resolved_date].set_index("ts_code")
+        snapshot = data[data["trade_date"] == resolved_date].set_index("symbol")
         return fields, snapshot, resolved_date
 
 

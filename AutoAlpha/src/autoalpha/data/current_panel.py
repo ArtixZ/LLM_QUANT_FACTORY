@@ -30,7 +30,7 @@ class PanelReadinessReport:
 
 PRICE_RESEARCH_FIELDS = frozenset(
     {
-        "ts_code",
+        "symbol",
         "trade_date",
         "open",
         "high",
@@ -44,16 +44,20 @@ PRICE_RESEARCH_FIELDS = frozenset(
     }
 )
 
+# US equities need listing lifecycle, halt state, and side-specific open
+# eligibility. There is no ST designation and no daily price limit, so those
+# A-share groups are gone; classification and free float remain required for
+# institutional readiness because risk models depend on them.
 INSTITUTIONAL_FIELD_GROUPS: dict[str, frozenset[str]] = {
     "source knowledge and revision timestamps": frozenset(
         {"knowledge_time", "source_batch", "revision_id"}
     ),
-    "listing, delisting, and ST history": frozenset({"listing_date", "delisting_date", "is_st"}),
-    "suspension and open limit state": frozenset(
-        {"is_suspended", "limit_up", "limit_down", "can_buy_open", "can_sell_open"}
+    "listing and delisting history": frozenset({"listing_date", "delisting_date"}),
+    "halt and open eligibility state": frozenset(
+        {"is_halted", "can_buy_open", "can_sell_open"}
     ),
     "historical classification and benchmark membership": frozenset(
-        {"industry_code", "index_membership"}
+        {"sector_code", "index_membership"}
     ),
     "point-in-time free-float capitalization": frozenset({"free_float_market_cap"}),
 }

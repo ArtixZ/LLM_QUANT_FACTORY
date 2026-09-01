@@ -31,16 +31,15 @@ class VectorBacktestConfig:
     selection_fraction: float = 0.10
     maximum_positions_per_side: int | None = None
     long_only: bool = False
-    commission_bps_each_side: float = 1.5
-    stamp_duty_bps_sell: float = 5.0
-    transfer_fee_bps_each_side: float = 0.1
+    commission_bps_each_side: float = 0.5
+    sec_fee_bps_sell: float = 0.278
     slippage_bps_each_side: float = 0.0
     cost_stress_multiplier: float = 2.0
     cost_model: CostModel = "side_aware"
     path_index: PathIndex = "entry_session"
     selection_method: SelectionMethod = "percentile_with_ordinal_cap"
-    initial_cash_cny: float = 1_000_000.0
-    trading_days_per_year: int = 245
+    initial_cash_usd: float = 1_000_000.0
+    trading_days_per_year: int = 252
 
     def __post_init__(self) -> None:
         if self.holding_period_days <= 0:
@@ -54,8 +53,7 @@ class VectorBacktestConfig:
         if (
             min(
                 self.commission_bps_each_side,
-                self.stamp_duty_bps_sell,
-                self.transfer_fee_bps_each_side,
+                self.sec_fee_bps_sell,
                 self.slippage_bps_each_side,
             )
             < 0
@@ -63,7 +61,7 @@ class VectorBacktestConfig:
             raise ValueError("execution costs cannot be negative")
         if self.cost_stress_multiplier < 1:
             raise ValueError("cost_stress_multiplier must be at least one")
-        if self.initial_cash_cny <= 0 or self.trading_days_per_year <= 0:
+        if self.initial_cash_usd <= 0 or self.trading_days_per_year <= 0:
             raise ValueError("capital and annualization settings must be positive")
         if self.selection_method == "percentile" and self.maximum_positions_per_side is not None:
             raise ValueError("percentile selection does not support a hard position cap")
@@ -187,8 +185,8 @@ class VectorBacktester:
             path = path.loc[path.index <= pd.Timestamp(end)]
 
         net = path["net"]
-        equity = self.config.initial_cash_cny * (1.0 + net).cumprod()
-        drawdown = equity.div(equity.cummax().clip(lower=self.config.initial_cash_cny)).sub(1.0)
+        equity = self.config.initial_cash_usd * (1.0 + net).cumprod()
+        drawdown = equity.div(equity.cummax().clip(lower=self.config.initial_cash_usd)).sub(1.0)
         metrics = _metrics(path, equity, drawdown, self.config)
         return VectorBacktestResult(
             positions=positions,
@@ -212,20 +210,18 @@ class VectorBacktester:
         if self.config.cost_model == "legacy_half_turnover":
             one_way_bps = (
                 self.config.commission_bps_each_side
-                + self.config.transfer_fee_bps_each_side
-                + self.config.stamp_duty_bps_sell / 2
+                + self.config.sec_fee_bps_sell / 2
                 + self.config.slippage_bps_each_side
             )
             return turnover * one_way_bps * multiplier / 10_000
         both_side_bps = (
             self.config.commission_bps_each_side
-            + self.config.transfer_fee_bps_each_side
             + self.config.slippage_bps_each_side
         )
         return (
             (
                 buy_turnover * both_side_bps
-                + sell_turnover * (both_side_bps + self.config.stamp_duty_bps_sell)
+                + sell_turnover * (both_side_bps + self.config.sec_fee_bps_sell)
             )
             * multiplier
             / 10_000
@@ -280,7 +276,7 @@ def reconcile_vector_paths(
     reference_net = reference.loc[common, "net"]
     candidate_net = candidate.loc[common, "net"]
     metric_difference = {
-        "simple_annual_return": float((candidate_net.mean() - reference_net.mean()) * 245),
+        "simple_annual_return": float((candidate_net.mean() - reference_net.mean()) * 252),
         "sharpe_ratio": float(_annualized_ratio(candidate_net) - _annualized_ratio(reference_net)),
         "total_return": float((1.0 + candidate_net).prod() - (1.0 + reference_net).prod()),
     }
@@ -336,7 +332,7 @@ def _metrics(
             total_growth ** (config.trading_days_per_year / len(net)) - 1.0
         ),
         "total_return": float(total_growth - 1.0),
-        "final_equity_cny": float(equity.iloc[-1]),
+        "final_equity_usd": float(equity.iloc[-1]),
         "sharpe_ratio": _annualized_ratio(net, config.trading_days_per_year),
         "annual_volatility": float(net.std(ddof=1) * math.sqrt(config.trading_days_per_year)),
         "max_drawdown": float(drawdown.min()),
@@ -353,7 +349,7 @@ def _metrics(
     }
 
 
-def _annualized_ratio(values: pd.Series, trading_days: int = 245) -> float:
+def _annualized_ratio(values: pd.Series, trading_days: int = 252) -> float:
     standard_deviation = float(values.std(ddof=1))
     return (
         float(values.mean() / standard_deviation * math.sqrt(trading_days))

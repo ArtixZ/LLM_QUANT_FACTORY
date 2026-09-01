@@ -224,7 +224,7 @@ def _capital_replay(composite_factor: FactorDefinition) -> dict[str, Any]:
     artifacts = write_capital_backtest_artifacts(report, OUTPUT / "capital_replay")
     combination_curve = pd.DataFrame(
         {
-            "nav_cny": report.ledger.nav,
+            "nav_usd": report.ledger.nav,
             "daily_return": report.ledger.daily_return,
         }
     )
@@ -258,7 +258,7 @@ def _capital_replay(composite_factor: FactorDefinition) -> dict[str, Any]:
                 "end": spec.end.isoformat(),
                 "actual_start": report.metrics["start_date"],
                 "actual_end": report.metrics["end_date"],
-                "initial_cash_cny": spec.initial_cash,
+                "initial_cash_usd": spec.initial_cash,
                 "target_gross_exposure": spec.target_gross_exposure,
                 "top_fraction": spec.top_fraction,
                 "max_positions": spec.max_positions,
@@ -285,7 +285,7 @@ def _comparison_table(
         ("Maximum drawdown", "portfolio_max_drawdown"),
         ("Cost-stress net IR", "portfolio_cost_stress_net_ir"),
         ("Annual turnover", "portfolio_annual_turnover"),
-        ("Capacity CNY", "portfolio_capacity_cny"),
+        ("Capacity USD", "portfolio_capacity_usd"),
         ("Annual return dispersion", "portfolio_annual_return_dispersion"),
     ]
     return pd.DataFrame(
@@ -455,8 +455,8 @@ def _plot_capital_comparison(
 ) -> None:
     curves = pd.concat(
         {
-            "Iteration 36": iteration36["nav_cny"],
-            "36+42 Composite": combination["nav_cny"],
+            "Iteration 36": iteration36["nav_usd"],
+            "36+42 Composite": combination["nav_usd"],
         },
         axis=1,
         join="inner",
@@ -483,7 +483,7 @@ def _plot_capital_comparison(
             linewidth=1.3,
         )
     axes[0].axhline(1_000_000, color="#98A2B3", linestyle="--", linewidth=0.8)
-    axes[0].set_ylabel("Portfolio NAV (CNY)")
+    axes[0].set_ylabel("Portfolio NAV (USD)")
     axes[0].legend(frameon=False)
     axes[1].set_ylabel("Drawdown (%)")
     axes[2].set_ylabel("Rolling 245d Sharpe")
@@ -491,7 +491,7 @@ def _plot_capital_comparison(
     for axis in axes:
         axis.grid(axis="y", color="#E4E7EC", linewidth=0.7)
         axis.spines[["top", "right"]].set_visible(False)
-    figure.suptitle("Comparable Capital Replay: CNY 1m, 50% Target Exposure")
+    figure.suptitle("Comparable Capital Replay: USD 1m, 50% Target Exposure")
     figure.tight_layout()
     figure.savefig(OUTPUT / "capital_replay_comparison.png", dpi=190, bbox_inches="tight")
     plt.close(figure)

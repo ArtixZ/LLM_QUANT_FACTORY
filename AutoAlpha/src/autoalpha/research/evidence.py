@@ -61,7 +61,7 @@ def build_evaluation_matrix(
             "maximum_industry_active_weight": evidence.maximum_industry_active_weight,
             "stress_loss": evidence.stress_loss,
             "annual_turnover": evidence.annual_turnover,
-            "capacity_cny": evidence.capacity_cny,
+            "capacity_usd": evidence.capacity_usd,
             "break_even_cost_multiplier": evidence.break_even_cost_multiplier,
             "untradeable_fraction": evidence.untradeable_fraction,
         },

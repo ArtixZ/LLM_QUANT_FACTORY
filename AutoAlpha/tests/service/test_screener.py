@@ -11,7 +11,7 @@ def test_snapshot_load_deduplicates_base_and_factor_fields(tmp_path) -> None:
     pd.DataFrame(
         {
             "trade_date": pd.to_datetime(["2026-07-17", "2026-07-17"]),
-            "ts_code": ["000001.SZ", "600000.SH"],
+            "symbol": ["000001.SZ", "600000.SH"],
             "name": ["平安银行", "浦发银行"],
             "open": [10.0, 11.0],
             "close": [10.2, 10.9],

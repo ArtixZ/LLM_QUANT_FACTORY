@@ -29,9 +29,9 @@ from autoalpha.service.evaluator import (
 def test_dashboard_return_metrics_use_explicit_annualization() -> None:
     returns = pd.Series([0.01, -0.005, 0.002])
 
-    assert _annualized_ir(returns) == pytest.approx(returns.mean() / returns.std(ddof=1) * 245**0.5)
+    assert _annualized_ir(returns) == pytest.approx(returns.mean() / returns.std(ddof=1) * 252**0.5)
     assert _compound_annual_return(returns) == pytest.approx(
-        (1.01 * 0.995 * 1.002) ** (245 / 3) - 1
+        (1.01 * 0.995 * 1.002) ** (252 / 3) - 1
     )
 
 
@@ -115,7 +115,7 @@ def test_exploratory_gates_do_not_treat_zero_control_drawdown_as_incremental() -
         "long_only_worst_year_return": 0.002,
         "long_only_annual_return_dispersion": 0.05,
         "long_only_annual_turnover": 51.0,
-        "long_only_capacity_cny": 160_000_000.0,
+        "long_only_capacity_usd": 160_000_000.0,
     }
 
     failures = _exploratory_gate_failures(metrics, config)
@@ -136,7 +136,7 @@ def test_exploratory_gates_ignore_strong_alpha_when_long_only_is_weak() -> None:
         "long_only_worst_year_return": -0.10,
         "long_only_annual_return_dispersion": 0.05,
         "long_only_annual_turnover": 10.0,
-        "long_only_capacity_cny": 160_000_000.0,
+        "long_only_capacity_usd": 160_000_000.0,
     }
 
     failures = _exploratory_gate_failures(metrics, config)
@@ -157,7 +157,7 @@ def test_portfolio_weights_are_normalized_and_must_align() -> None:
         _normalize_weights(factors, [1.0])
 
 
-def test_portfolio_evaluation_separates_alpha_diagnostic_from_ashare_strategy() -> None:
+def test_portfolio_evaluation_separates_alpha_diagnostic_from_us_strategy() -> None:
     base = ResearchConfig.from_toml(Path("config/research.toml"))
     config = replace(
         base,

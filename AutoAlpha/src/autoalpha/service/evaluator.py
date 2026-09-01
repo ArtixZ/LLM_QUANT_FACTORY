@@ -13,14 +13,14 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from autoalpha.backtest.ashare_vector import (
-    ASHARE_PROXY_RETURN_CONVENTION,
-    AshareVectorBacktester,
-    AshareVectorConfig,
-)
 from autoalpha.backtest.timing import (
     EOD_NEXT_OPEN_RETURN_CONVENTION,
     next_open_return_for_eod_signal,
+)
+from autoalpha.backtest.us_vector import (
+    US_PROXY_RETURN_CONVENTION,
+    USVectorBacktester,
+    USVectorConfig,
 )
 from autoalpha.config import ResearchConfig
 from autoalpha.data.execution_basis import (
@@ -247,7 +247,7 @@ class PriceVolumeEvaluator:
             seed=self.config.random_seed,
         )
         annual = annual_robustness(net_return)
-        simple_annual_return = float(net_return.mean() * 245)
+        simple_annual_return = float(net_return.mean() * 252)
         compound_annual_return = _compound_annual_return(net_return)
         sharpe_ratio = _annualized_ir(net_return)
         folds = _walk_forward_metrics(path, self.config)
@@ -309,8 +309,8 @@ class PriceVolumeEvaluator:
                 else None
             ),
             "bootstrap_samples": 500,
-            "annual_turnover": float(turnover.mean() * 245),
-            "capacity_cny": float(path.attrs["capacity_cny"]),
+            "annual_turnover": float(turnover.mean() * 252),
+            "capacity_usd": float(path.attrs["capacity_usd"]),
             "coverage": coverage,
             "positive_year_ratio": annual.positive_year_ratio,
             "worst_year_incremental_return": annual.worst_year_return,
@@ -436,16 +436,16 @@ class PriceVolumeEvaluator:
             [factor.factor_id for factor in factors], correlations
         )
         proposed_sharpe = _annualized_ir(proposed["net"])
-        proposed_annual_return = float(proposed["net"].mean() * 245)
+        proposed_annual_return = float(proposed["net"].mean() * 252)
         proposed_drawdown = _max_drawdown(proposed["net"])
         proposed_cost_ir = _annualized_ir(proposed["stressed"])
-        proposed_turnover = float(proposed["turnover"].mean() * 245)
+        proposed_turnover = float(proposed["turnover"].mean() * 252)
         if benchmark_factors:
             benchmark_sharpe = _annualized_ir(benchmark["net"])
-            benchmark_annual_return = float(benchmark["net"].mean() * 245)
+            benchmark_annual_return = float(benchmark["net"].mean() * 252)
             benchmark_drawdown = _max_drawdown(benchmark["net"])
             benchmark_cost_ir = _annualized_ir(benchmark["stressed"])
-            benchmark_turnover = float(benchmark["turnover"].mean() * 245)
+            benchmark_turnover = float(benchmark["turnover"].mean() * 252)
         else:
             benchmark_sharpe = 0.0
             benchmark_annual_return = 0.0
@@ -460,7 +460,7 @@ class PriceVolumeEvaluator:
             "portfolio_cost_stress_net_ir": proposed_cost_ir,
             "portfolio_annual_turnover": proposed_turnover,
             "portfolio_coverage": float(proposed.attrs["coverage"]),
-            "portfolio_capacity_cny": float(proposed.attrs["capacity_cny"]),
+            "portfolio_capacity_usd": float(proposed.attrs["capacity_usd"]),
             "portfolio_positive_year_ratio": annual.positive_year_ratio,
             "portfolio_worst_year_return": annual.worst_year_return,
             "portfolio_annual_return_dispersion": annual.annual_return_dispersion,
@@ -502,7 +502,7 @@ class PriceVolumeEvaluator:
             "portfolio_holding_period_days": self.config.portfolio.holding_period_days,
             "portfolio_signal_availability": "END_OF_DAY_AFTER_CLOSE",
             "portfolio_execution_lag_sessions": 1,
-            "portfolio_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+            "portfolio_return_convention": US_PROXY_RETURN_CONVENTION,
             "portfolio_strategy_gate_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
             "portfolio_strategy_scope": "PUBLIC_VALIDATION_EXECUTION_PROXY",
             "portfolio_mode": "long_only",
@@ -511,7 +511,7 @@ class PriceVolumeEvaluator:
             "portfolio_rebalance_schedule": (self.config.strategy_evaluation.rebalance_schedule),
             "portfolio_target_gross_exposure": (self.config.strategy_evaluation.gross_exposure),
             "portfolio_maximum_positions": (self.config.strategy_evaluation.maximum_positions),
-            "portfolio_initial_cash_cny": (self.config.strategy_evaluation.initial_cash_cny),
+            "portfolio_initial_cash_usd": (self.config.strategy_evaluation.initial_cash_usd),
             "portfolio_average_gross_exposure": float(
                 proposed.attrs.get("average_gross_exposure", 0.0)
             ),
@@ -520,8 +520,8 @@ class PriceVolumeEvaluator:
                 proposed.attrs.get("maximum_observed_positions", 0)
             ),
             "portfolio_rebalance_count": int(proposed.attrs.get("rebalance_count", 0)),
-            "portfolio_total_transaction_cost_cny": float(
-                proposed.attrs.get("total_transaction_cost_cny", 0.0)
+            "portfolio_total_transaction_cost_usd": float(
+                proposed.attrs.get("total_transaction_cost_usd", 0.0)
             ),
             "portfolio_production_eligible": False,
             "portfolio_production_blockers": [
@@ -547,13 +547,13 @@ class PriceVolumeEvaluator:
             **active_metrics,
             "alpha_diagnostic_scope": "NON_INVESTABLE_LONG_SHORT",
             "alpha_diagnostic_sharpe_ratio": _annualized_ir(alpha_proposed["net"]),
-            "alpha_diagnostic_simple_annual_return": float(alpha_proposed["net"].mean() * 245),
+            "alpha_diagnostic_simple_annual_return": float(alpha_proposed["net"].mean() * 252),
             "alpha_diagnostic_compound_annual_return": _compound_annual_return(
                 alpha_proposed["net"]
             ),
             "alpha_diagnostic_max_drawdown": _max_drawdown(alpha_proposed["net"]),
             "alpha_diagnostic_cost_stress_net_ir": _annualized_ir(alpha_proposed["stressed"]),
-            "alpha_diagnostic_annual_turnover": float(alpha_proposed["turnover"].mean() * 245),
+            "alpha_diagnostic_annual_turnover": float(alpha_proposed["turnover"].mean() * 252),
             "alpha_diagnostic_positive_year_ratio": alpha_annual.positive_year_ratio,
             "alpha_diagnostic_annual_return_dispersion": (alpha_annual.annual_return_dispersion),
             "alpha_diagnostic_walk_forward_folds": alpha_folds,
@@ -728,8 +728,7 @@ class PriceVolumeEvaluator:
         turnover = weights.diff().abs().sum(axis=1).mul(0.5).reindex(gross_return.index).fillna(0)
         one_way_bps = (
             self.config.costs.commission_bps_each_side
-            + self.config.costs.transfer_fee_bps_each_side
-            + self.config.costs.stamp_duty_bps_sell / 2
+            + self.config.costs.sec_fee_bps_sell / 2
         )
         result = pd.DataFrame(
             {
@@ -739,7 +738,7 @@ class PriceVolumeEvaluator:
             }
         ).dropna()
         selected_amount = self._load_fields()["amount"].where(positions.ne(0)).median(axis=1)
-        result.attrs["capacity_cny"] = float(
+        result.attrs["capacity_usd"] = float(
             selected_amount.median() * self.config.costs.max_adv_participation * 20
         )
         result.attrs["coverage"] = self._dynamic_coverage(composite)
@@ -767,19 +766,16 @@ class PriceVolumeEvaluator:
         ]
         if missing:
             raise RuntimeError(f"A-share strategy proxy fields are missing: {missing}")
-        result = AshareVectorBacktester(
-            AshareVectorConfig(
-                initial_cash_cny=strategy.initial_cash_cny,
+        result = USVectorBacktester(
+            USVectorConfig(
+                initial_cash_usd=strategy.initial_cash_usd,
                 gross_exposure=strategy.gross_exposure,
                 selection_fraction=strategy.selection_fraction,
                 maximum_positions=strategy.maximum_positions,
                 rebalance_schedule=strategy.rebalance_schedule,  # type: ignore[arg-type]
                 commission_bps_each_side=strategy.commission_bps_each_side,
-                stamp_duty_bps_sell=strategy.stamp_duty_bps_sell,
-                transfer_fee_bps_each_side=strategy.transfer_fee_bps_each_side,
-                minimum_commission_cny=strategy.minimum_commission_cny,
+                sec_fee_bps_sell=strategy.sec_fee_bps_sell,
                 slippage_bps_each_side=strategy.slippage_bps_each_side,
-                use_historical_fee_schedule=strategy.use_historical_fee_schedule,
                 cost_stress_multiplier=strategy.cost_stress_multiplier,
             )
         ).run(
@@ -808,13 +804,13 @@ class PriceVolumeEvaluator:
         )
         path.attrs.update(
             {
-                "capacity_cny": capacity,
+                "capacity_usd": capacity,
                 "coverage": self._dynamic_coverage(composite),
                 "average_gross_exposure": result.metrics["average_gross_exposure"],
                 "average_positions": result.metrics["average_positions"],
                 "maximum_observed_positions": int(path["position_count"].max()),
                 "rebalance_count": result.metrics["rebalance_count"],
-                "total_transaction_cost_cny": result.metrics["total_transaction_cost_cny"],
+                "total_transaction_cost_usd": result.metrics["total_transaction_cost_usd"],
                 "bankrupt": result.metrics["bankrupt"],
                 "bankruptcy_date": result.metrics["bankruptcy_date"],
             }
@@ -836,8 +832,7 @@ class PriceVolumeEvaluator:
         turnover = weights.diff().abs().sum(axis=1).mul(0.5).reindex(gross_return.index).fillna(0)
         one_way_bps = (
             self.config.costs.commission_bps_each_side
-            + self.config.costs.transfer_fee_bps_each_side
-            + self.config.costs.stamp_duty_bps_sell / 2
+            + self.config.costs.sec_fee_bps_sell / 2
         )
         result = pd.DataFrame(
             {
@@ -847,7 +842,7 @@ class PriceVolumeEvaluator:
             }
         ).dropna()
         selected_amount = self._load_fields()["amount"].where(positions.ne(0)).median(axis=1)
-        result.attrs["capacity_cny"] = float(
+        result.attrs["capacity_usd"] = float(
             selected_amount.median() * self.config.costs.max_adv_participation * 20
         )
         result.attrs["coverage"] = self._dynamic_coverage(signal)
@@ -913,7 +908,7 @@ class PriceVolumeEvaluator:
             "end": selected.index.max().date().isoformat(),
             "observations": len(selected),
             "sharpe": _annualized_ir(selected["net"]),
-            "simple_annual_return": float(selected["net"].mean() * 245),
+            "simple_annual_return": float(selected["net"].mean() * 252),
             "max_drawdown": _max_drawdown(selected["net"]),
         }
 
@@ -997,7 +992,7 @@ class PriceVolumeEvaluator:
             dict.fromkeys(
                 [
                     "trade_date",
-                    "ts_code",
+                    "symbol",
                     *factor_columns,
                     "is_valid_ohlc",
                     "is_tradable_observation",
@@ -1024,7 +1019,7 @@ class PriceVolumeEvaluator:
         signal_columns = factor_columns
         data.loc[~valid, signal_columns] = np.nan
         fields = {
-            name: data.pivot(index="trade_date", columns="ts_code", values=name).sort_index()
+            name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
             for name in signal_columns
         }
         if initial_load and self.execution_basis.capital_ledger_proxy_ready:
@@ -1034,12 +1029,8 @@ class PriceVolumeEvaluator:
             if {"can_buy_open_proxy", "can_sell_open_proxy"}.issubset(data.columns):
                 data["_strategy_can_buy"] = valid & data["can_buy_open_proxy"].fillna(False)
                 data["_strategy_can_sell"] = valid & data["can_sell_open_proxy"].fillna(False)
-            elif "raw_pre_close" in data:
-                open_move = raw_open.div(data["raw_pre_close"]).sub(1.0)
-                threshold = self.config.strategy_evaluation.opening_limit_threshold
-                data["_strategy_can_buy"] = valid & open_move.lt(threshold)
-                data["_strategy_can_sell"] = valid & open_move.gt(-threshold)
             else:
+                # No daily price limits in US equities: eligibility is bar validity.
                 data["_strategy_can_buy"] = valid
                 data["_strategy_can_sell"] = valid
             for source, target in (
@@ -1048,7 +1039,7 @@ class PriceVolumeEvaluator:
                 ("_strategy_can_sell", "can_sell_open_proxy"),
             ):
                 fields[target] = data.pivot(
-                    index="trade_date", columns="ts_code", values=source
+                    index="trade_date", columns="symbol", values=source
                 ).sort_index()
         loaded.update(fields)
         self._fields = loaded
@@ -1082,13 +1073,13 @@ def _standalone_long_only_metrics(
     dsr = deflated_sharpe_ratio(path["net"].to_numpy(), trials=trials)
     return {
         "long_only_sharpe_ratio": _annualized_ir(path["net"]),
-        "long_only_simple_annual_return": float(path["net"].mean() * 245),
+        "long_only_simple_annual_return": float(path["net"].mean() * 252),
         "long_only_compound_annual_return": _compound_annual_return(path["net"]),
         "long_only_max_drawdown": _max_drawdown(path["net"]),
         "long_only_cost_stress_net_ir": _annualized_ir(path["stressed"]),
-        "long_only_annual_turnover": float(path["turnover"].mean() * 245),
+        "long_only_annual_turnover": float(path["turnover"].mean() * 252),
         "long_only_coverage": float(path.attrs["coverage"]),
-        "long_only_capacity_cny": float(path.attrs["capacity_cny"]),
+        "long_only_capacity_usd": float(path.attrs["capacity_usd"]),
         "long_only_positive_year_ratio": annual.positive_year_ratio,
         "long_only_worst_year_return": annual.worst_year_return,
         "long_only_annual_return_dispersion": annual.annual_return_dispersion,
@@ -1114,7 +1105,7 @@ def _standalone_long_only_metrics(
         "long_only_bankruptcy_date": str(path.attrs.get("bankruptcy_date", "")),
         "long_only_mode": "long_only",
         "long_only_strategy_gate_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
-        "long_only_return_convention": ASHARE_PROXY_RETURN_CONVENTION,
+        "long_only_return_convention": US_PROXY_RETURN_CONVENTION,
     }
 
 
@@ -1129,16 +1120,16 @@ def _active_return_metrics(
     active = path["net"] - aligned
     active_frame = pd.DataFrame({"net": active, "turnover": path["turnover"]})
     folds = _walk_forward_metrics(active_frame, config)
-    tracking_error = float(active.std(ddof=1) * math.sqrt(245))
+    tracking_error = float(active.std(ddof=1) * math.sqrt(252))
     benchmark_variance = float(aligned.var(ddof=1))
     beta = (
         float(path["net"].cov(aligned) / benchmark_variance) if benchmark_variance > 1e-15 else 0.0
     )
     return {
         f"{prefix}_benchmark_mode": "ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PROXY",
-        f"{prefix}_benchmark_simple_annual_return": float(aligned.mean() * 245),
+        f"{prefix}_benchmark_simple_annual_return": float(aligned.mean() * 252),
         f"{prefix}_active_information_ratio": _annualized_ir(active),
-        f"{prefix}_active_simple_annual_return": float(active.mean() * 245),
+        f"{prefix}_active_simple_annual_return": float(active.mean() * 252),
         f"{prefix}_active_tracking_error": tracking_error,
         f"{prefix}_market_beta": beta,
         f"{prefix}_active_walk_forward_positive_fraction": float(
@@ -1186,7 +1177,7 @@ def _annualized_ir(values: pd.Series) -> float:
         if not math.isfinite(mean) or abs(mean) <= 1e-15:
             return 0.0
         return math.copysign(100.0, mean)
-    return float(mean / standard_deviation * math.sqrt(245))
+    return float(mean / standard_deviation * math.sqrt(252))
 
 
 def _normalize_weights(
@@ -1211,7 +1202,7 @@ def _compound_annual_return(values: pd.Series) -> float:
     wealth = float((1.0 + clean).prod())
     if wealth <= 0 or clean.empty:
         raise ValueError("Cannot annualize a non-positive wealth path")
-    return float(wealth ** (245 / len(clean)) - 1.0)
+    return float(wealth ** (252 / len(clean)) - 1.0)
 
 
 def _max_drawdown(values: pd.Series) -> float:
@@ -1255,10 +1246,10 @@ def _walk_forward_metrics(path: pd.DataFrame, config: ResearchConfig) -> list[di
                 "validation_end": selected.index.max().date().isoformat(),
                 "observations": len(selected),
                 "sharpe": _annualized_ir(net),
-                "annual_return": float(net.mean() * 245),
+                "annual_return": float(net.mean() * 252),
                 "compound_return": float((1 + net).prod() - 1),
                 "max_drawdown": _max_drawdown(net),
-                "annual_turnover": float(selected["turnover"].mean() * 245),
+                "annual_turnover": float(selected["turnover"].mean() * 252),
             }
         )
     if len(folds) < protocol.minimum_folds:
@@ -1299,7 +1290,7 @@ def _exploratory_gate_failures(metrics: dict[str, Any], config: ResearchConfig) 
         "annual_dispersion": metrics["long_only_annual_return_dispersion"]
         <= policy.maximum_annual_return_dispersion,
         "turnover": metrics["long_only_annual_turnover"] <= policy.maximum_annual_turnover,
-        "capacity": metrics["long_only_capacity_cny"] >= policy.minimum_capacity_cny,
+        "capacity": metrics["long_only_capacity_usd"] >= policy.minimum_capacity_usd,
         "walk_forward_fold_count": metrics.get(
             "long_only_walk_forward_fold_count", config.walk_forward.minimum_folds
         )
