@@ -108,10 +108,11 @@ def constant(value: float, *, unit: str = "dimensionless") -> Expression:
 
 
 def operation(operator: str, *arguments: Expression, **parameters: Any) -> Expression:
+    normalized = _normalize_parameters(operator, parameters)
     return Expression(
         operator=operator,
         arguments=tuple(arguments),
-        parameters=tuple(sorted(parameters.items())),
+        parameters=tuple(sorted(normalized.items())),
     ).canonical()
 
 

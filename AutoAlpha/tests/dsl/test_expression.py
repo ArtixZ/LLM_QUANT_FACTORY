@@ -53,3 +53,36 @@ def test_conflicting_parameter_aliases_are_rejected() -> None:
                 "parameters": {"name": "close", "field": "vol"},
             }
         )
+
+
+def test_operation_helper_normalizes_period_operator_aliases() -> None:
+    expression = operation("returns", field("close"), window=231)
+
+    assert expression.parameter("periods") == 231
+    assert expression.parameter("window") is None
+    assert expression == Expression.from_dict(
+        {
+            "operator": "returns",
+            "arguments": [{"operator": "field", "parameters": {"name": "close"}}],
+            "parameters": {"periods": 231},
+        }
+    )
+
+
+def test_operation_helper_normalizes_rolling_operator_aliases() -> None:
+    expression = operation("rolling_mean", field("close"), periods=20)
+
+    assert expression.parameter("window") == 20
+    assert expression.parameter("periods") is None
+    assert expression == Expression.from_dict(
+        {
+            "operator": "rolling_mean",
+            "arguments": [{"operator": "field", "parameters": {"name": "close"}}],
+            "parameters": {"window": 20},
+        }
+    )
+
+
+def test_operation_helper_rejects_conflicting_aliases() -> None:
+    with pytest.raises(ValueError, match="Conflicting"):
+        operation("rolling_mean", field("close"), window=5, periods=20)
