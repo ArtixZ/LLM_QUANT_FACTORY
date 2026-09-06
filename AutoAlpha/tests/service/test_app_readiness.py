@@ -291,7 +291,7 @@ def test_data_sync_start_queues_market_data_job_by_default(
         "alive",
         property(lambda self: False),
     )
-    monkeypatch.setattr(service_app.data_sync_worker, "token_configured", lambda: True)
+    monkeypatch.setattr(service_app.data_sync_worker, "gateway_ready", lambda: True)
     monkeypatch.setattr(
         service_app.data_sync_worker,
         "status",
