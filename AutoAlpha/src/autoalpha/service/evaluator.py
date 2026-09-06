@@ -503,7 +503,7 @@ class PriceVolumeEvaluator:
             "portfolio_signal_availability": "END_OF_DAY_AFTER_CLOSE",
             "portfolio_execution_lag_sessions": 1,
             "portfolio_return_convention": US_PROXY_RETURN_CONVENTION,
-            "portfolio_strategy_gate_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+            "portfolio_strategy_gate_basis": "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
             "portfolio_strategy_scope": "PUBLIC_VALIDATION_EXECUTION_PROXY",
             "portfolio_mode": "long_only",
             "portfolio_execution_protocol": self.config.strategy_evaluation.engine_protocol,
@@ -525,9 +525,9 @@ class PriceVolumeEvaluator:
             ),
             "portfolio_production_eligible": False,
             "portfolio_production_blockers": [
-                "non-PIT historical ST, listing, delisting and suspension state",
-                "opening eligibility uses a price-limit proxy",
-                "vector weights approximate board lots and cash",
+                "current-membership universe carries survivorship bias",
+                "listing, delisting, and halt state are not point-in-time",
+                "vector weights approximate whole shares and cash",
             ],
             "portfolio_walk_forward_folds": folds,
             "portfolio_walk_forward_fold_count": len(folds),
@@ -542,6 +542,7 @@ class PriceVolumeEvaluator:
                 min(fold["max_drawdown"] for fold in folds)
             ),
             "portfolio_net_return_hac_p_value": inference.p_value,
+            "portfolio_incremental_net_return_hac_p_value": increment.hac.p_value,
             "portfolio_deflated_sharpe_probability": dsr.probability,
             "portfolio_multiple_testing_trials": self.trial_count,
             **active_metrics,
@@ -1104,7 +1105,7 @@ def _standalone_long_only_metrics(
         "long_only_bankrupt": bool(path.attrs.get("bankrupt", False)),
         "long_only_bankruptcy_date": str(path.attrs.get("bankruptcy_date", "")),
         "long_only_mode": "long_only",
-        "long_only_strategy_gate_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+        "long_only_strategy_gate_basis": "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
         "long_only_return_convention": US_PROXY_RETURN_CONVENTION,
     }
 

@@ -6,7 +6,7 @@
 
 ## 1. 一分钟认识项目
 
-AutoAlpha 不是单一的“LLM 生成公式”脚本，而是一套由三个服务共享证据和运行状态的 A 股截面研究平台：
+AutoAlpha 不是单一的“LLM 生成公式”脚本，而是一套由三个服务共享证据和运行状态的 US 股票截面研究平台：
 
 | 组件 | 默认端口 | 责任 | 决策方式 |
 |---|---:|---|---|
@@ -60,11 +60,11 @@ flowchart LR
 3. **隐藏区对研究者不可见。** LLM 只能得到有限分类反馈，不能获得精确隐藏测试指标，也不能根据隐藏结果继续调参。
 4. **硬门禁不可平均掉。** 数据污染、未来函数、时点错误、执行不可行、盲测失败和证据缺失不能被高夏普抵消。
 5. **公开 walk-forward 不是永久样本外。** 一旦被反复用于模型反馈，它就是自适应研究证据，不得描述为 untouched OOS。
-6. **非 PIT 数据只能用于研究代理。** 缺失历史 ST、上市退市、停复牌、涨跌停、开盘可交易状态等字段时，生产晋级必须 fail closed。
+6. **非 PIT 数据只能用于研究代理。** 缺失历史上市退市、停牌/LULD、分类、基准成分、自由流通市值和开盘可交易状态时，生产晋级必须 fail closed。
 7. **LLM 不拥有最终裁决权。** LLM 可以提出假设、表达式、证伪方案和组合建议，但不得修改门禁、审批生产、推断缺失市场状态或下实盘订单。
 8. **手动实验不污染自动研究。** 手动回测、选股和截图不能写回隐藏证据或自动研究记忆，除非走显式、可审计的导入协议。
 9. **证据必须可复现。** 数据指纹、协议版本、代码版本、随机种子、因子 ID、权重和成本口径必须随实验保留。
-10. **当前没有实盘下单通道。** 策略库、影子交易和模拟交易不是券商生产执行证明。
+10. **当前没有无人值守实盘下单通道。** 定时脚本只做预览；前台提交仅允许显式绑定的 IBKR 模拟账户，并要求健康、预览、持仓归属、未结订单和幂等门禁全部通过。
 
 权威定义位于：
 
@@ -125,19 +125,19 @@ AutoAlpha/runtime-full-llm/pids/
 
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-export AUTOALPHA_DATA_PATH="$REPO_ROOT/data"
+export AUTOALPHA_DATA_PATH="$HOME/MarketData/US"
 export AUTOALPHA_RUNTIME="$REPO_ROOT/AutoAlpha/runtime-full-llm"
 export AUTOALPHA_CONFIG="$REPO_ROOT/AutoAlpha/config/research.toml"
 ```
 
-OpenAI-compatible 和 Tushare 凭证优先通过系统设置页写入 OS Keychain，也可以通过环境变量注入。任何非 loopback 部署都必须设置 `AUTOALPHA_SERVICE_TOKEN`，并在反向代理层配置 TLS 与访问控制。完整变量见
+OpenAI-compatible 凭证优先通过系统设置页写入 OS Keychain；IBKR 认证由本机 TWS / Gateway 管理。任何非 loopback 部署都必须设置 `AUTOALPHA_SERVICE_TOKEN`，并在反向代理层配置 TLS 与访问控制。完整变量见
 [`AutoAlpha/.env.example`](AutoAlpha/.env.example)。
 
 ## 4. 仓库地图
 
 ```text
 .
-├── src/multifactor_ashare/        数据审计与标准面板 CLI
+├── src/multifactor_us/            IBKR 数据审计与标准面板 CLI
 ├── tests/                         数据工程测试
 ├── data/                          本地数据工作区，永不提交
 ├── AutoAlpha/
@@ -248,28 +248,26 @@ RESEARCH -> FROZEN -> HIDDEN_HOLDOUT -> SHADOW -> PAPER -> PRODUCTION_CANDIDATE
 | 研究循环、记忆、连续迭代 | `service/worker.py`、`research_manager.py`、`full_llm.py` | `test_worker_memory.py`、`test_research_manager.py`、`test_full_llm.py` |
 | 评价指标与统一口径 | `service/evaluator.py`、`canonical_evaluation.py`、`metric_convention.py` | `test_evaluator_metrics.py`、`test_canonical_evaluation.py`、`test_metric_convention.py` |
 | 因子 DSL 与未来函数防护 | `dsl/`、`data/research_fields.py` | `tests/dsl/`、`tests/data/` |
-| 向量与事件回测对齐 | `backtest/ashare_vector.py`、`backtest/ledger.py`、`backtest/timing.py` | `tests/backtest/` |
+| 向量与事件回测对齐 | `backtest/us_vector.py`、`backtest/ledger.py`、`backtest/timing.py` | `tests/backtest/` |
 | 因子库、知识和同质化 | `factor_library.py`、`factor_behavior.py`、`factor_homogeneity.py` | 对应 `test_factor_*.py` |
 | 隐藏盲测与研究协议 | `blind_evaluator.py`、`research_protocol.py`、`governance/holdout.py` | `test_blind_evaluator.py`、`test_research_protocol.py`、`test_holdout.py` |
 | AutoCombine | `autocombine*.py` | `test_autocombine.py` |
 | QuantCombine | `quantcombine*.py` | `test_quantcombine.py` |
 | 策略总线与正式策略库 | `strategy_bus.py` | `test_strategy_bus.py` |
 | 作业中心和并发 | `system_jobs.py`、`system_job_sql.py`、`external_jobs.py` | `test_system_jobs.py`、`test_system_job_sql.py`、`test_external_jobs.py` |
-| 数据中心与增量同步 | `data_center.py`、`data_sync.py`、`data/tushare_*.py` | `test_current_panel.py`、`test_tushare_products.py`、`test_workspace.py` |
+| 数据中心与增量同步 | `data_center.py`、`data_sync.py`、`data/ibkr_sync.py`、`ibkr/` | `test_current_panel.py`、`tests/ibkr/`、`test_workspace.py` |
 | 选股与手动回测 | `screener.py`、`manual_backtest.py` | `test_screener.py`、`test_manual_backtest.py` |
 | 模拟交易 | `paper_trading.py` | `test_paper_trading.py` |
 | 设置、凭证与鉴权 | `settings_center.py`、`credentials.py`、`app.py` | `test_settings_center.py`、`test_credentials.py`、`test_app_readiness.py` |
 
 ## 8. 数据契约
 
-根目录的 `mf-data` 是数据工程入口：
+根目录的 `mf-us` 是数据工程入口：
 
 ```bash
-uv run mf-data audit
-uv run mf-data build
-uv run mf-data all
-uv run mf-data hybrid
-uv run mf-data cross-sectional --source /path/to/licensed/source
+uv run mf-us audit
+uv run mf-us catalog
+uv run mf-us panel
 ```
 
 各命令的责任：
@@ -277,10 +275,8 @@ uv run mf-data cross-sectional --source /path/to/licensed/source
 | 命令 | 用途 |
 |---|---|
 | `audit` | 扫描源数据、重建 catalog 和质量报告 |
-| `build` | 生成标准研究面板 |
-| `all` | 连续执行审计和标准面板构建 |
-| `hybrid` | 生成前复权研究价 + 未复权执行价的 `NON_PIT_PROXY` 面板 |
-| `cross-sectional` | 从日频原始切片和特征存储构建事件时点调整面板 |
+| `catalog` | 记录每个 IBKR 符号切片的范围、行数和来源文件 |
+| `panel` | 从 `ADJUSTED_LAST` + `TRADES` 切片生成标准研究面板 |
 
 开发数据功能时遵守：
 
@@ -402,7 +398,7 @@ PostgreSQL 尚未完全切换。当前仅已有迁移工具和部分控制面适
 
 1. 先区分向量研究代理与现金账本事件引擎；
 2. 更新 `backtest/timing.py`、成本/成交模块和 preset；
-3. 对齐信号日、成交日、价格字段、T+1、整手、费用和不可交易处理；
+3. 对齐信号日、成交日、研究/执行价格、整数股、SEC/FINRA 费用和不可交易处理；
 4. 给同一固定输入增加双引擎对齐测试；
 5. 更新页面披露，不得隐藏调仓日历和成交假设。
 
@@ -508,7 +504,7 @@ curl -fsS http://127.0.0.1:8788/api/platform/doctor
 - 默认工作树可能包含其他人的未提交改动，先读 `git status`，不得回滚无关变更；
 - 不使用 `git reset --hard`、批量 checkout 或删除运行目录来“修复”状态；
 - 只提交与当前任务有关的文件；
-- API Key、Tushare Token、数据库 URL、Keychain 内容和会话令牌不得进入源码、样例、日志或截图；
+- API Key、IBKR 账户信息、数据库 URL、Keychain 内容和会话令牌不得进入源码、样例、日志或截图；
 - 公开样例只能包含脱敏研究证据，不包含市场数据、隐藏测试指标或凭证；
 - 修改 README、公开样例、构建清单或发布文件后运行 `scripts/check_public_release.py`；
 - 大型数据、缓存、运行库、日志、模型输出和回测工件保持在 Git 忽略范围内。

@@ -19,7 +19,15 @@ import pandas as pd
 import pyarrow.dataset as ds
 
 from autoalpha.backtest.costs import USEquityExecutionCosts
-from autoalpha.ibkr.client import AccountSummary, IBKRGateway, Position
+from autoalpha.data.universe_catalog import resolve_universe
+from autoalpha.ibkr.client import (
+    AccountSummary,
+    IBKRGateway,
+    OpenOrder,
+    OrderTransmissionBlocked,
+    Position,
+)
+from autoalpha.ibkr.contracts import panel_symbol
 from autoalpha.ibkr.orders import PlannedOrder, plan_orders, preview_plan
 from autoalpha.ibkr.settings import GatewaySettings
 
@@ -73,7 +81,7 @@ class DataHealth:
 
     @property
     def is_healthy(self) -> bool:
-        return self.audit_passed and not self.sync_failures
+        return self.audit_passed and not self.sync_failures and not self.stale_symbols
 
 
 @dataclass(frozen=True)
@@ -173,7 +181,12 @@ class DailyReport:
         return "\n".join(lines)
 
 
-def load_panel(config: DailyConfig, *, exclude: set[str] | None = None) -> pd.DataFrame:
+def load_panel(
+    config: DailyConfig,
+    *,
+    exclude: set[str] | None = None,
+    include: set[str] | None = None,
+) -> pd.DataFrame:
     """Read the research panel, dropping symbols the audit flagged as stale."""
     files = sorted(config.panel_path.rglob("*.parquet"))
     if not files:
@@ -181,6 +194,10 @@ def load_panel(config: DailyConfig, *, exclude: set[str] | None = None) -> pd.Da
     frame = ds.dataset(files, format="parquet").to_table().to_pandas()
     if exclude:
         frame = frame[~frame["symbol"].isin(exclude)]
+    if include is not None:
+        frame = frame[frame["symbol"].isin(include)]
+    if frame.empty:
+        raise ValueError("No panel rows remain inside the configured strategy universe")
     frame["trade_date"] = pd.to_datetime(frame["trade_date"])
     return frame
 
@@ -203,8 +220,9 @@ def build_target_book(
 ) -> tuple[dict[str, int], list[dict[str, Any]]]:
     """Equal-weight the top-scoring names into whole-share targets."""
     scores = momentum_scores(panel, config)
-    close = panel.pivot(index="trade_date", columns="symbol", values="close").sort_index()
-    last_price = close.iloc[-1]
+    price_field = "raw_close" if "raw_close" in panel.columns else "close"
+    prices = panel.pivot(index="trade_date", columns="symbol", values=price_field).sort_index()
+    last_price = prices.iloc[-1]
     picks = scores.nlargest(config.position_count)
     budget = net_liquidation * config.gross_exposure / max(len(picks), 1)
 
@@ -236,6 +254,9 @@ def run_daily(
     health: DataHealth,
     submit: bool = False,
     confirm_submit: bool = False,
+    managed_account: str | None = None,
+    submission_key: str | None = None,
+    as_of_date: date | None = None,
 ) -> DailyReport:
     """Produce the daily report, previewing (never transmitting) the order plan.
 
@@ -249,13 +270,38 @@ def run_daily(
         session.connect()
     notes: list[str] = []
     try:
+        run_date = as_of_date or date.today()
         account: AccountSummary = session.account_summary()
         positions: list[Position] = session.positions()
-        panel = load_panel(config, exclude=set(health.stale_symbols))
+        _, configured_symbols = resolve_universe(config.universe)
+        managed_symbols = {panel_symbol(symbol) for symbol in configured_symbols}
+        panel = load_panel(
+            config,
+            exclude=set(health.stale_symbols),
+            include=managed_symbols,
+        )
         targets, picks = build_target_book(panel, config, account.net_liquidation)
 
-        current = {p.symbol: p.quantity for p in positions}
-        close = panel.pivot(index="trade_date", columns="symbol", values="close").sort_index()
+        normalized_positions = {_position_symbol(position): position for position in positions}
+        unmanaged_positions = [
+            position
+            for symbol, position in normalized_positions.items()
+            if symbol not in managed_symbols
+        ]
+        if unmanaged_positions:
+            notes.append(
+                "unmanaged account positions were excluded from the strategy plan: "
+                + ", ".join(sorted(position.symbol for position in unmanaged_positions))
+            )
+        current = {
+            symbol: position.quantity
+            for symbol, position in normalized_positions.items()
+            if symbol in managed_symbols
+        }
+        price_field = "raw_close" if "raw_close" in panel.columns else "close"
+        close = panel.pivot(
+            index="trade_date", columns="symbol", values=price_field
+        ).sort_index()
         plan = plan_orders(
             targets,
             current,
@@ -282,11 +328,32 @@ def run_daily(
             else:
                 from autoalpha.ibkr.orders import submit_plan
 
-                submit_plan(session, plan, contracts, confirm=True)
+                open_orders = session.open_orders()
+                blockers = _submission_blockers(
+                    health=health,
+                    account=account,
+                    managed_account=managed_account,
+                    submission_key=submission_key,
+                    run_date=run_date,
+                    previews=previews,
+                    unmanaged_positions=unmanaged_positions,
+                    open_orders=open_orders,
+                )
+                if blockers:
+                    raise OrderTransmissionBlocked(
+                        "Order submission blocked: " + "; ".join(blockers)
+                    )
+                submit_plan(
+                    session,
+                    plan,
+                    contracts,
+                    confirm=True,
+                    order_reference_prefix=str(submission_key),
+                )
                 submitted = True
 
         return DailyReport(
-            as_of=date.today().isoformat(),
+            as_of=run_date.isoformat(),
             account=account.account,
             is_paper=account.is_paper,
             net_liquidation=account.net_liquidation,
@@ -321,3 +388,45 @@ def _position_row(position: Position) -> dict[str, Any]:
 
 def _plan_row(order: PlannedOrder) -> dict[str, Any]:
     return order.to_dict()
+
+
+def _position_symbol(position: Position) -> str:
+    try:
+        return panel_symbol(position.symbol)
+    except ValueError:
+        return position.symbol.strip().upper()
+
+
+def _submission_blockers(
+    *,
+    health: DataHealth,
+    account: AccountSummary,
+    managed_account: str | None,
+    submission_key: str | None,
+    run_date: date,
+    previews: list[dict[str, Any]],
+    unmanaged_positions: list[Position],
+    open_orders: list[OpenOrder],
+) -> list[str]:
+    blockers: list[str] = []
+    if not health.is_healthy:
+        blockers.append("data audit, sync, and symbol freshness must all pass")
+    if health.panel_last_date != run_date.isoformat():
+        blockers.append(
+            f"panel is through {health.panel_last_date}, expected {run_date.isoformat()}"
+        )
+    if not account.is_paper:
+        blockers.append("automated strategy submission is restricted to paper accounts")
+    if not managed_account or managed_account != account.account:
+        blockers.append("managed account must explicitly match the connected account")
+    if not submission_key:
+        blockers.append("stable submission key is required")
+    if unmanaged_positions:
+        blockers.append("account contains positions outside the configured strategy universe")
+    if open_orders:
+        blockers.append("account has existing open orders")
+    if any(preview.get("error") for preview in previews):
+        blockers.append("one or more broker previews failed")
+    if any(str(preview.get("warning") or "").strip() for preview in previews):
+        blockers.append("one or more broker previews returned warnings")
+    return blockers

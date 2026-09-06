@@ -91,11 +91,11 @@ const FLOW_STAGES = [
   },
   {
     owner: "CAPITAL SIMULATION",
-    title: "A 股资金账本仿真",
+    title: "US 股票资金账本仿真",
     icon: "receipt-text",
     description: "在未复权价格、现金、整数手数、费用和市场状态约束下重放策略交易。",
     input: "StrategySpec、未复权行情、可交易状态、资金规模和执行参数。",
-    gate: "T+1、涨跌停、停牌、最低佣金、ADV 参与率、现金和残余持仓。",
+    gate: "停牌与开盘资格、最低佣金、SEC/FINRA 费用、ADV 参与率、现金和残余持仓。",
     output: "损益曲线、持仓、订单、成交、交割单、TCA 与容量证据。",
   },
   {

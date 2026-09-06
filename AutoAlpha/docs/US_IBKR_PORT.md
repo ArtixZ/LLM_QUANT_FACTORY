@@ -69,7 +69,7 @@ the broker reply contributes only margin.
 | Execution prices | unadjusted | `TRADES` (split-adjusted; IBKR serves nothing rawer) |
 | Currency | CNY | USD |
 | Commission | 1.5–2.5 bps/side, ¥5 floor | $0.0035/share, $0.35 floor, 1% notional cap |
-| Sell-side levies | stamp duty 5 bps, transfer fee 0.1 bps | SEC §31 $27.80/M, FINRA TAF $0.000166/share capped $8.30 |
+| Sell-side levies | stamp duty 5 bps, transfer fee 0.1 bps | SEC §31 $20.60/M, FINRA TAF $0.000195/share capped $9.79 (2026 configured rates) |
 | Lot size | 100 | 1 |
 | Price limits | ±9.5% open gate | none; eligibility is bar validity and volume |
 | Settlement lock | T+1 sell lock | none |

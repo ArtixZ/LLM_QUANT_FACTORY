@@ -20,6 +20,8 @@ def _panel_frame(**overrides: Any) -> pd.DataFrame:
         "symbol": ["AAPL", "MSFT"],
         "open": [10.0, 20.0],
         "close": [11.0, 21.0],
+        "raw_open": [100.0, 200.0],
+        "raw_close": [110.0, 210.0],
         "vol": [1000.0, 2000.0],
         "is_valid_ohlc": [True, True],
         "is_tradable_observation": [True, True],
@@ -47,6 +49,13 @@ def test_market_frame_blocks_both_sides_on_invalid_bars() -> None:
     assert not msft["can_buy_open"]
     assert not msft["can_sell_open"]
     assert np.isnan(msft["open"]) and np.isnan(msft["close"])
+
+
+def test_market_frame_uses_execution_prices_not_adjusted_research_prices() -> None:
+    market = _market_frame(_panel_frame(), _spec())
+
+    assert list(market["open"]) == [100.0, 200.0]
+    assert list(market["close"]) == [110.0, 210.0]
 
 
 def test_market_frame_fails_loudly_when_a_tradability_flag_is_missing() -> None:

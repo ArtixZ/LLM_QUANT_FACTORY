@@ -106,15 +106,14 @@ class HoldoutJudge:
 
 
 def _public_metrics(result: dict[str, Any]) -> dict[str, Any]:
-    allowed = {
-        "decision",
-        "rank_ic_mean",
-        "rank_ic_hac_t",
-        "net_information_ratio",
-        "maximum_drawdown",
-        "capacity_usd",
+    payload = json.dumps(result, sort_keys=True, separators=(",", ":"), default=str).encode()
+    public = {
+        key: result[key]
+        for key in ("decision", "verdict", "passed")
+        if key in result
     }
-    return {key: result[key] for key in sorted(allowed & result.keys())}
+    public["evidence_hash"] = hashlib.sha256(payload).hexdigest()
+    return public
 
 
 def _encode(value: bytes) -> str:

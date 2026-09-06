@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from autoalpha.backtest.us_vector import USVectorBacktester, USVectorConfig
 from autoalpha.dsl.compiler import FactorCompiler
@@ -25,7 +26,7 @@ class RealisticAshareBatchConfig(MassiveBatchConfig):
     gross_exposure: float = 0.90
     commission_bps_each_side: float = 0.5
     slippage_bps_each_side: float = 5.0
-    protocol: str = "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
+    protocol: str = "US_EQUITY_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
     initial_cash_usd: float = 1_000_000.0
     minimum_commission_usd: float = 5.0
     rebalance_schedule: str = "WEEKLY_FIRST_SESSION"
@@ -36,7 +37,7 @@ class RealisticAshareBatchConfig(MassiveBatchConfig):
         base = MassiveBatchConfig.from_dict(value)
         return cls(
             **base.__dict__,
-            protocol=str(value.get("protocol", "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1")),
+            protocol=str(value.get("protocol", "US_EQUITY_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1")),
             initial_cash_usd=float(value.get("initial_cash_usd", 1_000_000.0)),
             minimum_commission_usd=float(value.get("minimum_commission_usd", 5.0)),
             rebalance_schedule=str(value.get("rebalance_schedule", "WEEKLY_FIRST_SESSION")),
@@ -45,7 +46,7 @@ class RealisticAshareBatchConfig(MassiveBatchConfig):
 
 
 class RealisticAshareBatchEngine(MassiveVectorBatchEngine):
-    """Massive factor evaluator using the long-only weekly A-share vector proxy."""
+    """Massive factor evaluator using the long-only weekly US-equity vector proxy."""
 
     config: RealisticAshareBatchConfig
 
@@ -104,12 +105,12 @@ class RealisticAshareBatchEngine(MassiveVectorBatchEngine):
                 "execution_data_mode": self.config.execution_data_mode,
                 "production_eligible": False,
                 "production_blockers": [
-                    "non-PIT historical ST, listing, delisting and suspension state",
-                    "opening eligibility uses a main-board price-limit proxy",
-                    "vector weights approximate board lots and cash",
+                    "current-membership universe carries survivorship bias",
+                    "listing, delisting, and halt state are not point-in-time",
+                    "vector weights approximate whole shares and cash",
                     "short selling is disabled",
                 ],
-                "result_scope": "HUMAN_VISIBLE_ASHARE_EXECUTION_PROXY_DIAGNOSTIC",
+                "result_scope": "HUMAN_VISIBLE_US_EQUITY_EXECUTION_PROXY_DIAGNOSTIC",
             }
         )
         return metrics
@@ -195,27 +196,29 @@ class RealisticAshareBatchEngine(MassiveVectorBatchEngine):
         load_start = pd.Timestamp(self.config.start_date) - pd.Timedelta(days=800)
         load_end = pd.Timestamp(self.config.end_date) + pd.Timedelta(days=10)
         factor_columns = list(self.workspace.factor_fields)
-        columns = list(
-            dict.fromkeys(
-                [
-                    "trade_date",
-                    "symbol",
-                    "open",
-                    *factor_columns,
-                    "raw_open",
-                    "is_valid_ohlc",
-                    "is_tradable_observation",
-                    "can_buy_open_proxy",
-                    "can_sell_open_proxy",
-                ]
-            )
-        )
-        frames = []
-        for year in range(load_start.year, load_end.year + 1):
-            for path in sorted((panel_path / f"trade_year={year}").glob("*.parquet")):
-                frames.append(pd.read_parquet(path, columns=columns))
-        if not frames:
+        paths = [
+            path
+            for year in range(load_start.year, load_end.year + 1)
+            for path in sorted((panel_path / f"trade_year={year}").glob("*.parquet"))
+        ]
+        if not paths:
             raise FileNotFoundError(f"No parquet partitions found under {panel_path}")
+        available = set(pq.read_schema(paths[0]).names)
+        desired = [
+            "trade_date",
+            "symbol",
+            "open",
+            *factor_columns,
+            "raw_open",
+            "is_valid_ohlc",
+            "is_tradable_observation",
+            "can_buy_open",
+            "can_sell_open",
+            "can_buy_open_proxy",
+            "can_sell_open_proxy",
+        ]
+        columns = [name for name in dict.fromkeys(desired) if name in available]
+        frames = [pd.read_parquet(path, columns=columns) for path in paths]
         data = pd.concat(frames, ignore_index=True)
         data["trade_date"] = pd.to_datetime(data["trade_date"])
         data = data[(data["trade_date"] >= load_start) & (data["trade_date"] <= load_end)]
@@ -226,13 +229,23 @@ class RealisticAshareBatchEngine(MassiveVectorBatchEngine):
             name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
             for name in value_columns
         }
-        for name in ("can_buy_open_proxy", "can_sell_open_proxy"):
-            fields[name] = (
-                data.pivot(index="trade_date", columns="symbol", values=name)
-                .sort_index()
-                .fillna(False)
-                .astype(bool)
+        for target, strict_name, proxy_name in (
+            ("can_buy_open_proxy", "can_buy_open", "can_buy_open_proxy"),
+            ("can_sell_open_proxy", "can_sell_open", "can_sell_open_proxy"),
+        ):
+            source = (
+                strict_name
+                if strict_name in data
+                else proxy_name
+                if proxy_name in data
+                else None
             )
+            data[f"_{target}"] = valid & (
+                data[source].fillna(False) if source else True
+            )
+            fields[target] = data.pivot(
+                index="trade_date", columns="symbol", values=f"_{target}"
+            ).sort_index()
         del data, frames
         gc.collect()
         return fields

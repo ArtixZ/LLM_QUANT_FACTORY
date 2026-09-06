@@ -78,8 +78,8 @@
     <form id="taskForm" method="dialog">
       <div class="dialog-title"><div><span id="taskDialogEyebrow">NEW TASK</span><h2 id="taskDialogTitle">新建自动研究任务</h2></div><button class="icon-button" id="closeTaskDialog" type="button" title="关闭"><i data-lucide="x"></i></button></div>
       <div class="task-form-grid">
-        <label>任务名称<input id="taskName" required maxlength="80" placeholder="例如：A 股量价稳定性研究"></label>
-        <label>市场<select id="taskMarket"><option value="CN_A">A 股</option><option value="HK">港股</option><option value="US">美股</option></select></label>
+        <label>任务名称<input id="taskName" required maxlength="80" placeholder="例如：US equity price-volume stability research"></label>
+        <label>市场<select id="taskMarket"><option value="US">US equities</option><option value="CN_A" disabled>A 股（未接入）</option><option value="HK" disabled>港股（未接入）</option></select></label>
         <label class="wide">研究数据目录<input id="taskDataPath" required autocomplete="off"></label>
         <label>任务数据起始日<input id="taskDataStart" type="date"></label>
         <label>任务数据结束日<input id="taskDataEnd" type="date"></label>

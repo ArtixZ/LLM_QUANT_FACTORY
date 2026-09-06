@@ -2287,7 +2287,7 @@ class ContinuousResearchWorker:
                 "diversification gates; long-short Alpha and IC are secondary diagnostics and "
                 "cannot rescue a weak long-only candidate."
             ),
-            "primary_evaluation_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+            "primary_evaluation_basis": "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
             "research_evidence_tier": evidence_tier,
             "production_promotion_allowed": (
                 evidence_tier == "PRIMARY_DISCOVERY"
@@ -2439,7 +2439,7 @@ def _memory_summary(
             proposal.get("expression") if proposal else None
         ),
         "single_factor": {
-            "evaluation_basis": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+            "evaluation_basis": "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
             "sharpe": metrics.get("long_only_sharpe_ratio"),
             "annual_return": metrics.get("long_only_simple_annual_return"),
             "compound_annual_return": metrics.get("long_only_compound_annual_return"),
@@ -2663,7 +2663,9 @@ def _multiple_testing_adjustments(
         "multiple_testing_fdr_passed": bool(rejected[-1]),
         "probability_backtest_overfitting": float(pbo),
         "multiple_testing_primary_basis": (
-            "A_SHARE_LONG_ONLY" if p_value_key.startswith("long_only_") else "ALPHA_DIAGNOSTIC"
+            "US_EQUITY_LONG_ONLY"
+            if p_value_key.startswith("long_only_")
+            else "ALPHA_DIAGNOSTIC"
         ),
     }
 

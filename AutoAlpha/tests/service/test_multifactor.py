@@ -64,6 +64,7 @@ class FakeEvaluator:
             "portfolio_weight_method": "equal_risk_cross_sectional_zscore",
             "portfolio_evaluation_protocol": self.protocol_version,
             "portfolio_return_convention": EOD_NEXT_OPEN_RETURN_CONVENTION,
+            "portfolio_incremental_net_return_hac_p_value": 0.01,
             "portfolio_bootstrap_samples": bootstrap_samples,
             "portfolio_evaluation_stage": (
                 "FULL_INFERENCE" if bootstrap_samples else "VECTOR_SCREEN"
@@ -141,7 +142,7 @@ def test_initial_ineligible_candidate_is_recorded_as_hold_without_active_weights
 def test_strategy_gate_rejects_long_short_return_convention() -> None:
     config = ResearchConfig.from_toml(Path("config/research.toml"))
     metrics = FakeEvaluator().evaluate_portfolio([_factor("a", "amount")]).metrics
-    metrics["portfolio_strategy_gate_basis"] = "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
+    metrics["portfolio_strategy_gate_basis"] = "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
 
     assert "invalid_return_convention" in _portfolio_action_gate_failures(metrics, config)
 
@@ -551,6 +552,7 @@ def test_stability_upgrade_can_repair_an_infeasible_incumbent() -> None:
         "portfolio_walk_forward_positive_fraction": 1.0,
         "portfolio_deflated_sharpe_probability": 0.99,
         "portfolio_net_return_hac_p_value": 0.01,
+        "portfolio_incremental_net_return_hac_p_value": 0.01,
     }
     proposed = {
         **incumbent,

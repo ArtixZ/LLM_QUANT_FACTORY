@@ -9,8 +9,8 @@ _US_COST_SETTINGS: dict[str, Any] = {
     "commission_per_share": 0.0035,
     "minimum_commission_usd": 0.35,
     "maximum_commission_fraction": 0.01,
-    "sec_fee_per_million_usd_sell": 27.80,
-    "finra_taf_per_share_sell": 0.000166,
+    "sec_fee_per_million_usd_sell": 20.60,
+    "finra_taf_per_share_sell": 0.000195,
     "slippage_bps_each_side": 5.0,
     "cost_stress_multiplier": 3.0,
 }

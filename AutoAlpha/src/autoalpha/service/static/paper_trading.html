@@ -15,7 +15,7 @@
       <form id="paperCreateForm">
         <div class="paper-fields">
           <label>组合名称<input id="strategyName" maxlength="80" placeholder="例如：低波动反转组合" required></label>
-          <div class="field-pair"><label>初始资金（元）<input id="initialCash" type="number" min="10000" step="10000" value="1000000" required></label><label>持仓数<input id="selectionCount" type="number" min="1" max="100" value="20" required></label></div>
+          <div class="field-pair"><label>初始资金（USD）<input id="initialCash" type="number" min="10000" step="10000" value="1000000" required></label><label>持仓数<input id="selectionCount" type="number" min="1" max="100" value="20" required></label></div>
           <div class="field-pair"><label>目标仓位<input id="grossExposure" type="number" min="0.05" max="1" step="0.05" value="0.95" required></label><label>单边滑点（bps）<input id="slippage" type="number" min="0" max="500" step="0.5" value="5" required></label></div>
           <label>信号日期<input id="asOfDate" type="date" required></label>
         </div>

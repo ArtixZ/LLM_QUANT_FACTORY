@@ -620,6 +620,7 @@ details pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow
 @media (max-width: 520px) {
   .identity h1 { font-size: 15px; }
   .header-actions .button { padding-inline: 9px; }
+  .field-pair { grid-template-columns: minmax(0, 1fr); }
   .sidebar #settingsForm { grid-template-columns: minmax(0, 1fr); }
   .sidebar #settingsForm .button-row, .sidebar #settingsForm .check-row { grid-column: auto; }
   .flow-grid { grid-template-columns: minmax(0, 1fr); }

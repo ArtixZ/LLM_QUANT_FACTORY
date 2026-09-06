@@ -322,7 +322,7 @@ def test_library_exposes_long_only_scores_metrics_and_sort_metadata() -> None:
 
     assert library["summary"]["long_only_evaluated_count"] == 2
     assert library["summary"]["recent_long_only_evaluated_count"] == 2
-    assert library["summary"]["ranking_method"] == "A_SHARE_LONG_ONLY_PRIMARY"
+    assert library["summary"]["ranking_method"] == "US_EQUITY_LONG_ONLY_PRIMARY"
     assert library["factors"][0]["factor_id"] == "F_1"
     assert factors["F_1"]["long_only_score_available"]
     assert factors["F_1"]["recent_long_only_score_available"]

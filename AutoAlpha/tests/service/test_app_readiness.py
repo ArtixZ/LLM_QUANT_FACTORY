@@ -599,7 +599,7 @@ def test_strategy_library_can_create_paper_portfolio_from_execution_seed(
     test_store.create_research_task(
         task_id="task-seed",
         name="Seed Task",
-        market="CN_A",
+        market="US",
         data_path=str(tmp_path / "panel"),
         data_start="2020-01-01",
         data_end="2026-07-29",
@@ -636,7 +636,7 @@ def test_strategy_library_can_create_paper_portfolio_from_execution_seed(
         source_id="paper-seed",
         title="Seed Strategy",
         status="QUALIFIED_CHAMPION",
-        market="CN_A",
+        market="US",
         metrics={"portfolio_capacity_usd": 1_000_000},
         evidence={
             "factor_ids": ["F_A", "F_B"],
@@ -659,7 +659,7 @@ def test_strategy_library_can_create_paper_portfolio_from_execution_seed(
                 "factor_ids": spec.factor_ids,
                 "weights": spec.weights,
                 "execution_protocol": {
-                    "protocol": "A_SHARE_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2"
+                    "protocol": "US_EQUITY_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2"
                 },
             },
             "positions": [],
@@ -691,7 +691,7 @@ def test_strategy_library_can_create_paper_portfolio_from_execution_seed(
     spec = captured["spec"]
     assert payload["source_strategy"]["strategy_uid"] == strategy["strategy_uid"]
     assert payload["source_strategy"]["execution_protocol"] == (
-        "A_SHARE_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2"
+        "US_EQUITY_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2"
     )
     assert spec.name == "Seeded Paper"
     assert spec.factor_ids == ["F_A", "F_B"]
@@ -1060,3 +1060,46 @@ def test_factor_library_refresh_post_run_now_materializes_payload(monkeypatch) -
     assert snapshots["factor_library"]["api_payload_protocol"] == (
         "MATERIALIZED_FACTOR_LIBRARY_API_V1"
     )
+
+
+def test_factor_library_cache_miss_retains_workspace_metadata(monkeypatch) -> None:
+    class FakeWorkspace:
+        root_path = "/tmp/data"
+        panel_path = "/tmp/data/processed/daily_panel"
+        first_trade_date = "2020-01-02"
+        last_trade_date = "2026-09-02"
+        fingerprint = "workspace-fingerprint"
+        price_research_ready = True
+        institutional_pit_ready = False
+
+    class FakeExecutionBasis:
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "capital_ledger_proxy_ready": True,
+                "capital_ledger_ready": False,
+            }
+
+    monkeypatch.setattr(
+        service_app.store,
+        "research_tasks",
+        lambda: [{"task_id": "primary-us-equity", "name": "US", "market": "US"}],
+    )
+    monkeypatch.setattr(
+        service_app.store,
+        "settings",
+        lambda: {"data_path": "/tmp/data"},
+    )
+    monkeypatch.setattr(service_app, "inspect_data_workspace", lambda _: FakeWorkspace())
+    monkeypatch.setattr(
+        service_app,
+        "inspect_execution_data_basis",
+        lambda _: FakeExecutionBasis(),
+    )
+
+    payload = service_app._factor_library_cache_miss_payload(None)
+
+    assert payload["summary"]["factor_count"] == 0
+    assert payload["research_tasks"][0]["task_id"] == "primary-us-equity"
+    assert payload["data"]["first_trade_date"] == "2020-01-02"
+    assert payload["data"]["last_trade_date"] == "2026-09-02"
+    assert payload["data"]["execution_basis"]["capital_ledger_ready"] is False

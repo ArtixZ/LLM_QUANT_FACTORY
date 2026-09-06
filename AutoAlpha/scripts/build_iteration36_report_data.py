@@ -201,8 +201,22 @@ def _capital_diagnostics(factor: FactorDefinition) -> dict[str, dict[str, Any]]:
         max_positions=30,
         max_volume_participation=0.05,
     )
-    zero_cost = USEquityExecutionCosts(0, 0, 0, 0)
-    double_cost = USEquityExecutionCosts(3.0, 10.0, 0.2, 10.0)
+    baseline_cost = USEquityExecutionCosts()
+    zero_cost = USEquityExecutionCosts(
+        commission_per_share=0.0,
+        minimum_commission_usd=0.0,
+        maximum_commission_fraction=1.0,
+        sec_fee_per_million_usd_sell=0.0,
+        finra_taf_per_share_sell=0.0,
+    )
+    double_cost = USEquityExecutionCosts(
+        commission_per_share=baseline_cost.commission_per_share * 2,
+        minimum_commission_usd=baseline_cost.minimum_commission_usd * 2,
+        maximum_commission_fraction=baseline_cost.maximum_commission_fraction,
+        sec_fee_per_million_usd_sell=baseline_cost.sec_fee_per_million_usd_sell * 2,
+        finra_taf_per_share_sell=baseline_cost.finra_taf_per_share_sell * 2,
+        finra_taf_maximum_usd_sell=baseline_cost.finra_taf_maximum_usd_sell * 2,
+    )
     delayed_factor = FactorDefinition(
         name=f"{factor.name}_extra_delay_1d",
         family=factor.family,

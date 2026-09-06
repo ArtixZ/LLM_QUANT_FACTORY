@@ -80,7 +80,7 @@ function renderTaskList() {
   $("taskList").innerHTML = tasks.length ? tasks.map((task) => `
     <div class="combine-task-item ${task.task_id === state.taskId ? "active" : ""}" data-task-id="${esc(task.task_id)}" role="button" tabindex="0">
       <div class="task-item-top"><strong>${esc(task.name)}</strong><button class="favorite-button${task.favorite ? " is-favorite" : ""}" type="button" data-favorite-task="${esc(task.task_id)}" title="${task.favorite ? "取消收藏" : "收藏组合任务"}" aria-label="${task.favorite ? "取消收藏" : "收藏组合任务"}"><i data-lucide="star"></i></button><span class="state-pill small ${esc(task.status)}">${esc(statusLabel(task.status))}</span></div>
-      <div class="task-item-meta"><span>${esc(task.market === "CN_A" ? "A 股" : task.market)} · ${task.factor_count} 因子</span><span>${esc(qualificationLabel(task.qualification_status))}</span></div>
+      <div class="task-item-meta"><span>${esc(task.market === "US" ? "US equities" : task.market)} · ${task.factor_count} 因子</span><span>${esc(qualificationLabel(task.qualification_status))}</span></div>
       <div class="task-item-foot"><code>${esc(task.task_id)}</code><div class="mini-progress"><i style="width:${Math.round(task.progress * 100)}%"></i></div></div>
     </div>`).join("") : `<div class="rail-empty">没有符合筛选条件的任务</div>`;
   document.querySelectorAll("[data-task-id]").forEach((button) => {

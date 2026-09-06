@@ -85,14 +85,18 @@ def test_side_aware_costs_charge_each_traded_side() -> None:
     legacy = VectorBacktester(
         VectorBacktestConfig(**common, cost_model="legacy_half_turnover")
     ).run(signal, open_prices)
-    corrected = VectorBacktester(VectorBacktestConfig(**common, cost_model="side_aware")).run(
-        signal, open_prices
-    )
+    corrected_config = VectorBacktestConfig(**common, cost_model="side_aware")
+    corrected = VectorBacktester(corrected_config).run(signal, open_prices)
 
     assert corrected.path["transaction_cost"].sum() > legacy.path["transaction_cost"].sum()
     # Buys pay commission only; sells additionally pay the SEC Section 31 fee.
     expected = (
-        corrected.path["buy_turnover"] * 0.5 + corrected.path["sell_turnover"] * 0.778
+        corrected.path["buy_turnover"] * corrected_config.commission_bps_each_side
+        + corrected.path["sell_turnover"]
+        * (
+            corrected_config.commission_bps_each_side
+            + corrected_config.sec_fee_bps_sell
+        )
     ) / 10_000
     pd.testing.assert_series_equal(corrected.path["transaction_cost"], expected, check_names=False)
 

@@ -24,6 +24,7 @@ from autoalpha.data.ibkr_sync import (
     existing_slice_symbols,
     sync_universe,
 )
+from autoalpha.data.product_catalog import resolve_products
 from autoalpha.data.universe_catalog import resolve_universe
 from autoalpha.ibkr.settings import GatewaySettings
 from autoalpha.service.store import ServiceStore
@@ -258,19 +259,24 @@ class DataSyncWorker:
         universe_name, symbols = resolve_universe(
             str(settings.get("universe", DEFAULT_UNIVERSE))
         )
-        if dataset_ids:
-            symbols = tuple(dataset_ids)
-            universe_name = "REQUESTED"
-        else:
-            # Refresh everything already on disk alongside the configured
-            # universe. Slices refresh independently, so a symbol dropped from
-            # the universe would otherwise sit at a stale date and silently
-            # become NaN in every later cross-section. Use prune_slices to
-            # shrink a universe deliberately.
-            carried = existing_slice_symbols(root) - set(symbols)
-            if carried:
-                logger.info("carrying %d symbol(s) beyond %s", len(carried), universe_name)
-                symbols = tuple(symbols) + tuple(sorted(carried))
+        selected_products = resolve_products(dataset_ids or [])
+        unavailable = [
+            product.dataset_id
+            for product in selected_products
+            if product.integration_state != "INTEGRATED"
+        ]
+        if unavailable:
+            raise ValueError(
+                "Data products do not have an integrated IBKR sync contract: "
+                + ", ".join(unavailable)
+            )
+        # All integrated products are two views of the same per-symbol IBKR
+        # download plus derived tradability flags. Product IDs select fields;
+        # they are never ticker symbols.
+        carried = existing_slice_symbols(root) - set(symbols)
+        if carried:
+            logger.info("carrying %d symbol(s) beyond %s", len(carried), universe_name)
+            symbols = tuple(symbols) + tuple(sorted(carried))
         configured_start = _parse_iso_date(settings.get("panel_start_date"))
         start = start_date or configured_start or date.fromisoformat(DEFAULT_PANEL_START)
         end = end_date or date.today()

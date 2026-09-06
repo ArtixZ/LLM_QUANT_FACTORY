@@ -134,7 +134,7 @@ class BudgetSpec(BaseModel):
 
 class CombineTaskRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
-    market: Literal["CN_A"] = "CN_A"
+    market: Literal["US"] = "US"
     data_path: str
     protocol: CombineProtocol
     scope: FactorScope = Field(default_factory=FactorScope)
@@ -240,7 +240,7 @@ async def health() -> dict[str, Any]:
         "status": "ok",
         "service": "AutoCombine",
         "version": "1.0.0",
-        "port": 8888,
+        "port": int(os.getenv("AUTOCOMBINE_PORT", "8888")),
         "provider_configured": vault.configured(),
         "runtime_root": str(RUNTIME_ROOT.resolve()),
         "research_task_count": len(base_store.research_tasks()),

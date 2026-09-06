@@ -5,6 +5,7 @@ from autoalpha.ibkr.client import (
     GatewayNotConnectedError,
     GatewayTimeoutError,
     IBKRGateway,
+    OpenOrder,
     OrderTransmissionBlocked,
     Position,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "IBKRGateway",
     "OrderPlanError",
     "OrderTransmissionBlocked",
+    "OpenOrder",
     "PlannedOrder",
     "Position",
     "SymbolHistory",

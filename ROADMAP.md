@@ -32,11 +32,11 @@ count. Items are directional; an issue and evidence contract should precede majo
 
 ## 4. PIT data and execution realism
 
-- Historical listing, delisting, ST, suspension and board membership.
-- Board-specific limit-up/limit-down and open-time tradability.
+- Historical listing, delisting, halt/LULD and exchange eligibility.
+- Effective-dated open-time tradability and corporate-action knowledge.
 - Corporate-action knowledge and revision timestamps.
 - Point-in-time free-float capitalization and industry membership.
-- Lot, cash, settlement, fees, impact, capacity and rejected-order replay.
+- Whole shares, cash, settlement, SEC/FINRA fees, impact, capacity and rejected-order replay.
 - Independent event-ledger/vector reconciliation fixtures.
 
 ## 5. Strategy lifecycle
@@ -50,7 +50,7 @@ count. Items are directional; an issue and evidence contract should precede majo
 ## 6. Open research ecosystem
 
 - Provider-neutral data adapters and market contracts.
-- HK/US market protocol packs.
+- Additional market protocol packs beyond the current US-equity protocol.
 - Small synthetic datasets for end-to-end tutorials.
 - Reproducible benchmark suites for factor deduplication and agent collaboration.
 - Import/export schemas for external factor libraries and portfolio optimizers.

@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from autoalpha.backtest.capital import CapitalBacktestSpec, run_capital_backtest
 from autoalpha.backtest.costs import USEquityExecutionCosts
@@ -159,23 +160,31 @@ class BlindEvaluationBoundary:
         split = self.config.splits.test
         warmup = pd.Timestamp(split.start) - pd.Timedelta(days=400)
         factor_columns = list(self.factor_fields)
-        columns = list(dict.fromkeys([
+        paths = [
+            path
+            for year in range(warmup.year, split.end.year + 1)
+            for path in sorted((self.panel_path / f"trade_year={year}").glob("*.parquet"))
+        ]
+        if not paths:
+            raise FileNotFoundError(f"No holdout panel partitions under {self.panel_path}")
+        available = set(pq.read_schema(paths[0]).names)
+        desired = [
             "trade_date",
             "symbol",
             "open",
             "raw_open",
+            "can_buy_open",
+            "can_sell_open",
             "can_buy_open_proxy",
             "can_sell_open_proxy",
             *factor_columns,
             "is_valid_ohlc",
             "is_tradable_observation",
-        ]))
+        ]
+        columns = [name for name in dict.fromkeys(desired) if name in available]
         frames = []
-        for year in range(warmup.year, split.end.year + 1):
-            for path in sorted((self.panel_path / f"trade_year={year}").glob("*.parquet")):
-                frames.append(pd.read_parquet(path, columns=columns))
-        if not frames:
-            raise FileNotFoundError(f"No holdout panel partitions under {self.panel_path}")
+        for path in paths:
+            frames.append(pd.read_parquet(path, columns=columns))
         data = pd.concat(frames, ignore_index=True)
         data["trade_date"] = pd.to_datetime(data["trade_date"])
         data = data[
@@ -188,11 +197,31 @@ class BlindEvaluationBoundary:
             name: data.pivot(index="trade_date", columns="symbol", values=name).sort_index()
             for name in value_columns
         }
+        buy_source = (
+            "can_buy_open"
+            if "can_buy_open" in data
+            else "can_buy_open_proxy"
+            if "can_buy_open_proxy" in data
+            else None
+        )
+        sell_source = (
+            "can_sell_open"
+            if "can_sell_open" in data
+            else "can_sell_open_proxy"
+            if "can_sell_open_proxy" in data
+            else None
+        )
+        data["_can_buy_open"] = valid & (
+            data[buy_source].fillna(False) if buy_source else True
+        )
+        data["_can_sell_open"] = valid & (
+            data[sell_source].fillna(False) if sell_source else True
+        )
         result["can_buy_open_proxy"] = data.pivot(
-            index="trade_date", columns="symbol", values="can_buy_open_proxy"
+            index="trade_date", columns="symbol", values="_can_buy_open"
         ).sort_index()
         result["can_sell_open_proxy"] = data.pivot(
-            index="trade_date", columns="symbol", values="can_sell_open_proxy"
+            index="trade_date", columns="symbol", values="_can_sell_open"
         ).sort_index()
         return result
 

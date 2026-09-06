@@ -2,19 +2,19 @@
 
 # LLM_QUANT_FACTORY
 
-### Auditable multi-agent factor research and portfolio discovery for A-shares
+### Auditable multi-agent factor research and portfolio discovery for US equities
 
-A source-available, noncommercial workbench for cross-sectional A-share multi-factor research,
+A source-available, noncommercial workbench for cross-sectional US-equity multi-factor research,
 covering data
 governance, LLM-assisted factor discovery, factor knowledge management, constrained portfolio
 search, screening, backtesting, audit trails, and strategy versioning.
 
-[![CI](https://github.com/khakhasshi/LLM_QUANT_FACTORY/actions/workflows/ci.yml/badge.svg)](https://github.com/khakhasshi/LLM_QUANT_FACTORY/actions/workflows/ci.yml)
+[![CI](https://github.com/ArtixZ/LLM_QUANT_FACTORY/actions/workflows/ci.yml/badge.svg)](https://github.com/ArtixZ/LLM_QUANT_FACTORY/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-c2413b.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776ab.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![uv](https://img.shields.io/badge/package%20manager-uv-5c4ee5.svg)](https://docs.astral.sh/uv/)
 [![Research](https://img.shields.io/badge/status-research%20only-c47f17.svg)](#research-boundary)
-[![Primary Protocol](https://img.shields.io/badge/primary-A--share%20long--only-16835b.svg)](#research-boundary)
+[![Primary Protocol](https://img.shields.io/badge/primary-US%20equity%20long--only-16835b.svg)](#research-boundary)
 
 [Quick start](#quick-start) · [Architecture](#architecture) ·
 [Public sample](#public-research-snapshot) · [Contributing](CONTRIBUTING.md) ·
@@ -31,11 +31,11 @@ Data-timing checks, backtests, statistical tests, portfolio weights, risk gates,
 delivery remain deterministic.
 
 > [!IMPORTANT]
-> The local A-share panel used in the screenshots is a **non-PIT research proxy**. Historical
+> The local IBKR panel uses a **current-membership, non-PIT research proxy**. Historical
 > performance, rankings, and screening results demonstrate the workflow only. They are not
 > production qualifications, forecasts, or investment advice. Real deployment still requires PIT
-> security states, adjusted research prices and unadjusted execution prices, price-limit and
-> suspension rules, delisting handling, costs, capacity analysis, and independent blind tests.
+> listing/delisting, halt/LULD, classification, benchmark membership, free-float, source-timing
+> histories, costs, capacity analysis, and independent blind tests.
 
 ## Product tour
 
@@ -90,13 +90,13 @@ Select one or more factors, assign weights, and choose a signal date to generate
 stock list. The result explicitly states that the signal is formed after the close. This page does
 not place orders and does not contaminate automatic research memory or hidden tests.
 
-![A-share factor screener](docs/assets/screenshots/06-factor-screener.png)
+![US-equity factor screener](docs/assets/screenshots/06-factor-screener.png)
 
 ### 7. Manual long-only backtest
 
 Manual backtests support factors and weights, date ranges, initial capital, target exposure, holding
 period, rebalance calendar, cost presets, event-ledger or vector engines, favorites, and trade
-ledgers. A-share long-only capital performance is primary; long-short IC remains diagnostic.
+ledgers. US-equity long-only capital performance is primary; long-short IC remains diagnostic.
 
 ![Manual long-only backtest](docs/assets/screenshots/07-manual-backtest.png)
 
@@ -124,7 +124,7 @@ The repository is a monorepo with two main layers:
 
 | Layer | Path | Responsibility |
 |---|---|---|
-| Data engineering | `src/multifactor_ashare/` | Audit immutable daily snapshots and build a canonical year-partitioned DuckDB/Parquet panel |
+| Data engineering | `src/multifactor_us/` | Audit IBKR daily slices and build a canonical year-partitioned DuckDB/Parquet panel |
 | Research platform | `AutoAlpha/` | Factor discovery, knowledge management, portfolio optimization, backtesting, governance, and web services |
 
 The research platform exposes one shared experiment lineage:
@@ -147,12 +147,12 @@ evidence links.
 |---|---|
 | Research orchestration | Multiple isolated AutoAlpha tasks with independent data visibility, protocols, memory, and lifecycle |
 | Factor language | Typed expression trees, field whitelists, signal timing, and look-ahead checks |
-| Evaluation | A-share long-only primary metrics, walk-forward folds, DSR/PBO/FDR, parameter neighborhoods, cost, and capacity diagnostics |
+| Evaluation | US-equity long-only primary metrics, walk-forward folds, DSR/PBO/FDR, parameter neighborhoods, cost, and capacity diagnostics |
 | Knowledge management | Mechanism taxonomy, AST signatures, semantic/behavior clusters, lifecycle, annual heatmaps, and favorites |
 | Combination research | LLM-assisted AutoCombine and deterministic QuantCombine over the same frozen factor registry |
 | Backtesting | A fast vector engine plus an event/cash-ledger path, configurable execution assumptions, trades, and artifacts |
 | Operations | Job queues, checkpoints, retries, immutable artifacts, four log classes, and health endpoints |
-| Data center | Workspace inspection, Tushare credential boundaries, resumable incremental updates, and quality reports |
+| Data center | IBKR Gateway connectivity, resumable daily-bar updates, workspace inspection, and quality reports |
 
 Detailed controls:
 
@@ -168,7 +168,7 @@ Detailed controls:
 
 The system deliberately separates research convenience from production evidence:
 
-- A-share **long-only capital performance** is the primary ranking and display convention.
+- US-equity **long-only capital performance** is the primary ranking and display convention.
 - Rank IC and long-short alpha are diagnostics; they cannot compensate for a failed execution or
   risk gate.
 - End-of-day signals are available only after the close and execute no earlier than the next
@@ -186,13 +186,13 @@ The system deliberately separates research convenience from production evidence:
 - macOS or Linux
 - Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/)
-- Your own licensed A-share data
+- A logged-in IBKR TWS or Gateway session with the required market-data permissions
 - Optional: an OpenAI-compatible API endpoint for LLM-assisted research
 
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/khakhasshi/LLM_QUANT_FACTORY.git
+git clone https://github.com/ArtixZ/LLM_QUANT_FACTORY.git
 cd LLM_QUANT_FACTORY
 
 uv sync --frozen --all-groups
@@ -202,15 +202,16 @@ uv sync --frozen --all-groups
 
 ### 2. Prepare data
 
-Place your licensed source data under `data/`, then run the reproducible audit and panel build:
+Download IBKR daily slices through the AutoAlpha data center or `DataSyncWorker`, then run:
 
 ```bash
 cd ..
-uv run mf-data audit
-uv run mf-data build
+uv run mf-us audit
+uv run mf-us catalog
+uv run mf-us panel
 ```
 
-The canonical output is written to `data/processed/daily_panel/`. Raw and generated market data are
+The default output is `~/MarketData/US/processed/daily_panel/`. Raw and generated market data are
 ignored by Git.
 
 ### 3. Configure optional credentials
@@ -219,7 +220,8 @@ Use environment variables or the system keychain. Never commit credentials:
 
 ```bash
 cd AutoAlpha
-export AUTOALPHA_DATA_PATH="$PWD/../data"
+export AUTOALPHA_DATA_PATH="$HOME/MarketData/US"
+export IBKR_PORT="4002"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 export AUTOALPHA_MODEL="your-model"
 export AUTOALPHA_API_KEY="your-api-key"
@@ -278,7 +280,7 @@ uv run python scripts/export_public_research_snapshot.py \
 
 ```text
 .
-├── src/multifactor_ashare/       # data audit and canonical panel CLI
+├── src/multifactor_us/           # IBKR data audit and canonical panel CLI
 ├── tests/                        # data-pipeline tests
 ├── AutoAlpha/
 │   ├── src/autoalpha/            # research and service implementation
@@ -311,7 +313,7 @@ uv run pytest -q
 # Source-available release hygiene
 cd ..
 uv run python scripts/check_public_release.py
-uv build --out-dir /tmp/multifactor-ashare-dist
+uv build --out-dir /tmp/multifactor-us-dist
 
 # AutoAlpha package
 cd AutoAlpha
@@ -340,9 +342,9 @@ The project especially welcomes collaboration on problems that remain genuinely 
    discovery, and incentives that reward independent portfolio contribution instead of cosmetic
    formula changes.
 
-4. **Point-in-time data and realistic A-share execution**
-   Historical ST/listing/delisting/suspension states, board-specific price limits, corporate-action
-   revisions, open-time tradability, lot/cash constraints, impact, and capacity.
+4. **Point-in-time data and realistic US-equity execution**
+   Historical listing/delisting, halt/LULD, corporate-action knowledge time, sector and benchmark
+   membership, free float, open-time tradability, idempotent orders, impact, and capacity.
 
 5. **Strategy lifecycle beyond factor scores**
    Explicit entry/exit rules, versioned strategy specifications, shadow trading, decay monitoring,

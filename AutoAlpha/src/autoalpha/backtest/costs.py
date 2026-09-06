@@ -10,9 +10,9 @@ Side = Literal["BUY", "SELL"]
 # reset by the Commission periodically, so it is a plain parameter here rather
 # than a hardcoded schedule; supply `historical_sec_rates` to backtest across a
 # rate change instead of guessing one.
-DEFAULT_SEC_FEE_PER_MILLION_USD = 27.80
-DEFAULT_FINRA_TAF_PER_SHARE = 0.000166
-DEFAULT_FINRA_TAF_MAXIMUM_USD = 8.30
+DEFAULT_SEC_FEE_PER_MILLION_USD = 20.60
+DEFAULT_FINRA_TAF_PER_SHARE = 0.000195
+DEFAULT_FINRA_TAF_MAXIMUM_USD = 9.79
 
 # Interactive Brokers US equity tiered pricing.
 DEFAULT_COMMISSION_PER_SHARE = 0.0035

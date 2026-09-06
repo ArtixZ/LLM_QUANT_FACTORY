@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from autoalpha.backtest.costs import USEquityExecutionCosts
 from autoalpha.backtest.ledger import LedgerBacktester, LedgerConfig, RebalanceSchedule
@@ -50,14 +51,14 @@ class ManualBacktestSpec:
     commission_per_share: float = 0.0035
     minimum_commission_usd: float = 0.35
     maximum_commission_fraction: float = 0.01
-    sec_fee_per_million_usd_sell: float = 27.80
-    finra_taf_per_share_sell: float = 0.000166
+    sec_fee_per_million_usd_sell: float = 20.60
+    finra_taf_per_share_sell: float = 0.000195
     slippage_bps_each_side: float = 0.0
     cost_stress_multiplier: float = 2.0
 
     @property
     def sec_fee_bps_sell(self) -> float:
-        """SEC Section 31 fee as basis points; $27.80 per $1M is 0.278 bps."""
+        """SEC Section 31 fee as basis points; $20.60 per $1M is 0.206 bps."""
         return self.sec_fee_per_million_usd_sell / 100.0
 
     @property
@@ -269,7 +270,9 @@ class ManualFactorBacktester:
         selected_positions = positions.shift(1).reindex(path.index)
         selected_amount = fields["amount"].reindex(path.index).where(selected_positions.ne(0))
         capacity = float(
-            selected_amount.median(axis=1).median() * 1000 * spec.maximum_volume_participation * 20
+            selected_amount.median(axis=1).median()
+            * spec.maximum_volume_participation
+            * 20
         )
         eligible = (
             fields["adj_close"].reindex(index=path.index, columns=selected_signal.columns).notna()
@@ -327,7 +330,7 @@ class ManualFactorBacktester:
             "portfolio_mode": template.portfolio_mode,
             "product_template": template.template_id,
             "product_template_name": template.name,
-            "execution_mode": ("a_share_capital_ledger" if use_ledger else "research_vector"),
+            "execution_mode": ("us_equity_capital_ledger" if use_ledger else "research_vector"),
             "backtest_engine": spec.backtest_engine,
             "backtest_preset": spec.backtest_preset,
             "execution_data_mode": spec.execution_data_mode,
@@ -357,7 +360,7 @@ class ManualFactorBacktester:
         if ledger is not None:
             metrics.update(
                 {
-                    "capital_ledger_protocol": "A_SHARE_NEXT_OPEN_INTEGER_LOT_V1",
+                    "capital_ledger_protocol": "US_EQUITY_NEXT_OPEN_WHOLE_SHARE_V1",
                     "trade_count": len(ledger.trades),
                     "total_trade_notional_usd": (
                         float(ledger.trades["notional"].sum()) if not ledger.trades.empty else 0.0
@@ -400,7 +403,7 @@ class ManualFactorBacktester:
         trade_rows = _trade_statement_rows(ledger.trades, market_data) if ledger is not None else []
         trade_statement = {
             "available": ledger is not None,
-            "protocol": "SIMULATED_A_SHARE_TRADE_BLOTTER_V1",
+            "protocol": "SIMULATED_US_EQUITY_TRADE_BLOTTER_V1",
             "disclaimer": "Simulated execution record; not a broker-issued contract note.",
             "row_count": len(trade_rows),
             "buy_count": sum(row["side"] == "BUY" for row in trade_rows),
@@ -463,7 +466,7 @@ class ManualFactorBacktester:
         warmup_days = max(400, maximum_lookback * 2 + spec.holding_period_days * 2)
         load_start = pd.Timestamp(spec.start_date) - pd.Timedelta(days=warmup_days)
         load_end = pd.Timestamp(spec.end_date) + pd.Timedelta(days=10)
-        columns = list(
+        desired_columns = list(
             dict.fromkeys(
                 [
                     "trade_date",
@@ -480,10 +483,7 @@ class ManualFactorBacktester:
                         [
                             "listing_date",
                             "delisting_date",
-                            "is_st",
-                            "is_suspended",
-                            "limit_up",
-                            "limit_down",
+                            "is_halted",
                             "can_buy_open",
                             "can_sell_open",
                         ]
@@ -510,13 +510,22 @@ class ManualFactorBacktester:
                 ]
             )
         )
-        frames = []
-        for year in range(load_start.year, load_end.year + 1):
-            for path in sorted((self.panel_path / f"trade_year={year}").glob("*.parquet")):
-                frames.append(pd.read_parquet(path, columns=columns))
-        if not frames:
+        paths = [
+            path
+            for year in range(load_start.year, load_end.year + 1)
+            for path in sorted((self.panel_path / f"trade_year={year}").glob("*.parquet"))
+        ]
+        if not paths:
             raise FileNotFoundError(f"No parquet partitions found under {self.panel_path}")
+        available = set(pq.read_schema(paths[0]).names)
+        missing_required = sorted(required_fields - available)
+        if missing_required:
+            raise ValueError(f"Panel is missing factor fields: {missing_required}")
+        columns = [name for name in desired_columns if name in available]
+        frames = [pd.read_parquet(path, columns=columns) for path in paths]
         data = pd.concat(frames, ignore_index=True)
+        if "name" not in data:
+            data["name"] = data["symbol"]
         data["trade_date"] = pd.to_datetime(data["trade_date"])
         data = data[(data["trade_date"] >= load_start) & (data["trade_date"] <= load_end)]
         valid = data["is_valid_ohlc"].fillna(False) & data["is_tradable_observation"].fillna(False)
@@ -630,7 +639,7 @@ def _execution_assumptions(
                 ),
                 "constraints_modeled": [
                     "cash",
-                    "board lot",
+                    "whole shares",
                     (
                         "point-in-time opening buy/sell eligibility"
                         if spec.execution_data_mode == "STRICT_PIT"
@@ -638,18 +647,17 @@ def _execution_assumptions(
                     ),
                     "volume participation",
                     "minimum commission",
-                    "T+1 sell sequencing",
                     "failed-order retry",
                     "fixed opening slippage",
-                    "historical stamp-duty and transfer-fee schedule",
+                    "per-share commission and sell-side regulatory fees",
                 ],
                 "constraints_not_modeled": [
                     "intraday order-book queue",
                     "market impact beyond fixed opening slippage",
                     *(
                         [
-                            "point-in-time ST, listing, delisting, and suspension state",
-                            "exact board-specific daily price limits",
+                            "point-in-time listing, delisting, and halt state",
+                            "intraday LULD halt state",
                         ]
                         if spec.execution_data_mode == "NON_PIT_PROXY"
                         else []
@@ -665,10 +673,9 @@ def _execution_assumptions(
                 "cost_model": spec.vector_cost_model,
                 "constraints_modeled": ["linear buy/sell fees", "target gross exposure"],
                 "constraints_not_modeled": [
-                    "integer lots and cash",
+                    "whole shares and cash",
                     "opening auction slippage",
-                    "suspension carry and forced delisting treatment",
-                    "limit-up/limit-down fills",
+                    "halt carry and forced delisting treatment",
                     "short borrow availability, borrow fees, and recalls",
                     "market impact and order-book capacity",
                     "minimum commission per order",

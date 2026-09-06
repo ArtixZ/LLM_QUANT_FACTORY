@@ -52,12 +52,7 @@ def main() -> None:
     version = _portfolio_version(store, args.version)
     members = _portfolio_members(store, version)
     composite = _composite_factor(args.version, members)
-    costs = USEquityExecutionCosts(
-        commission_bps_each_side=1.5,
-        stamp_duty_bps_sell=5.0,
-        transfer_fee_bps_each_side=0.1,
-        minimum_commission_usd=5.0,
-    )
+    costs = USEquityExecutionCosts()
     research = _run_research_backtest(
         members,
         args.panel,

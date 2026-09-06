@@ -28,7 +28,9 @@ def test_holdout_approval_is_candidate_bound_and_single_use(tmp_path: Path) -> N
         },
     )
 
-    assert result == {"decision": "APPROVED", "rank_ic_mean": 0.04}
+    assert result["decision"] == "APPROVED"
+    assert set(result) == {"decision", "evidence_hash"}
+    assert len(result["evidence_hash"]) == 64
     with pytest.raises(HoldoutPermissionError, match="already consumed"):
         judge.evaluate(
             token=token,

@@ -16,7 +16,7 @@ def test_global_settings_round_trip_structured_values(tmp_path: Path) -> None:
     defaults = default_settings(tmp_path / "AutoAlpha")
     defaults["data_path"] = str(tmp_path / "data")
     defaults["market_data_root"] = str(tmp_path / "market")
-    defaults["data_product_ids"] = ["core_market", "execution_market"]
+    defaults["data_product_ids"] = ["core_market", "execution_market", "tradability"]
     defaults["full_llm_enabled"] = False
     defaults["proposal_batch_size"] = 2
     values = GlobalSettingsValues.model_validate(defaults)
@@ -26,10 +26,12 @@ def test_global_settings_round_trip_structured_values(tmp_path: Path) -> None:
     )
 
     assert restored == values
-    assert restored.data_product_ids == ["core_market", "execution_market"]
+    assert restored.data_product_ids == ["core_market", "execution_market", "tradability"]
     assert restored.full_llm_enabled is False
     assert restored.proposal_batch_size == 2
-    assert values.to_store()["data_product_ids"] == '["core_market","execution_market"]'
+    assert values.to_store()["data_product_ids"] == (
+        '["core_market","execution_market","tradability"]'
+    )
 
 
 def test_global_settings_reject_infeasible_combine_weights(tmp_path: Path) -> None:
@@ -53,13 +55,13 @@ def test_settings_catalog_marks_secrets_without_exposing_values() -> None:
     }
 
     assert fields["api_key"]["kind"] == "secret"
-    assert fields["tushare_token"]["source"] == "系统 Keychain"
+    assert "tushare_token" not in fields
     assert fields["research_concurrency"]["effect"] == "重启服务"
     product_options = {
         option["value"]: option for option in fields["data_product_ids"]["options"]
     }
     assert product_options["core_market"]["disabled"]
+    assert product_options["execution_market"]["disabled"]
+    assert product_options["tradability"]["disabled"]
     assert product_options["fundamentals"]["disabled"]
-    assert not product_options["execution_market"]["disabled"]
     assert "value" not in fields["api_key"]
-    assert "value" not in fields["tushare_token"]

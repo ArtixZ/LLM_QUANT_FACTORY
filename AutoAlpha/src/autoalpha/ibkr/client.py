@@ -67,6 +67,19 @@ class Position:
     unrealized_pnl: float
 
 
+@dataclass(frozen=True)
+class OpenOrder:
+    account: str
+    symbol: str
+    action: str
+    quantity: float
+    order_type: str
+    status: str
+    order_id: int
+    permanent_id: int
+    order_reference: str
+
+
 class IBKRGateway:
     """Narrow, synchronous facade over an Interactive Brokers gateway session.
 
@@ -272,6 +285,31 @@ class IBKRGateway:
         return records
 
     # ---- order path --------------------------------------------------------
+
+    def open_orders(self) -> list[OpenOrder]:
+        """Return all API-visible open orders for the resolved account."""
+        ib = self._require_ib()
+        records: list[OpenOrder] = []
+        for trade in ib.reqAllOpenOrders():
+            order = trade.order
+            if str(getattr(order, "account", "")) != self.account:
+                continue
+            contract = trade.contract
+            status = trade.orderStatus
+            records.append(
+                OpenOrder(
+                    account=self.account,
+                    symbol=str(getattr(contract, "symbol", "")),
+                    action=str(getattr(order, "action", "")),
+                    quantity=float(getattr(order, "totalQuantity", 0.0) or 0.0),
+                    order_type=str(getattr(order, "orderType", "")),
+                    status=str(getattr(status, "status", "")),
+                    order_id=int(getattr(order, "orderId", 0) or 0),
+                    permanent_id=int(getattr(order, "permId", 0) or 0),
+                    order_reference=str(getattr(order, "orderRef", "") or ""),
+                )
+            )
+        return records
 
     def preview_order(
         self, equity: USEquity, order: Any, *, timeout_seconds: float = 30.0

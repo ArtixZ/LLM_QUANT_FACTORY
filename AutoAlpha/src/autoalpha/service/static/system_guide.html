@@ -29,7 +29,7 @@
       <div><span>LLM 专业角色</span><strong>6</strong><small>全程建议，不越权裁决</small></div>
       <div><span>评价边界</span><strong>4</strong><small>探索、滚动、盲测、仿真</small></div>
       <div><span>核心资产</span><strong>3</strong><small>因子、策略、证据制品</small></div>
-      <div><span>执行原则</span><strong>T+1</strong><small>收盘信号，下一开盘成交</small></div>
+      <div><span>执行原则</span><strong>NEXT OPEN</strong><small>收盘信号，下一交易日开盘成交</small></div>
       <div><span>决策权威</span><strong>RULES</strong><small>确定性门禁最终裁决</small></div>
     </section>
 
@@ -210,7 +210,7 @@
           <div class="section-kicker">07 · DATA ENGINEERING</div>
           <div class="section-heading"><div><h2>数据中心与研究数据契约</h2><p>数据能被下载，不等于能被用于生产研究；系统区分目录可见、已落盘、研究可用和 PIT 合格。</p></div><a class="button" href="/data"><i data-lucide="arrow-up-right"></i>数据中心</a></div>
           <div class="data-pipeline">
-            <div><span>SOURCE</span><strong>Tushare / 本地源表</strong><small>凭证、接口目录、批次</small></div><i data-lucide="chevron-right"></i>
+            <div><span>SOURCE</span><strong>IBKR TWS / Gateway</strong><small>合约解析、日线请求、下载批次</small></div><i data-lucide="chevron-right"></i>
             <div><span>RAW</span><strong>原始不可变分区</strong><small>断点续传、增量更新</small></div><i data-lucide="chevron-right"></i>
             <div><span>STANDARD</span><strong>标准化数据产品</strong><small>字段、单位、主键、版本</small></div><i data-lucide="chevron-right"></i>
             <div><span>PANEL</span><strong>研究面板</strong><small>截面计算、质量校验</small></div><i data-lucide="chevron-right"></i>
@@ -220,8 +220,8 @@
             <div class="data-contract-row head"><span>数据口径</span><span>允许用途</span><span>禁止误用</span></div>
             <div class="data-contract-row"><strong>前复权 OHLC</strong><p>因子构造、收益形态和公开研究诊断。</p><small>不能用于现金、股数、费用、ADV 或交割单。</small></div>
             <div class="data-contract-row"><strong>未复权开盘价</strong><p>下一开盘成交、现金账本和实际股数估算。</p><small>缺失时不得假装完成真实成交回放。</small></div>
-            <div class="data-contract-row"><strong>成交量与成交额</strong><p>流动性、换手、参与率、容量和价格冲击。</p><small>必须明确股/手与元/千元等单位。</small></div>
-            <div class="data-contract-row"><strong>市场状态历史</strong><p>停牌、涨跌停、ST、上市退市和侧向可交易性。</p><small>不能用当前状态倒填历史。</small></div>
+            <div class="data-contract-row"><strong>成交量与成交额</strong><p>流动性、换手、参与率、容量和价格冲击。</p><small>成交量为股数，成交额为 USD。</small></div>
+            <div class="data-contract-row"><strong>市场状态历史</strong><p>停牌、LULD、上市退市和侧向开盘可交易性。</p><small>不能用当前状态倒填历史。</small></div>
             <div class="data-contract-row"><strong>财务与分类数据</strong><p>公告日可见的基本面、行业和指数成分研究。</p><small>无 knowledge_time 与修订版本时不得宣称 PIT。</small></div>
           </div>
           <div class="warning-band"><i data-lucide="triangle-alert"></i><div><strong>当前能力边界</strong><p>本地面板足以支持延迟到下一交易日的量价探索研究；正式生产准入仍要求来源可见时间、修订历史、动态股票池、市场状态、行业/指数历史及自由流通市值等 PIT 数据。实时状态以数据中心质量报告为准。</p></div></div>
@@ -280,13 +280,13 @@
           <div class="section-heading"><div><h2>回测、选股和模拟交易</h2><p>快速研究引擎与现金账本各有职责；结果必须连同成交时点、调仓、费用和限制一起解释。</p></div><a class="button" href="/backtest"><i data-lucide="arrow-up-right"></i>手动回测</a></div>
           <div class="timing-contract">
             <div><span>T 日收盘后</span><strong>形成截面信号</strong><small>当日 OHLCV 此时才可知</small></div><i data-lucide="arrow-right"></i>
-            <div><span>T+1 日开盘</span><strong>执行目标交易</strong><small>检查停牌、涨跌停和成交约束</small></div><i data-lucide="arrow-right"></i>
+            <div><span>T+1 日开盘</span><strong>执行目标交易</strong><small>检查停牌、开盘资格和成交约束</small></div><i data-lucide="arrow-right"></i>
             <div><span>T+1 → T+2</span><strong>获得持仓收益</strong><small>EOD_T__OPEN_T1_TO_OPEN_T2</small></div><i data-lucide="arrow-right"></i>
             <div><span>下一调仓日</span><strong>再平衡或退出</strong><small>不可卖出头寸继续保留</small></div>
           </div>
           <div class="engine-comparison">
-            <div class="engine-column"><header><i data-lucide="blocks"></i><span>VECTOR</span><strong>向量化研究引擎</strong></header><ul><li>矩阵化截面排序与权重回放</li><li>适合大批量因子、Walk-forward 和蒙特卡洛</li><li>支持 side-aware 成本和历史兼容模式</li><li>速度快，便于研究结果对账</li></ul><footer>不能精确表达整数手数、最低佣金、现金不足、部分成交和残余持仓。</footer></div>
-            <div class="engine-column capital"><header><i data-lucide="landmark"></i><span>CAPITAL</span><strong>A 股现金账本</strong></header><ul><li>未复权价格、整数手数与现金余额</li><li>佣金、最低佣金、印花税、过户费</li><li>T+1、停牌、开盘涨跌停与成交量约束</li><li>未成交、部分成交和交割单制品</li></ul><footer>用于更真实的资金仿真；仍是模拟记录，不是券商交割凭证。</footer></div>
+            <div class="engine-column"><header><i data-lucide="blocks"></i><span>VECTOR</span><strong>向量化研究引擎</strong></header><ul><li>矩阵化截面排序与权重回放</li><li>适合大批量因子、Walk-forward 和蒙特卡洛</li><li>支持 side-aware 成本和历史兼容模式</li><li>速度快，便于研究结果对账</li></ul><footer>不能精确表达整数股、最低佣金、现金不足、部分成交和残余持仓。</footer></div>
+            <div class="engine-column capital"><header><i data-lucide="landmark"></i><span>CAPITAL</span><strong>US 股票现金账本</strong></header><ul><li>TRADES 拆股调整价格、整数股与现金余额</li><li>每股佣金、最低佣金、SEC 费与 FINRA TAF</li><li>停牌、开盘资格与成交量约束</li><li>未成交、部分成交和交割单制品</li></ul><footer>用于更真实的资金仿真；仍是模拟记录，不是券商交割凭证。</footer></div>
           </div>
           <div class="execution-products">
             <a href="/screener"><i data-lucide="list-filter"></i><strong>选股器</strong><span>指定日期、因子与权重，生成截面候选。</span></a>
@@ -328,7 +328,7 @@
           <div class="governance-grid">
             <div><span>连续记忆</span><strong>记住证据，不背诵验证期</strong><p>保存机制、失败分类、已尝试方向和下一步建议；隐藏指标不进入记忆。</p></div>
             <div><span>配置版本</span><strong>每次修改都可追踪</strong><p>统一设置标注即时、下一轮或重启生效，并形成版本与变更说明。</p></div>
-            <div><span>凭证安全</span><strong>密钥与研究制品分离</strong><p>API Key 和 Tushare Token 进入系统 Keychain，不写入数据库、日志或页面回显。</p></div>
+            <div><span>凭证安全</span><strong>密钥与研究制品分离</strong><p>LLM API Key 进入系统 Keychain；IBKR 登录由本机 TWS / Gateway 管理。</p></div>
             <div><span>并发治理</span><strong>读任务并行，写数据独占</strong><p>自动研究、组合研究和人工回测可并行读取稳定面板；数据发布避免半成品读取。</p></div>
             <div><span>故障策略</span><strong>失败开放诊断，失败关闭风险</strong><p>模型错误可降级确定性搜索；数据、交易或发布边界失败则 no-trade、暂停或回滚。</p></div>
             <div><span>不可变制品</span><strong>结果可复算、可对账</strong><p>配置、数据、表达式、指标、净值、交割单和策略均绑定哈希或版本。</p></div>
@@ -348,7 +348,7 @@
             <div class="readiness-row head"><span>领域</span><span>当前状态</span><span>可做</span><span>尚不可宣称</span></div>
             <div class="readiness-row"><strong>量价因子研究</strong><span class="status ready">可用</span><p>下一开盘因果评价、统一纯多榜、滚动验证和批量重评。</p><small>不能把公开窗口高绩效直接解释为未来实盘收益。</small></div>
             <div class="readiness-row"><strong>多因子组合研究</strong><span class="status ready">可用</span><p>冻结因子快照、权重约束、目标预设、稳健搜索和策略版本。</p><small>污染因子组合不能被包装成新鲜隐藏样本证据。</small></div>
-            <div class="readiness-row"><strong>A 股交易仿真</strong><span class="status conditional">条件可用</span><p>在未复权价格和市场状态具备时运行现金账本与交割单。</p><small>数据字段不足时不能声称精确复现真实成交。</small></div>
+            <div class="readiness-row"><strong>US 股票交易仿真</strong><span class="status conditional">条件可用</span><p>在 TRADES 价格和市场状态具备时运行现金账本与交割单。</p><small>数据字段不足时不能声称精确复现真实成交。</small></div>
             <div class="readiness-row"><strong>PIT 生产准入</strong><span class="status blocked">阻断</span><p>数据中心持续补齐来源、版本、公告日和动态可交易状态。</p><small>当前非 PIT 面板不能通过机构级生产数据门禁。</small></div>
             <div class="readiness-row"><strong>模拟盘</strong><span class="status conditional">研究级</span><p>观察策略信号、持仓、权益、订单和 TCA 偏差。</p><small>模拟成交不等于券商回报，不构成生产授权。</small></div>
             <div class="readiness-row"><strong>真实资金发布</strong><span class="status blocked">人类审批</span><p>准备风险评审、容量、告警、回滚与小资金灰度方案。</p><small>LLM 和自动门禁都不能自行连接资金并放大风险。</small></div>

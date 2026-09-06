@@ -242,7 +242,7 @@ function renderResult() {
   head.replaceChildren(headerRow);
   body.replaceChildren(...result.rows.map(row => {
     const tr = document.createElement("tr");
-    [row.rank, row.ts_code, row.name, number(row.composite_score), percent(row.score_percentile), price(row.raw_close), price(row.research_close), currency(row.amount_cny), ...result.evaluated_factors.map(item => number(row.factor_scores[item.factor_id]))]
+    [row.rank, row.symbol, row.name, number(row.composite_score), percent(row.score_percentile), price(row.raw_close), price(row.research_close), currency(row.amount_usd), ...result.evaluated_factors.map(item => number(row.factor_scores[item.factor_id]))]
       .forEach(value => tr.append(element("td", "", value)));
     return tr;
   }));

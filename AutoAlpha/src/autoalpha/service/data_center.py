@@ -15,7 +15,7 @@ def build_data_center_snapshot(
     settings: Mapping[str, str],
     *,
     sync_status: Mapping[str, Any],
-    token_configured: bool,
+    gateway_ready: bool,
     events: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Return operational data status without ever returning credential material."""
@@ -52,7 +52,7 @@ def build_data_center_snapshot(
         ),
         "downloader": downloader,
         "data_products": products,
-        "credentials": {"tushare_token_configured": token_configured},
+        "credentials": {"ibkr_gateway_ready": gateway_ready},
         "schedule": {
             "enabled": settings.get("data_auto_update_enabled", "false").casefold() == "true",
             "hour": _integer(settings.get("data_update_hour"), 18),
@@ -105,7 +105,7 @@ def build_data_capability_matrix(
             allowed=research_ready,
             data_mode="FORWARD_ADJUSTED_RESEARCH_PANEL",
             summary=(
-                "可使用前复权研究价格、成交量与扩展研究字段构造截面因子。"
+                "可使用 ADJUSTED_LAST 研究价格与成交活动字段构造截面因子。"
                 if research_ready
                 else "研究面板缺少必要价格或活动字段。"
             ),
@@ -131,7 +131,7 @@ def build_data_capability_matrix(
             allowed=proxy_ready,
             data_mode="NON_PIT_PROXY_NEXT_OPEN_LEDGER",
             summary=(
-                "可使用未复权开盘价、整手、费用和开盘可买卖代理做研究级现金账本。"
+                "可使用 TRADES 开盘价、整数股、费用和开盘资格代理做研究级现金账本。"
                 if proxy_ready
                 else "缺少未复权执行价格或开盘可交易代理字段。"
             ),
@@ -157,9 +157,9 @@ def build_data_capability_matrix(
             label="模拟交易",
             level="PROXY_PAPER_READY" if proxy_ready else "BLOCKED",
             allowed=proxy_ready,
-            data_mode="NEXT_SESSION_OPEN_PROXY_T_PLUS_1",
+            data_mode="NEXT_SESSION_OPEN_PROXY",
             summary=(
-                "可做次日开盘代理成交、T+1、费用和交割单级模拟组合。"
+                "可做次日开盘代理成交、整数股、费用和交割单级模拟组合。"
                 if proxy_ready
                 else "模拟交易需要开盘执行代理与可买卖状态。"
             ),
@@ -173,7 +173,7 @@ def build_data_capability_matrix(
             allowed=strict_pit_ready,
             data_mode="STRICT_POINT_IN_TIME_CAPITAL_LEDGER",
             summary=(
-                "PIT 市场状态、上市退市、ST、停复牌和涨跌停约束已满足。"
+                "PIT 上市退市、停牌、开盘资格、行业和基准成员状态已满足。"
                 if strict_pit_ready
                 else "不能宣称生产可交易；需要补齐 PIT 市场状态和版本化基础数据。"
             ),
@@ -181,13 +181,10 @@ def build_data_capability_matrix(
             required_fields=[
                 "listing_date",
                 "delisting_date",
-                "is_st",
-                "is_suspended",
-                "limit_up",
-                "limit_down",
+                "is_halted",
                 "can_buy_open",
                 "can_sell_open",
-                "industry_code",
+                "sector_code",
                 "index_membership",
                 "free_float_market_cap",
             ],
@@ -270,38 +267,27 @@ def inspect_data_products(
     panel_first_date: str = "",
     panel_last_date: str = "",
 ) -> dict[str, Any]:
-    feature_root = root / "data" / "downloads" / "a_share_feature_store"
-    state_root = root / "data" / "state"
+    downloads = root / "downloads"
+    slice_files = list(downloads.glob("*.parquet")) if downloads.is_dir() else []
     products = []
     for product in data_product_catalog():
         dataset_id = str(product["dataset_id"])
         selected = dataset_id in selected_products
-        mandatory = dataset_id == "core_market"
-        download_selectable = not mandatory and str(product["sync_strategy"]) != "CATALOG"
+        integrated = str(product["integration_state"]) == "INTEGRATED"
+        mandatory = dataset_id in {"core_market", "execution_market", "tradability"}
+        download_selectable = integrated and not mandatory
         if mandatory:
-            selection_lock_reason = "核心行情由主数据流水线强制维护"
+            selection_lock_reason = "The canonical IBKR panel maintains this product together"
         elif not download_selectable:
-            selection_lock_reason = "该接口尚未实现可恢复的下载契约"
+            selection_lock_reason = "No point-in-time ingestion contract is implemented"
         else:
             selection_lock_reason = None
-        if dataset_id == "core_market":
-            source = root / "data" / "downloads" / "a_daily_cross_sectional_raw_adj"
-            state = read_json(str(state_root / "a_daily_cross_sectional_raw_adj.json")) or {}
-            manifest = read_json(str(source / "market_legacy_source.json")) or {}
-            files = sum(1 for _ in (source / "market_parquet").glob("*.parquet"))
-            completed = len(state.get("completed_dates", []))
-            failed = len(state.get("failed_dates", {}))
-            first_date = manifest.get("first_trade_date") or state.get("migration_start_date")
-            last_date = state.get("target_date")
-        else:
-            source = feature_root / dataset_id
-            manifest = read_json(str(source / "_manifest.json")) or {}
-            state = read_json(str(state_root / f"a_feature_{dataset_id}.json")) or {}
-            files = sum(1 for _ in source.glob("*.parquet")) if source.is_dir() else 0
-            completed = len(state.get("completed_dates", []))
-            failed = len(state.get("failed_dates", {}))
-            first_date = manifest.get("first_date")
-            last_date = manifest.get("last_date") or state.get("target_date")
+        source = downloads
+        files = len(slice_files) if integrated else 0
+        completed = files
+        failed = 0
+        first_date = panel_first_date or None
+        last_date = panel_last_date or None
         panel_fields = [str(value) for value in product.get("panel_fields", [])]
         panel_available = [value for value in panel_fields if value in panel_columns]
         research_fields = research_factor_fields or set()
@@ -311,27 +297,21 @@ def inspect_data_products(
         coverage_ready = bool(
             first_date
             and last_date
-            and (not panel_first_date or str(first_date) <= panel_first_date.replace("-", ""))
-            and (not panel_last_date or str(last_date) >= panel_last_date.replace("-", ""))
+            and (not panel_first_date or str(first_date) <= panel_first_date)
+            and (not panel_last_date or str(last_date) >= panel_last_date)
         )
-        if failed:
-            storage_state = "PARTIAL"
-        elif completed or files:
+        if files:
             storage_state = "READY"
-        elif product["integration_state"] == "CATALOG" and not download_selectable:
+        elif not integrated:
             storage_state = "CATALOG"
         else:
             storage_state = "NOT_DOWNLOADED"
-        if product["integration_state"] == "LIVE":
+        if integrated:
             research_state = (
                 "RESEARCH_READY"
-                if coverage_ready or research_contract_ready
+                if coverage_ready and set(panel_fields).issubset(panel_columns)
                 else "WAITING_FOR_COVERAGE"
             )
-        elif product["integration_state"] == "RAW_READY":
-            research_state = "RAW_DATA_ONLY"
-        elif download_selectable:
-            research_state = "RAW_DOWNLOAD_ONLY_REQUIRES_PIT_INTEGRATION"
         else:
             research_state = "CATALOG_ONLY"
         products.append(
@@ -381,38 +361,17 @@ def inspect_data_products(
 
 def inspect_downloader(root: Path) -> dict[str, Any]:
     root = root.expanduser()
-    cli = root / "sync_cli.py"
-    downloads = root / "data" / "downloads"
+    downloads = root / "downloads"
     tasks = []
     if downloads.is_dir():
-        for task in sorted(downloads.glob("a_daily_*_csv-parquet"), key=_mtime, reverse=True):
-            parquet = task / "parquet"
-            if not parquet.is_dir():
-                continue
-            adjustment = (
-                "qfq" if "_qfq_" in task.name else "none" if "_none_" in task.name else "unknown"
-            )
+        slices = sorted(downloads.glob("*.parquet"), key=_mtime, reverse=True)
+        if slices:
             tasks.append(
                 {
-                    "name": task.name,
-                    "adjustment": adjustment,
-                    "parquet_files": sum(1 for _ in parquet.glob("*.parquet")),
-                    "updated_at": datetime.fromtimestamp(task.stat().st_mtime)
-                    .astimezone()
-                    .isoformat(),
-                }
-            )
-        cross = downloads / "a_daily_cross_sectional_raw_adj"
-        market = cross / "market_parquet"
-        factors = cross / "adj_factor_parquet"
-        if market.is_dir() and factors.is_dir():
-            tasks.append(
-                {
-                    "name": cross.name,
-                    "adjustment": "raw_plus_adj_factor",
-                    "parquet_files": sum(1 for _ in market.glob("*.parquet"))
-                    + sum(1 for _ in factors.glob("*.parquet")),
-                    "updated_at": datetime.fromtimestamp(cross.stat().st_mtime)
+                    "name": "IBKR per-symbol daily slices",
+                    "adjustment": "adjusted_research_plus_split_adjusted_execution",
+                    "parquet_files": len(slices),
+                    "updated_at": datetime.fromtimestamp(slices[0].stat().st_mtime)
                     .astimezone()
                     .isoformat(),
                 }
@@ -420,14 +379,12 @@ def inspect_downloader(root: Path) -> dict[str, Any]:
     return {
         "root_path": str(root.resolve()) if root.exists() else str(root),
         "root_exists": root.is_dir(),
-        "sync_cli_available": cli.is_file(),
-        "python_available": (root / ".venv" / "bin" / "python").is_file(),
+        "source": "interactive_brokers_gateway",
+        "sync_managed_by_service": True,
         "download_tasks": tasks[:12],
-        "qfq_available": any(task["adjustment"] == "qfq" for task in tasks),
-        "raw_available": any(task["adjustment"] == "none" for task in tasks),
-        "cross_sectional_available": any(
-            task["adjustment"] == "raw_plus_adj_factor" for task in tasks
-        ),
+        "research_adjusted_available": bool(tasks),
+        "execution_split_adjusted_available": bool(tasks),
+        "panel_available": (root / "processed" / "daily_panel").is_dir(),
     }
 
 

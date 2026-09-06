@@ -17,6 +17,12 @@
 5. Publish outputs to `ArtifactRegistry`; only complete, checksum-valid outputs are visible.
 6. Record paper, shadow, or production fills and run TCA and drift monitoring.
 
+The bundled `run_daily_us.sh` scheduler is preview-only. Foreground paper-order submission requires
+`daily_run.py --submit --confirm --managed-account ACCOUNT`, a fresh and clean data audit, a
+dedicated matching paper account, no unmanaged positions, no existing open orders, clean broker
+previews, and a new durable daily submission key. The repository does not enable unattended or
+live-account submission.
+
 ## Research generation sequence
 
 1. Bind the immutable protocol, data fingerprint, candidate budget, and factor-family budget.

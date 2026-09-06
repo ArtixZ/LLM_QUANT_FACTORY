@@ -36,14 +36,14 @@ def test_buys_pay_no_regulatory_fees() -> None:
 def test_sells_pay_sec_and_taf() -> None:
     costs = USEquityExecutionCosts()
     breakdown = costs.fee_breakdown("SELL", notional=1_000_000.0, shares=10_000)
-    assert breakdown["sec_fee"] == pytest.approx(27.80)
-    assert breakdown["finra_taf"] == pytest.approx(1.66)
+    assert breakdown["sec_fee"] == pytest.approx(20.60)
+    assert breakdown["finra_taf"] == pytest.approx(1.95)
 
 
 def test_taf_is_capped_per_trade() -> None:
     costs = USEquityExecutionCosts()
     breakdown = costs.fee_breakdown("SELL", notional=1_000_000.0, shares=1_000_000)
-    assert breakdown["finra_taf"] == pytest.approx(8.30)
+    assert breakdown["finra_taf"] == pytest.approx(9.79)
 
 
 def test_zero_quantity_is_free() -> None:

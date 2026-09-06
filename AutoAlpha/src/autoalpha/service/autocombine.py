@@ -790,7 +790,7 @@ class AutoCombineWorker:
         analysis = await client.analyze(
             role="AUTOCOMBINE_PORTFOLIO_ARCHITECT",
             system_prompt=(
-                "You are the portfolio architecture role in an institutional A-share research "
+                "You are the portfolio architecture role in an institutional US-equity research "
                 "system. Select only existing factor_ids. Propose one static long-only composite "
                 "signal subset. Do not invent factors, inspect hidden periods, flip signs, or tune "
                 "decimal weights. Treat differently named factors with the same mechanism, fields, "

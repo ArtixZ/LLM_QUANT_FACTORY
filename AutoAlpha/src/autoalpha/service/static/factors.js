@@ -683,7 +683,7 @@ async function openFactorDetail(factor) {
   const historicalMetrics = Boolean(factor.protocol_stale);
   const metrics = historicalMetrics ? (factor.historical_metric_summary || {}) : (factor.metric_summary || {}), marginal = factor.marginal_contribution || {};
   renderDefinitionList("factorMetrics", [
-    ["主评价口径", historicalMetrics ? "历史协议，仅供诊断" : "统一主榜 2015–2024 · A股纯多周频代理"],
+    ["主评价口径", historicalMetrics ? "历史协议，仅供诊断" : "统一主榜 2015–2024 · US 股票纯多周频代理"],
     ["规范机制标签", factor.canonical_mechanism || "待知识回填"],
     ["机制摘要", factor.mechanism_summary || "暂无机制知识摘要"],
     ["单因子纯多门禁", factor.status === "SCREENED_OUT" ? `未通过：${factor.status_reason || "未记录原因"}` : "通过"],
@@ -696,7 +696,7 @@ async function openFactorDetail(factor) {
     ["主榜正收益窗口", percent(metrics.long_only_walk_forward_positive_fraction)],
     ["主榜 DSR 概率", percent(metrics.long_only_deflated_sharpe_probability)],
     ["主榜年化换手", number(metrics.long_only_annual_turnover)],
-    ["主榜容量", currency(metrics.long_only_capacity_cny)],
+    ["主榜容量", currency(metrics.long_only_capacity_usd)],
     ["组合边际净 IR", marginal.incremental_net_ir == null ? "未进入策略晋级" : number(marginal.incremental_net_ir)],
     ["同质化门禁", metrics.homogeneity_gate_passed === false ? `拦截：${metrics.homogeneity_gate_failure || "INSUFFICIENT_BEHAVIOR_NOVELTY"}` : (metrics.homogeneity_gate_passed === true ? "通过" : "未执行")],
     ["同质化新颖度", metrics.homogeneity_novelty_score == null ? "--" : number(metrics.homogeneity_novelty_score, 3)],
@@ -891,7 +891,7 @@ function number(value) { const parsed = numeric(value); return parsed === null ?
 function number4(value) { const parsed = numeric(value); return parsed === null ? "--" : parsed.toFixed(4); }
 function percent(value) { const parsed = numeric(value); return parsed === null ? "--" : `${(parsed * 100).toFixed(2)}%`; }
 function integer(value) { const parsed = numeric(value); return parsed === null ? "--" : Math.round(parsed).toLocaleString("zh-CN"); }
-function currency(value) { const parsed = numeric(value); return parsed === null ? "--" : new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", notation: "compact", maximumFractionDigits: 2 }).format(parsed); }
+function currency(value) { const parsed = numeric(value); return parsed === null ? "--" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 2 }).format(parsed); }
 function formatRankingValue(value, format) { return ({ percent, number4, integer, currency, score: number, number }[format] || number)(value); }
 function rankingUsesHistoricalEvidence(factor) { return Boolean(factor.protocol_stale && !["overall", "robustness", "return", "risk", "execution", "information", "long_only_overall", "long_only_return", "long_only_robustness", "long_only_risk", "long_only_execution", "marginal_incremental_net_ir", "source_iteration"].includes(libraryState.ranking)); }
 function formatClock(value) { return value instanceof Date && !Number.isNaN(value.valueOf()) ? value.toLocaleTimeString("zh-CN", { hour12: false }) : "--:--:--"; }

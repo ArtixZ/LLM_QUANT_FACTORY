@@ -44,7 +44,8 @@ function renderDataCenter(snapshot) {
   text("dataCenterSummary", hasWorkspace ? `${formatNumber(workspace.rows)} 行 · ${workspace.symbols || "--"} 只股票 · 指纹 ${fingerprint}` : snapshot.workspace_error || "数据工作区不可用");
   renderReadiness("research", hasWorkspace && workspace.price_research_ready, hasWorkspace ? "价格研究可用" : "不可用", hasWorkspace ? `${workspace.columns.length} 个字段` : "请检查目录");
   renderReadiness("proxy", Boolean(basis?.capital_ledger_proxy_ready), basis?.capital_ledger_proxy_ready ? "READY" : "BLOCKED", basis?.capital_ledger_proxy_ready ? "原始成交代理可用" : "缺少成交条件");
-  renderReadiness("pit", Boolean(basis?.capital_ledger_ready), basis?.capital_ledger_ready ? "READY" : "BLOCKED", basis?.capital_ledger_ready ? "严格状态可用" : "需 PIT 市场状态");
+  const strictPitReady = Boolean(workspace?.institutional_pit_ready && basis?.capital_ledger_ready);
+  renderReadiness("pit", strictPitReady, strictPitReady ? "READY" : "BLOCKED", strictPitReady ? "严格状态可用" : "需 PIT 市场状态");
   text("dataEnd", workspace?.last_trade_date || "--");
   text("dataRange", workspace ? `${workspace.first_trade_date} - ${workspace.last_trade_date}` : "--");
   text("dataRows", workspace ? formatNumber(workspace.rows) : "--");
@@ -58,8 +59,8 @@ function renderDataCenter(snapshot) {
   renderDownloader(snapshot.downloader);
   renderEvents(snapshot.recent_events || []);
   renderSyncProgress(sync.download_progress, Boolean(sync.running));
-  document.getElementById("startDataSync").disabled = Boolean(sync.running || sync.job_active) || !snapshot.credentials.tushare_token_configured || !snapshot.downloader.sync_cli_available;
-  text("syncActionNote", sync.job_active ? `同步作业已进入 Job Center：${sync.active_job?.job_id || "--"} · ${sync.active_job?.status || "--"}` : sync.running ? "同步正在运行；研究与手动回测会在同步期间保持隔离。" : sync.migration_message || sync.message || "增量下载不复权截面与复权因子；历史覆盖完整后原子重建研究面板。");
+  document.getElementById("startDataSync").disabled = Boolean(sync.running || sync.job_active) || !snapshot.credentials.ibkr_gateway_ready;
+  text("syncActionNote", sync.job_active ? `同步作业已进入 Job Center：${sync.active_job?.job_id || "--"} · ${sync.active_job?.status || "--"}` : sync.running ? "同步正在运行；研究与手动回测会在同步期间保持隔离。" : sync.migration_message || sync.message || "下载 ADJUSTED_LAST 与 TRADES 日线；审计通过后原子重建研究面板。");
   if (window.lucide) window.lucide.createIcons();
 }
 
@@ -70,14 +71,14 @@ function renderSyncProgress(progress, running) {
   if (!tasks.length) return;
   const active = progress.active_checkpoint || tasks[0];
   const percent = Number(active.checkpoint_percent || 0);
-  const label = active.adjustment === "raw_plus_adj_factor" ? "原始行情与复权因子" : active.adjustment === "feature" ? `${active.dataset_id || "扩展"} 数据产品` : active.adjustment === "qfq" ? "前复权" : "未复权";
+  const label = active.adjustment === "adjusted_research_plus_split_adjusted_execution" ? "IBKR 研究与执行行情" : `${active.dataset_id || "市场"} 数据产品`;
   text("syncProgressTitle", running ? `${label}数据同步中` : "最近可恢复断点");
   text("syncProgressPercent", `${percent.toFixed(2)}%`);
   document.getElementById("syncProgressBar").style.width = `${Math.max(0, Math.min(percent, 100))}%`;
   text("syncProgressDetail", active.last_message || "正在读取断点状态");
   document.getElementById("syncPhaseList").replaceChildren(...tasks.map(task => {
     const row = element("div", "sync-phase");
-    const phase = task.adjustment === "raw_plus_adj_factor" ? "原始行情 + 复权因子" : task.adjustment === "feature" ? `扩展 · ${task.dataset_id || task.task_key}` : task.adjustment === "qfq" ? "qfq 研究源" : "未复权执行源";
+    const phase = task.adjustment === "adjusted_research_plus_split_adjusted_execution" ? "ADJUSTED_LAST + TRADES" : `数据产品 · ${task.dataset_id || task.task_key}`;
     row.append(element("strong", "", phase), element("span", "", `${formatNumber(task.completed)} 完成 · ${formatNumber(task.failed)} 待重试`), element("small", "", `${Number(task.checkpoint_percent || 0).toFixed(2)}% · ${formatDate(task.updated_at)}`));
     return row;
   }));
@@ -99,10 +100,10 @@ function renderSettings(snapshot) {
   document.getElementById("dataUpdateHour").value = `${settings.hour}`;
   if (!document.getElementById("featureStartDate").value) document.getElementById("featureStartDate").value = workspace?.first_trade_date || "2020-01-01";
   if (!document.getElementById("featureEndDate").value) document.getElementById("featureEndDate").value = workspace?.last_trade_date || new Date().toISOString().slice(0, 10);
-  const token = snapshot.credentials.tushare_token_configured;
+  const token = snapshot.credentials.ibkr_gateway_ready;
   const tokenState = document.getElementById("tokenState");
   tokenState.classList.toggle("configured", token);
-  tokenState.querySelector("span").textContent = token ? "Tushare Token 已配置（不会在页面回显）" : "尚未配置 Tushare Token，无法下载增量数据";
+  tokenState.querySelector("span").textContent = token ? "IBKR Gateway 已连接" : "IBKR Gateway 不可达，无法同步数据";
 }
 
 function renderProducts() {
@@ -130,16 +131,16 @@ function renderProducts() {
     row.append(cell(categoryLabel(product.category)), cell(product.feature_family), cell(`${product.grain}\n${product.cadence}`), cell(product.availability), cell(pitLabel(product.pit_policy)));
     const coverage = document.createElement("td"); coverage.append(element("strong", `product-state ${String(product.storage_state).toLowerCase()}`, product.storage_state), element("small", "", product.completed ? `${formatNumber(product.completed)} 期 · ${product.first_date || "--"} — ${product.last_date || "--"}` : "尚无本地分区")); row.append(coverage);
     row.append(cell(product.panel_ready ? `${product.panel_available_fields.length} 字段` : product.panel_fields.length ? "待发布" : "原始层"));
-    const docs = document.createElement("a"); docs.href = product.documentation_url; docs.target = "_blank"; docs.rel = "noreferrer"; docs.className = "product-doc-link"; docs.title = "打开 Tushare 官方文档"; docs.append(document.createTextNode("官方")); row.append(cell(docs));
+    const docs = document.createElement("a"); docs.href = product.documentation_url; docs.target = "_blank"; docs.rel = "noreferrer"; docs.className = "product-doc-link"; docs.title = "打开 IBKR 官方文档"; docs.append(document.createTextNode("官方")); row.append(cell(docs));
     return row;
   }));
 }
 
 function selectRecommendedProducts() {
-  const recommended = new Set(["core_market", "daily_basic", "moneyflow", "stk_limit"]);
+  const recommended = new Set(["core_market", "execution_market", "tradability"]);
   (dataCenterState.snapshot?.data_products?.products || []).forEach(product => { product.selected = recommended.has(product.dataset_id); });
   renderProducts();
-  toast("已选择首批生产推荐数据产品，保存配置后生效");
+  toast("已选择 IBKR 研究面板所需数据产品，保存配置后生效");
 }
 
 function researchStateLabel(value) {
@@ -200,13 +201,13 @@ function renderCapabilityMatrix(matrix) {
 
 function renderDownloader(downloader) {
   text("downloaderPath", downloader.root_path || "--");
-  text("downloaderState", downloader.sync_cli_available && downloader.cross_sectional_available ? "READY" : "CHECK SETUP");
+  text("downloaderState", downloader.panel_available ? "READY" : "CHECK SETUP");
   const tasks = downloader.download_tasks || [];
   const root = document.getElementById("downloadTasks");
-  if (!tasks.length) { root.replaceChildren(element("p", "empty-data-state", "未发现可用的 A 股下载任务。")); return; }
+  if (!tasks.length) { root.replaceChildren(element("p", "empty-data-state", "未发现 IBKR 日线切片。")); return; }
   root.replaceChildren(...tasks.map(task => {
     const item = element("article", "download-task");
-    const label = task.adjustment === "raw_plus_adj_factor" ? "原始截面 + 复权因子" : task.adjustment === "qfq" ? "前复权遗留源" : task.adjustment === "none" ? "未复权遗留源" : "未知口径";
+    const label = task.adjustment === "adjusted_research_plus_split_adjusted_execution" ? "ADJUSTED_LAST 研究价 + TRADES 执行价" : "IBKR 数据切片";
     item.append(element("strong", "", label), element("code", "", task.name), element("span", "", `${formatNumber(task.parquet_files)} 个文件 · ${formatDate(task.updated_at)}`));
     return item;
   }));
@@ -231,8 +232,7 @@ async function saveSettings(event) {
   button.disabled = true;
   try {
     const selected = (dataCenterState.snapshot?.data_products?.products || []).filter(product => product.selected).map(product => product.dataset_id);
-    dataCenterState.snapshot = await api("/api/data-center/settings", { method: "PUT", body: JSON.stringify({ data_path: document.getElementById("dataPath").value.trim(), market_data_root: document.getElementById("marketDataRoot").value.trim(), tushare_token: document.getElementById("tushareToken").value, data_auto_update_enabled: document.getElementById("autoUpdateEnabled").checked, data_update_hour: Number(document.getElementById("dataUpdateHour").value), data_product_ids: selected }) });
-    document.getElementById("tushareToken").value = "";
+    dataCenterState.snapshot = await api("/api/data-center/settings", { method: "PUT", body: JSON.stringify({ data_path: document.getElementById("dataPath").value.trim(), market_data_root: document.getElementById("marketDataRoot").value.trim(), data_auto_update_enabled: document.getElementById("autoUpdateEnabled").checked, data_update_hour: Number(document.getElementById("dataUpdateHour").value), data_product_ids: selected }) });
     renderDataCenter(dataCenterState.snapshot);
     toast("数据配置已保存并记录审计日志");
   } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
@@ -259,5 +259,5 @@ function pitLabel(value) { return ({ AFTER_CLOSE: "收盘后", SESSION_STATE: "�
 function element(tag, className = "", content = "") { const node = document.createElement(tag); if (className) node.className = className; if (content !== "") node.textContent = content; return node; }
 function text(id, value) { document.getElementById(id).textContent = value; }
 function formatNumber(value) { const number = Number(value); return Number.isFinite(number) ? number.toLocaleString() : "--"; }
-function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "--" : date.toLocaleString("zh-CN", { hour12: false }); }
+function formatDate(value) { if (!value) return "--"; const date = new Date(value); return Number.isNaN(date.valueOf()) ? "--" : date.toLocaleString("zh-CN", { hour12: false }); }
 let toastTimer; function toast(message, error = false) { const node = document.getElementById("toast"); node.textContent = message; node.style.background = error ? "#a93430" : "#202a3b"; node.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => node.classList.remove("show"), 2600); }
