@@ -174,7 +174,7 @@ def test_formal_strategy_created_from_combination_experiment(tmp_path: Path) -> 
     assert strategy["signal_policy"]["factor_ids"] == ["F_1", "F_2"]
     assert strategy["rebalance_policy"]["schedule"] == "WEEKLY_FIRST_SESSION"
     assert strategy["execution_policy"]["execution_time"] == "NEXT_SESSION_OPEN"
-    assert strategy["cost_policy"]["sec_fee_bps_sell"] == 0.278
+    assert strategy["cost_policy"]["sec_fee_per_million_usd_sell"] == 20.60
     assert strategy["monitoring_policy"]["paper_first"] is True
     library = formal_strategy_library(store)
     summary = library["strategies"][0]["production_evidence_summary"]
@@ -216,16 +216,16 @@ def test_strategy_execution_package_exposes_trade_rules_and_blockers(tmp_path: P
     paper_contract = package["paper_trading_contract"]
     assert paper_contract["protocol"] == "AUTOALPHA_STRATEGY_TO_PAPER_PORTFOLIO_SEED_V1"
     assert paper_contract["compatible_engine"] == "PaperTradingEngine"
-    assert paper_contract["execution_protocol"] == "A_SHARE_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2"
+    assert paper_contract["execution_protocol"] == "US_EQUITY_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2"
     assert paper_contract["proxy_only"] is True
     assert paper_contract["required_operator_inputs"] == ["initial_cash_usd", "as_of_date"]
     assert paper_contract["paper_portfolio_seed"]["factor_ids"] == ["F_1", "F_2"]
     assert paper_contract["paper_portfolio_seed"]["weights"] == [0.6, 0.4]
     assert paper_contract["paper_portfolio_seed"]["gross_exposure"] == 0.9
     assert paper_contract["timing"]["execution_time"] == "NEXT_SESSION_OPEN"
-    assert paper_contract["tradability"]["t_plus_one_sell_lock"] is True
+    assert paper_contract["tradability"]["t_plus_one_sell_lock"] is False
     playbook = package["trading_playbook"]
-    assert playbook["protocol"] == "A_SHARE_LONG_ONLY_TRADING_PLAYBOOK_V1"
+    assert playbook["protocol"] == "US_EQUITY_LONG_ONLY_TRADING_PLAYBOOK_V1"
     assert playbook["portfolio_mode"] == "LONG_ONLY_CASH_EQUITY"
     assert playbook["signal_cutoff"] == "END_OF_DAY_AFTER_CLOSE"
     assert playbook["execution_window"] == "NEXT_SESSION_OPEN"

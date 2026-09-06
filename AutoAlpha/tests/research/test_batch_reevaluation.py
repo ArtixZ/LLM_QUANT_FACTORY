@@ -28,5 +28,5 @@ def test_batch_adjustments_are_order_independent_and_family_wide() -> None:
     assert adjusted["F_2"]["multiple_testing_fdr_passed"] is False
     assert adjusted["F_1"]["multiple_testing_family_size"] == 2
     assert adjusted["F_1"]["probability_backtest_overfitting"] == pbo
-    assert adjusted["F_1"]["multiple_testing_primary_basis"] == "A_SHARE_LONG_ONLY"
+    assert adjusted["F_1"]["multiple_testing_primary_basis"] == "US_EQUITY_LONG_ONLY"
     assert source["F_1"].get("multiple_testing_fdr_passed") is None

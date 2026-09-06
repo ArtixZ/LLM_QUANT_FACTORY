@@ -64,7 +64,7 @@ def run_capital_backtest(
     costs: USEquityExecutionCosts | None = None,
 ) -> CapitalBacktestReport:
     inspect_execution_data_basis(panel_path).require_capital_ledger()
-    data = _load_panel(panel_path, spec)
+    data = _load_panel(panel_path, spec, required_fields=_expression_fields(factor.expression))
     signal = _compile_signal(factor, data)
     market = _market_frame(data, spec)
     ledger = LedgerBacktester(
@@ -106,7 +106,7 @@ def write_capital_backtest_artifacts(
     curve.index.name = "trade_date"
     curve.to_csv(curve_path, float_format="%.10f")
     payload = {
-        "protocol": "a_share_capital_ledger_v1",
+        "protocol": "us_equity_capital_ledger_v1",
         "selection_warning": (
             "The factor was selected using prior experiment results; this full-period replay "
             "is selection-biased and is not an untouched out-of-sample estimate."
@@ -147,13 +147,20 @@ def factor_from_iteration(record: dict[str, Any]) -> FactorDefinition:
     )
 
 
-def _load_panel(panel_path: Path, spec: CapitalBacktestSpec) -> pd.DataFrame:
+def _load_panel(
+    panel_path: Path,
+    spec: CapitalBacktestSpec,
+    *,
+    required_fields: set[str] | None = None,
+) -> pd.DataFrame:
     warmup = pd.Timestamp(spec.start) - pd.Timedelta(days=400)
     columns = [
         "trade_date",
         "symbol",
         "open",
         "close",
+        "raw_open",
+        "raw_close",
         "adj_close",
         "vol",
         "amount",
@@ -163,6 +170,7 @@ def _load_panel(panel_path: Path, spec: CapitalBacktestSpec) -> pd.DataFrame:
         # loading it the market frame would silently fall back to bar validity.
         "can_buy_open",
         "can_sell_open",
+        *(required_fields or set()),
     ]
     frames = []
     for year in range(warmup.year, spec.end.year + 1):
@@ -206,6 +214,7 @@ def _market_frame(data: pd.DataFrame, spec: CapitalBacktestSpec) -> pd.DataFrame
     # rather than silently fall back to bar validity.
     for side in ("can_buy_open", "can_sell_open"):
         market[side] = valid & market[side].fillna(False)
+    market[["open", "close"]] = market[["raw_open", "raw_close"]].to_numpy()
     market.loc[~market["is_valid_ohlc"].fillna(False), ["open", "close"]] = np.nan
     return market.rename(columns={"trade_date": "date", "vol": "volume"})[
         ["date", "symbol", "open", "close", "volume", "can_buy_open", "can_sell_open"]

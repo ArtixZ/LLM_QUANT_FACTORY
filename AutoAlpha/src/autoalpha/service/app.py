@@ -232,8 +232,11 @@ class DataCenterSettingsRequest(BaseModel):
     def valid_products(cls, value: list[str]) -> list[str]:
         cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
         resolve_products(cleaned)
-        if "core_market" not in cleaned:
-            raise ValueError("core_market must remain enabled for the canonical research panel")
+        required = {"core_market", "execution_market", "tradability"}
+        if not required.issubset(cleaned):
+            raise ValueError(
+                "core_market, execution_market, and tradability must remain enabled"
+            )
         return cleaned
 
 
@@ -321,7 +324,7 @@ class ResearchProtocolPreviewRequest(BaseModel):
 
 class ResearchTaskRequest(BaseModel):
     name: str = Field(min_length=2, max_length=80)
-    market: Literal["CN_A", "HK", "US"] = "CN_A"
+    market: Literal["CN_A", "HK", "US"] = "US"
     data_path: str
     data_start: date | None = None
     data_end: date | None = None
@@ -369,11 +372,13 @@ class ManualBacktestRequest(BaseModel):
     ] = "MARKET_NEUTRAL_RESEARCH"
     selection_fraction: float = Field(default=0.10, gt=0, le=0.50)
     maximum_positions: int = Field(default=30, ge=1, le=300)
-    lot_size: int = Field(default=100, ge=100, le=10_000)
+    lot_size: int = Field(default=1, ge=1, le=10_000)
     maximum_volume_participation: float = Field(default=0.05, gt=0, le=0.50)
-    commission_bps_each_side: float = Field(default=1.5, ge=0, le=100)
-    sec_fee_bps_sell: float = Field(default=5.0, ge=0, le=100)
-    minimum_commission_usd: float = Field(default=5.0, ge=0, le=1000)
+    commission_per_share: float = Field(default=0.0035, ge=0, le=100)
+    minimum_commission_usd: float = Field(default=0.35, ge=0, le=1000)
+    maximum_commission_fraction: float = Field(default=0.01, gt=0, le=1)
+    sec_fee_per_million_usd_sell: float = Field(default=20.60, ge=0, le=1000)
+    finra_taf_per_share_sell: float = Field(default=0.000195, ge=0, le=1)
     slippage_bps_each_side: float = Field(default=0.0, ge=0, le=500)
     cost_stress_multiplier: float = Field(default=2.0, ge=1, le=10)
 
@@ -392,13 +397,6 @@ class ManualBacktestRequest(BaseModel):
     def positive_weights(cls, value: list[float] | None) -> list[float] | None:
         if value is not None and any(weight <= 0 for weight in value):
             raise ValueError("weights must be positive")
-        return value
-
-    @field_validator("lot_size")
-    @classmethod
-    def a_share_lot_size(cls, value: int) -> int:
-        if value % 100:
-            raise ValueError("lot_size must be a multiple of 100 shares")
         return value
 
     @model_validator(mode="after")
@@ -721,8 +719,11 @@ def _system_job_scheduler_status() -> dict[str, Any]:
     }
 
 
-def _ensure_legacy_research_task() -> None:
-    if store.research_task("legacy-ashare") is not None:
+PRIMARY_RESEARCH_TASK_ID = "primary-us-equity"
+
+
+def _ensure_primary_research_task() -> None:
+    if store.research_task(PRIMARY_RESEARCH_TASK_ID) is not None:
         return
     settings = store.settings()
     data_path = Path(settings.get("data_path", PROJECT_ROOT.parent / "data")).expanduser()
@@ -736,27 +737,28 @@ def _ensure_legacy_research_task() -> None:
         snapshot_hash = workspace.fingerprint
     except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError):
         pass
-    state = store.state()
     base_config = ResearchConfig.from_toml(CONFIG_PATH)
-    protocol = default_task_protocol(
-        data_start or base_config.splits.train.start.isoformat(),
-        data_end or base_config.splits.test.end.isoformat(),
-        base_config,
-        preserve_base=True,
+    protocol = (
+        default_task_protocol(data_start, data_end, base_config)
+        if data_start and data_end
+        else {}
     )
+    if snapshot_hash and data_start and data_end:
+        snapshot_hash = hashlib.sha256(
+            f"US|{snapshot_hash}|{data_start}|{data_end}".encode()
+        ).hexdigest()
     store.create_research_task(
-        task_id="legacy-ashare",
-        name="历史 A 股研究",
-        market="CN_A",
+        task_id=PRIMARY_RESEARCH_TASK_ID,
+        name="US Equity Primary Research",
+        market="US",
         data_path=str(data_path),
         data_start=data_start,
         data_end=data_end,
         snapshot_hash=snapshot_hash,
-        status=str(state["state"]),
-        run_id=state.get("run_id"),
+        status="READY" if snapshot_hash else "DATA_REQUIRED",
         protocol=protocol,
-        protocol_hash=protocol_fingerprint(protocol),
-        notes="服务升级前的单例研究记录已归档到此任务。",
+        protocol_hash=protocol_fingerprint(protocol) if protocol else None,
+        notes="Primary US-equity research task created from the configured data workspace.",
     )
 
 
@@ -888,7 +890,7 @@ def _factor_source_context(
             detail="Selected factors span different markets or data workspaces",
         )
     market, data_path = next(iter(contexts))
-    if market != "CN_A":
+    if market != "US":
         raise HTTPException(
             status_code=422,
             detail=f"The current screener and backtest engines do not support market {market}",
@@ -951,7 +953,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     }
     if missing_defaults:
         store.save_settings(missing_defaults)
-    _ensure_legacy_research_task()
+    _ensure_primary_research_task()
     _backfill_task_protocols()
     state = store.state()
     orphans = store.reconcile_orphaned_iterations()
@@ -1569,7 +1571,7 @@ async def create_session(payload: SessionRequest, response: Response) -> dict[st
 
 @app.get("/api/snapshot", dependencies=[Depends(_authorized)])
 async def snapshot() -> dict[str, Any]:
-    return _research_workspace_snapshot("legacy-ashare")
+    return _research_workspace_snapshot(PRIMARY_RESEARCH_TASK_ID)
 
 
 def _research_workspace_snapshot(task_id: str) -> dict[str, Any]:
@@ -1607,7 +1609,7 @@ def _research_workspace_snapshot(task_id: str) -> dict[str, Any]:
             **settings,
             "service_variant": os.getenv("AUTOALPHA_VARIANT", "STANDARD"),
             "api_key_configured": vault.configured(),
-            "tushare_token_configured": data_sync_worker.token_configured(),
+            "ibkr_gateway_ready": data_sync_worker.gateway_ready(),
             "service_token_required": bool(os.getenv("AUTOALPHA_SERVICE_TOKEN")),
         },
         "metrics": store.metric_history(run_id=run_id) if run_id else [],
@@ -2804,7 +2806,7 @@ async def data_center_snapshot() -> dict[str, Any]:
     return build_data_center_snapshot(
         store.settings(),
         sync_status=data_sync_worker.status(),
-        token_configured=data_sync_worker.token_configured(),
+        gateway_ready=data_sync_worker.gateway_ready(),
         events=store.events(limit=300),
     )
 
@@ -2823,9 +2825,9 @@ async def research_task_index() -> dict[str, Any]:
         "tasks": tasks,
         "defaults": {"data_path": str(default_data_path)},
         "markets": [
-            {"value": "CN_A", "label": "A 股", "enabled": True},
-            {"value": "HK", "label": "港股", "enabled": True},
-            {"value": "US", "label": "美股", "enabled": True},
+            {"value": "US", "label": "US equities", "enabled": True},
+            {"value": "CN_A", "label": "A 股", "enabled": False},
+            {"value": "HK", "label": "港股", "enabled": False},
         ],
         "summary": {
             "task_count": len(tasks),
@@ -3153,15 +3155,35 @@ async def refresh_factor_library(
 
 
 def _factor_library_cache_miss_payload(cached: dict[str, Any] | None) -> dict[str, Any]:
+    research_tasks = [
+        {"task_id": task["task_id"], "name": task["name"], "market": task["market"]}
+        for task in store.research_tasks()
+    ]
+    data: dict[str, Any] = {}
+    try:
+        settings = store.settings()
+        workspace = inspect_data_workspace(Path(settings["data_path"]))
+        execution_basis = inspect_execution_data_basis(Path(workspace.panel_path))
+        data = {
+            "path": workspace.root_path,
+            "first_trade_date": workspace.first_trade_date,
+            "last_trade_date": workspace.last_trade_date,
+            "fingerprint": workspace.fingerprint,
+            "price_research_ready": workspace.price_research_ready,
+            "institutional_pit_ready": workspace.institutional_pit_ready,
+            "execution_basis": execution_basis.to_dict(),
+        }
+    except (FileNotFoundError, RuntimeError, TypeError, ValueError, OSError):
+        pass
     return {
         "api_payload_protocol": "MATERIALIZED_FACTOR_LIBRARY_API_V1",
         "materialized": False,
         "read_only": True,
         "cache_status": "STALE" if cached else "MISSING",
-        "summary": {},
+        "summary": {"factor_count": 0},
         "factors": [],
-        "research_tasks": [],
-        "data": {},
+        "research_tasks": research_tasks,
+        "data": data,
         "knowledge_integrity": (
             (cached.get("payload") or {}).get("knowledge_integrity") if cached else None
         ),
@@ -4237,9 +4259,11 @@ async def run_manual_backtest(payload: ManualBacktestRequest) -> dict[str, Any]:
                     maximum_positions=payload.maximum_positions,
                     lot_size=payload.lot_size,
                     maximum_volume_participation=payload.maximum_volume_participation,
-                    commission_bps_each_side=payload.commission_bps_each_side,
-                    sec_fee_bps_sell=payload.sec_fee_bps_sell,
+                    commission_per_share=payload.commission_per_share,
                     minimum_commission_usd=payload.minimum_commission_usd,
+                    maximum_commission_fraction=payload.maximum_commission_fraction,
+                    sec_fee_per_million_usd_sell=payload.sec_fee_per_million_usd_sell,
+                    finra_taf_per_share_sell=payload.finra_taf_per_share_sell,
                     slippage_bps_each_side=payload.slippage_bps_each_side,
                     cost_stress_multiplier=payload.cost_stress_multiplier,
                 ),
@@ -4330,10 +4354,7 @@ async def _settings_center_snapshot() -> dict[str, Any]:
             "api_key_source": (
                 "environment" if os.getenv("AUTOALPHA_API_KEY") else "system_keychain"
             ),
-            "tushare_token_configured": data_sync_worker.token_configured(),
-            "tushare_token_source": (
-                "environment" if os.getenv("TUSHARE_TOKEN") else "system_keychain"
-            ),
+            "ibkr_gateway_ready": data_sync_worker.gateway_ready(),
             "secret_material_returned": False,
         },
         "operational": operational,
@@ -4586,8 +4607,8 @@ async def start_data_sync(payload: DataSyncRequest) -> dict[str, Any]:
             raise HTTPException(status_code=409, detail=str(error)) from error
     if data_sync_worker.alive:
         raise HTTPException(status_code=409, detail="A market-data sync is already running")
-    if not data_sync_worker.token_configured():
-        raise HTTPException(status_code=409, detail="Tushare Token is not configured")
+    if not data_sync_worker.gateway_ready():
+        raise HTTPException(status_code=409, detail="The IBKR gateway is not reachable")
     existing = _existing_system_job_by_type(
         "market_data_sync",
         queue=payload.queue,
@@ -4686,20 +4707,20 @@ async def start_run() -> dict[str, Any]:
     if data_sync_worker.alive:
         raise HTTPException(status_code=409, detail="Wait for the market-data refresh to finish")
     try:
-        return await research_manager.start("legacy-ashare")
+        return await research_manager.start(PRIMARY_RESEARCH_TASK_ID)
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.post("/api/run/stop", dependencies=[Depends(_authorized)])
 async def stop_run() -> dict[str, Any]:
-    return await research_manager.stop("legacy-ashare")
+    return await research_manager.stop(PRIMARY_RESEARCH_TASK_ID)
 
 
 @app.post("/api/run/baseline", dependencies=[Depends(_authorized)])
 async def run_baseline() -> dict[str, Any]:
     try:
-        return await research_manager.run_genesis_baseline("legacy-ashare")
+        return await research_manager.run_genesis_baseline(PRIMARY_RESEARCH_TASK_ID)
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 

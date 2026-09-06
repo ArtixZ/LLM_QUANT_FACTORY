@@ -98,7 +98,13 @@ def plan_orders(
     return orders
 
 
-def build_ib_order(planned: PlannedOrder, *, account: str, transmit: bool = False) -> Any:
+def build_ib_order(
+    planned: PlannedOrder,
+    *,
+    account: str,
+    transmit: bool = False,
+    order_reference: str = "",
+) -> Any:
     """Construct an ``ib_async`` order object. ``transmit`` stays False by default."""
     from ib_async import LimitOrder, MarketOrder
 
@@ -110,6 +116,7 @@ def build_ib_order(planned: PlannedOrder, *, account: str, transmit: bool = Fals
             order.tif = MARKET_ON_OPEN_TIF
     order.account = account
     order.transmit = transmit
+    order.orderRef = order_reference
     return order
 
 
@@ -149,6 +156,7 @@ def submit_plan(
     contracts: Mapping[str, USEquity],
     *,
     confirm: bool = False,
+    order_reference_prefix: str = "",
 ) -> list[Any]:
     """Transmit a reviewed plan. Requires a writable session and explicit confirmation.
 
@@ -164,10 +172,28 @@ def submit_plan(
         raise OrderTransmissionBlocked(
             "Gateway session is read-only; rebuild it with GatewaySettings.writable()"
         )
+    if not order_reference_prefix.strip():
+        raise OrderTransmissionBlocked("A stable order-reference prefix is required")
+    missing = sorted({planned.symbol for planned in plan if planned.symbol not in contracts})
+    if missing:
+        raise OrderTransmissionBlocked(
+            "Cannot submit a partial plan; unresolved contracts: " + ", ".join(missing)
+        )
+    prepared = [
+        (
+            planned,
+            contracts[planned.symbol],
+            build_ib_order(
+                planned,
+                account=gateway.account,
+                transmit=True,
+                order_reference=f"{order_reference_prefix}-{index:02d}",
+            ),
+        )
+        for index, planned in enumerate(plan, start=1)
+    ]
     trades: list[Any] = []
-    for planned in plan:
-        equity = contracts[planned.symbol]
-        order = build_ib_order(planned, account=gateway.account, transmit=True)
+    for planned, equity, order in prepared:
         logger.info(
             "transmitting %s %s x%s (%s)",
             planned.action,

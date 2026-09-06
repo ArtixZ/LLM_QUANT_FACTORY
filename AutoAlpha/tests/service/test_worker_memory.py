@@ -275,7 +275,7 @@ def test_multiple_testing_and_frozen_portfolio_identity_are_deterministic() -> N
     assert adjusted["multiple_testing_fdr_passed"] is True
     assert adjusted["multiple_testing_family_size"] == 2
     assert adjusted["multiple_testing_scope"] == "CUMULATIVE_ALL_GENERATIONS"
-    assert adjusted["multiple_testing_primary_basis"] == "A_SHARE_LONG_ONLY"
+    assert adjusted["multiple_testing_primary_basis"] == "US_EQUITY_LONG_ONLY"
     assert 0 <= adjusted["probability_backtest_overfitting"] <= 1
     assert first == second
     assert len(first) == 64

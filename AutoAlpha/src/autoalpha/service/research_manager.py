@@ -62,8 +62,8 @@ class ResearchTaskManager:
         config = ResearchConfig.from_toml(self.config_path)
         blockers: list[str] = []
         snapshot_changed = False
-        if task["market"] != "CN_A":
-            blockers.append("当前研究评估器仅支持 A 股；目标市场数据适配器尚未接入")
+        if task["market"] != "US":
+            blockers.append("The current research evaluator supports US equities only")
         if not task.get("snapshot_hash"):
             blockers.append("数据快照尚未建立")
         start = str(task.get("data_start") or "")
@@ -95,8 +95,8 @@ class ResearchTaskManager:
                 execution_basis = inspect_execution_data_basis(Path(workspace.panel_path))
                 if not execution_basis.capital_ledger_proxy_ready:
                     blockers.append(
-                        "A股策略晋级需要非PIT交易代理数据："
-                        + "；".join(execution_basis.proxy_blockers)
+                        "US strategy research requires a non-PIT execution proxy: "
+                        + "; ".join(execution_basis.proxy_blockers)
                     )
             fold_capacity = panel_validation_fold_capacity(
                 protocol, Path(workspace.panel_path)

@@ -76,8 +76,11 @@ class GlobalSettingsValues(BaseModel):
     def valid_products(cls, value: list[str]) -> list[str]:
         cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
         resolve_products(cleaned)
-        if "core_market" not in cleaned:
-            raise ValueError("core_market must remain enabled")
+        required = {"core_market", "execution_market", "tradability"}
+        if not required.issubset(cleaned):
+            raise ValueError(
+                "core_market, execution_market, and tradability must remain enabled"
+            )
         return cleaned
 
     @model_validator(mode="after")
@@ -156,8 +159,10 @@ def default_settings(project_root: Path) -> dict[str, Any]:
         "proposal_batch_size": 3,
         "maximum_active_factors": 5,
         "research_concurrency": int(os.getenv("AUTOALPHA_MAX_CONCURRENT_RESEARCH", "2")),
-        "data_path": os.getenv("AUTOALPHA_DATA_PATH", str(project_root.parent / "data")),
-        "market_data_root": str(Path.home() / "MarketData" / "Ashare"),
+        "data_path": os.getenv(
+            "AUTOALPHA_DATA_PATH", str(Path.home() / "MarketData" / "US")
+        ),
+        "market_data_root": str(Path.home() / "MarketData" / "US"),
         "data_auto_update_enabled": True,
         "data_update_hour": 18,
         "data_product_ids": list(DEFAULT_PRODUCT_IDS),
@@ -388,7 +393,6 @@ def settings_catalog() -> list[dict[str, Any]]:
                 _field(
                     "data_update_hour", "每日更新小时", "number", "下次调度", "数据库", 0, 23, 1
                 ),
-                _field("tushare_token", "Tushare Token", "secret", "立即", "系统 Keychain"),
                 _field(
                     "data_product_ids",
                     "启用的数据产品",
@@ -404,7 +408,8 @@ def settings_catalog() -> list[dict[str, Any]]:
                                     if item["integration_state"] == "CATALOG"
                                     else item["description"]
                                 ),
-                                "disabled": item["dataset_id"] == "core_market"
+                                "disabled": item["dataset_id"]
+                                in {"core_market", "execution_market", "tradability"}
                                 or item["integration_state"] == "CATALOG",
                         }
                         for item in data_product_catalog()

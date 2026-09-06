@@ -13,15 +13,13 @@
 # daily_run.py reports its own success and failure. This wrapper only covers
 # the cases it cannot: the gateway never coming up, or Python never starting.
 #
-# It never submits orders. Add --submit --confirm below only when you have
-# decided to let the job trade.
+# Scheduled runs are deliberately preview-only. Broker submission remains a
+# foreground operation through daily_run.py --submit --confirm --managed-account.
 
 set -uo pipefail   # NOT -e: the EXIT trap must fire on every path.
 
 # Resolve the project from this script's own location so a clone works anywhere.
 PROJECT_ROOT="${QUANTFACTORY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-PYTHON="${QUANTFACTORY_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
-NOTIFY="${QUANTFACTORY_NOTIFY_SCRIPT:-}"
 LOG_DIR="$PROJECT_ROOT/logs/scheduler"
 IBKR_HOST="${IBKR_HOST:-127.0.0.1}"
 IBKR_PORT="${IBKR_PORT:-4002}"
@@ -33,19 +31,33 @@ RUN_LOG="$LOG_DIR/run-${DATE_TAG}.log"
 cd "$PROJECT_ROOT" || exit 3
 
 log() { printf '[run_daily_us] %s\n' "$*" >> "$RUN_LOG"; }
+# NOTIFY is resolved after the env files below, so .env.local can set it.
 notify() {
   [[ -n "$NOTIFY" && -x "$NOTIFY" ]] && "$NOTIFY" "$1" "$2" "${3:-info}" "quantfactory" || true
 }
 
+source_env() {
+  [[ -n "${1:-}" && -f "$1" ]] || return 0
+  set -a
+  # shellcheck disable=SC1090
+  source "$1"
+  set +a
+}
+
+# $PROJECT_ROOT/.env.local holds this host's paths. It is gitignored, so the
+# repo stays portable while the job stays configured; under launchd's empty
+# environment it is the only thing that makes notification work. It is sourced
+# first because it is what sets QUANTFACTORY_ENV_FILES, the colon-separated
+# list of credential files loaded after it.
+source_env "$PROJECT_ROOT/.env.local"
 IFS=':' read -r -a ENV_FILES <<< "${QUANTFACTORY_ENV_FILES:-}"
 for env in "${ENV_FILES[@]:-}"; do
-  if [[ -n "$env" && -f "$env" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$env"
-    set +a
-  fi
+  source_env "$env"
 done
+
+# Resolved here, not above: .env.local is what supplies these under launchd.
+PYTHON="${QUANTFACTORY_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
+NOTIFY="${QUANTFACTORY_NOTIFY_SCRIPT:-}"
 
 {
   echo "============================================================"
@@ -97,6 +109,7 @@ if [[ "$gateway_up" == "0" ]]; then
 fi
 
 STAGE="ran"
+log "preview only; scheduled broker submission is disabled"
 log "Launching daily_run.py..."
 "$PYTHON" -u scripts/daily_run.py >> "$RUN_LOG" 2>&1
 RUN_EXIT_CODE=$?

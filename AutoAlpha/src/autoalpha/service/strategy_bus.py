@@ -88,7 +88,7 @@ def build_strategy_bus_snapshot(
                 "FACTOR_CANDIDATE -> FACTOR_CLUSTER -> COMBINATION_CANDIDATE -> "
                 "STRATEGY_VERSION -> PAPER_PORTFOLIO -> PRODUCTION_CANDIDATE"
             ),
-            "primary_metric_convention": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+            "primary_metric_convention": "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
             "diagnostic_metric_policy": "long_short_ic_is_diagnostic_only",
         },
     }
@@ -1065,7 +1065,7 @@ def strategy_execution_package(
                 "sell": "require_can_sell_open_or_proxy",
                 "blocked_order_policy": "retain_position_or_skip_order_and_audit",
             },
-            "lot_size": 100,
+            "lot_size": 1,
         },
         "paper_trading_contract": _strategy_paper_trading_contract(
             strategy=strategy,
@@ -1116,7 +1116,7 @@ def _strategy_paper_trading_contract(
     return {
         "protocol": "AUTOALPHA_STRATEGY_TO_PAPER_PORTFOLIO_SEED_V1",
         "compatible_engine": "PaperTradingEngine",
-        "execution_protocol": "A_SHARE_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2",
+        "execution_protocol": "US_EQUITY_PAPER_NEXT_OPEN_PROXY_EXECUTION_V2",
         "proxy_only": True,
         "production_caveat": "NON_PIT_PROXY_RESEARCH_AND_PAPER_ONLY",
         "required_operator_inputs": ["initial_cash_usd", "as_of_date"],
@@ -1131,7 +1131,7 @@ def _strategy_paper_trading_contract(
                 or cost_policy.get("default_slippage_bps_each_side")
                 or 5.0
             ),
-            "market": strategy.get("market") or "CN_A",
+            "market": strategy.get("market") or "US",
             "source_strategy_uid": strategy.get("strategy_uid"),
             "source_strategy_version": strategy.get("version"),
         },
@@ -1144,7 +1144,7 @@ def _strategy_paper_trading_contract(
         "tradability": {
             "buy": "can_buy_open_or_proxy_required",
             "sell": "can_sell_open_or_proxy_required",
-            "t_plus_one_sell_lock": True,
+            "t_plus_one_sell_lock": False,
             "blocked_order_policy": "skip_or_retain_and_audit",
         },
     }
@@ -1163,7 +1163,7 @@ def _strategy_trading_playbook(
     gross_exposure = float(risk_policy.get("gross_exposure") or 0.0)
     maximum_positions = int(risk_policy.get("maximum_positions") or selection_count or 0)
     return {
-        "protocol": "A_SHARE_LONG_ONLY_TRADING_PLAYBOOK_V1",
+        "protocol": "US_EQUITY_LONG_ONLY_TRADING_PLAYBOOK_V1",
         "portfolio_mode": "LONG_ONLY_CASH_EQUITY",
         "signal_cutoff": signal_policy.get("signal_time") or "END_OF_DAY_AFTER_CLOSE",
         "rebalance_trigger": rebalance_policy.get("schedule") or "WEEKLY_FIRST_SESSION",
@@ -1189,18 +1189,22 @@ def _strategy_trading_playbook(
                 gross_exposure / maximum_positions if maximum_positions else None
             ),
             "cash_reserve": max(0.0, 1.0 - gross_exposure),
-            "lot_size": 100,
+            "lot_size": 1,
             "weighting": "equal_position_value_after_factor_selection",
         },
         "blocked_order_policy": {
             "buy_blocked": "skip_unbuyable_target_and_keep_cash",
             "sell_blocked": "retain_position_until_next_tradable_rebalance",
-            "t_plus_one": "same_day_buys_cannot_be_sold_until_next_session",
+            "settlement": "same-day sells are permitted; settled-cash rules depend on account type",
             "audit": "record_blocked_order_with_reason_and_market_state",
         },
         "cost_assumptions": {
-            "commission_bps_each_side": cost_policy.get("commission_bps_each_side"),
-            "sec_fee_bps_sell": cost_policy.get("sec_fee_bps_sell"),
+            "commission_per_share": cost_policy.get("commission_per_share"),
+            "minimum_commission_usd": cost_policy.get("minimum_commission_usd"),
+            "sec_fee_per_million_usd_sell": cost_policy.get(
+                "sec_fee_per_million_usd_sell"
+            ),
+            "finra_taf_per_share_sell": cost_policy.get("finra_taf_per_share_sell"),
             "slippage_model": cost_policy.get("slippage_model"),
         },
         "disable_conditions": [
@@ -1583,7 +1587,7 @@ def create_formal_strategy_from_experiment(
         strategy_uid=strategy_uid,
         source_experiment_id=experiment_id,
         name=name or experiment["title"],
-        market=experiment.get("market") or "CN_A",
+        market=experiment.get("market") or "US",
         lifecycle=lifecycle,
         signal_policy={
             "factor_ids": factor_ids,
@@ -1609,8 +1613,11 @@ def create_formal_strategy_from_experiment(
             "capacity_usd": _metric(experiment["metrics"], "portfolio_capacity_usd"),
         },
         cost_policy={
-            "commission_bps_each_side": 0.5,
-            "sec_fee_bps_sell": 0.278,
+            "commission_per_share": 0.0035,
+            "minimum_commission_usd": 0.35,
+            "maximum_commission_fraction": 0.01,
+            "sec_fee_per_million_usd_sell": 20.60,
+            "finra_taf_per_share_sell": 0.000195,
             "slippage_model": "CONFIGURABLE_BPS",
         },
         monitoring_policy={
@@ -1622,7 +1629,7 @@ def create_formal_strategy_from_experiment(
             **evidence,
             "source_experiment_id": experiment_id,
             "source_system": experiment["source_system"],
-            "primary_metric_convention": "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
+            "primary_metric_convention": "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY",
         },
     )
 
@@ -1967,7 +1974,7 @@ def _sync_factor_candidates(
             source_id=factor_id,
             title=str(factor.get("name") or factor_id),
             status=str(factor.get("status") or "UNKNOWN"),
-            market=str(factor.get("source_market") or "CN_A"),
+            market=str(factor.get("source_market") or "US"),
             metrics=metrics,
             evidence={
                 "factor_id": factor_id,
@@ -2009,7 +2016,7 @@ def _sync_factor_clusters(
             source_id=cluster_id,
             title=f"{cluster_id} · {leader['name']}",
             status="ACTIVE",
-            market="CN_A",
+            market=str(leader.get("source_market") or "US"),
             metrics={
                 "cluster_size": len(members),
                 "average_long_only_score": _average(
@@ -2132,7 +2139,7 @@ def _sync_paper_portfolios(store: ServiceStore, factor_nodes: dict[str, str]) ->
             source_id=str(portfolio["id"]),
             title=str(portfolio["name"]),
             status=str(portfolio["status"]),
-            market=str(config.get("market") or "CN_A"),
+            market=str(config.get("market") or "US"),
             metrics={
                 "nav_usd": portfolio.get("nav_usd"),
                 "cash_usd": portfolio.get("cash_usd"),

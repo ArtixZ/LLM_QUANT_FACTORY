@@ -32,7 +32,7 @@ class VectorBacktestConfig:
     maximum_positions_per_side: int | None = None
     long_only: bool = False
     commission_bps_each_side: float = 0.5
-    sec_fee_bps_sell: float = 0.278
+    sec_fee_bps_sell: float = 0.206
     slippage_bps_each_side: float = 0.0
     cost_stress_multiplier: float = 2.0
     cost_model: CostModel = "side_aware"

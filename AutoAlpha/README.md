@@ -1,7 +1,7 @@
 # AutoAlpha Research Platform
 
 AutoAlpha is the research-platform component of the
-[MultiFactorAshare monorepo](../README_EN.md). It provides auditable LLM-assisted factor discovery,
+[LLM_QUANT_FACTORY monorepo](../README_EN.md). It provides auditable LLM-assisted factor discovery,
 factor knowledge management, deterministic portfolio search, long-only backtesting, strategy
 versioning and local research control planes.
 
@@ -9,7 +9,7 @@ The project is source-available under the PolyForm Noncommercial License 1.0.0. 
 requires separate prior written permission. Market data, API credentials, runtime databases,
 private model conversations and hidden-test results are not included.
 
-> Current local A-share validation uses a non-PIT execution proxy. It is suitable for research
+> Current local US-equity validation uses a current-membership, non-PIT execution proxy. It is suitable for research
 > diagnostics, not for production trading approval or investment advice.
 
 ## Quick start
@@ -99,7 +99,7 @@ dataset.
 
 ## Research protocol
 
-The default protocol is A-share long-only first:
+The default protocol is US-equity long-only first:
 
 - end-of-day signal availability;
 - execution no earlier than the next session open;
@@ -140,8 +140,9 @@ with the outer package:
 
 ```bash
 cd ..
-uv run mf-data audit
-uv run mf-data build
+uv run mf-us audit
+uv run mf-us catalog
+uv run mf-us panel
 ```
 
 Current non-PIT data must fail closed for production when historical listing, delisting, ST,

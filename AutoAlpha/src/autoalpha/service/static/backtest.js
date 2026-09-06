@@ -59,9 +59,9 @@ function bindBacktestControls() {
   [
     "backtestEngine", "executionDataMode", "vectorCostModel", "grossExposure", "holdingPeriod",
     "rebalanceSchedule", "productTemplate", "selectionFraction", "maximumPositions",
-    "maximumVolumeParticipation", "lotSize", "openingLimitThreshold",
-    "costStressMultiplier", "commissionBps", "stampDutyBps", "transferFeeBps",
-    "minimumCommission", "slippageBps", "historicalFeeSchedule",
+    "maximumVolumeParticipation", "lotSize", "maximumCommissionFraction",
+    "costStressMultiplier", "commissionPerShare", "secFeePerMillion",
+    "finraTafPerShare", "minimumCommission", "slippageBps",
   ].forEach(id => document.getElementById(id).addEventListener("input", markPresetCustom));
 }
 
@@ -96,13 +96,12 @@ function applyBacktestPreset() {
     maximum_positions: "maximumPositions",
     lot_size: "lotSize",
     maximum_volume_participation: "maximumVolumeParticipation",
-    opening_limit_threshold: "openingLimitThreshold",
-    commission_bps_each_side: "commissionBps",
-    stamp_duty_bps_sell: "stampDutyBps",
-    transfer_fee_bps_each_side: "transferFeeBps",
-    minimum_commission_cny: "minimumCommission",
+    commission_per_share: "commissionPerShare",
+    minimum_commission_usd: "minimumCommission",
+    maximum_commission_fraction: "maximumCommissionFraction",
+    sec_fee_per_million_usd_sell: "secFeePerMillion",
+    finra_taf_per_share_sell: "finraTafPerShare",
     slippage_bps_each_side: "slippageBps",
-    use_historical_fee_schedule: "historicalFeeSchedule",
     cost_stress_multiplier: "costStressMultiplier",
   };
   Object.entries(preset.settings).forEach(([key, value]) => {
@@ -165,8 +164,8 @@ function applyEngineDefaults(changeTemplate = true) {
   }
   text("engineLimitation", ledger
     ? (proxy
-      ? "原始成交价、现金与整手约束 · 非 PIT 代理，生成研究级交割单"
-      : "逐笔现金、整手、涨跌停与成交量约束 · 生成交割单")
+      ? "TRADES 成交价、现金与整数股约束 · 非 PIT 代理，生成研究级交割单"
+      : "逐笔现金、整数股、停牌状态与成交量约束 · 生成交割单")
     : "矩阵计算 · 次日开盘执行 · 可复现研究口径");
 }
 
@@ -319,7 +318,7 @@ async function runBacktest(event) {
         weights: entries.map(([, weight]) => Number(weight)),
         start_date: document.getElementById("startDate").value,
         end_date: document.getElementById("endDate").value,
-        initial_cash_cny: Number(document.getElementById("initialCash").value),
+        initial_cash_usd: Number(document.getElementById("initialCash").value),
         gross_exposure: Number(document.getElementById("grossExposure").value),
         holding_period_days: Number(document.getElementById("holdingPeriod").value),
         backtest_preset: document.getElementById("backtestPreset").value,
@@ -332,13 +331,12 @@ async function runBacktest(event) {
         maximum_positions: Number(document.getElementById("maximumPositions").value),
         lot_size: Number(document.getElementById("lotSize").value),
         maximum_volume_participation: Number(document.getElementById("maximumVolumeParticipation").value),
-        opening_limit_threshold: Number(document.getElementById("openingLimitThreshold").value),
-        commission_bps_each_side: Number(document.getElementById("commissionBps").value),
-        stamp_duty_bps_sell: Number(document.getElementById("stampDutyBps").value),
-        transfer_fee_bps_each_side: Number(document.getElementById("transferFeeBps").value),
-        minimum_commission_cny: Number(document.getElementById("minimumCommission").value),
+        commission_per_share: Number(document.getElementById("commissionPerShare").value),
+        minimum_commission_usd: Number(document.getElementById("minimumCommission").value),
+        maximum_commission_fraction: Number(document.getElementById("maximumCommissionFraction").value),
+        sec_fee_per_million_usd_sell: Number(document.getElementById("secFeePerMillion").value),
+        finra_taf_per_share_sell: Number(document.getElementById("finraTafPerShare").value),
         slippage_bps_each_side: Number(document.getElementById("slippageBps").value),
-        use_historical_fee_schedule: document.getElementById("historicalFeeSchedule").checked,
         cost_stress_multiplier: Number(document.getElementById("costStressMultiplier").value),
       }),
     });
@@ -366,7 +364,7 @@ function renderResult(result) {
   text("metricSharpe", number(metrics.sharpe_ratio));
   text("metricDrawdown", percent(metrics.max_drawdown));
   text("metricTotalReturn", percent(metrics.total_return));
-  text("metricProfit", currency(metrics.net_profit_cny));
+  text("metricProfit", currency(metrics.net_profit_usd));
   text("metricSortino", number(metrics.sortino_ratio));
   text("metricCalmar", number(metrics.calmar_ratio));
   text("metricTurnover", number(metrics.annual_turnover));
@@ -378,10 +376,10 @@ function renderResult(result) {
   text("metricActive", percent(metrics.active_simple_annual_return));
   text("metricIr", number(metrics.information_ratio));
   text("metricTe", percent(metrics.tracking_error));
-  text("finalEquity", currency(metrics.final_equity_cny));
-  text("transactionCost", currency(metrics.transaction_cost_cny));
+  text("finalEquity", currency(metrics.final_equity_usd));
+  text("transactionCost", currency(metrics.transaction_cost_usd));
   text("observations", metrics.observations);
-  text("equitySubtitle", `${engineLabel(metrics.backtest_engine)} · ${currency(metrics.final_equity_cny)} · ${scheduleLabel(metrics.rebalance_schedule)} · ${(metrics.gross_exposure * 100).toFixed(0)}% 仓位`);
+  text("equitySubtitle", `${engineLabel(metrics.backtest_engine)} · ${currency(metrics.final_equity_usd)} · ${scheduleLabel(metrics.rebalance_schedule)} · ${(metrics.gross_exposure * 100).toFixed(0)}% 仓位`);
   text("contaminationNotice", result.product?.limitation || "覆盖隐藏期时会登记污染，并阻断同世代盲测");
   document.getElementById("equityEmpty").hidden = true;
   renderAnnualReturns(result.annual_returns);
@@ -422,7 +420,7 @@ function renderExecutionAssumptions(result) {
     ["持仓模型", vector ? "等权目标的滚动袖套均值" : "独立现金袖套与整数股"],
     ["费用模型", vector ? costModelLabel(costModel) : "逐笔费用与最低佣金"],
     ["开盘滑点", `${Number(recorded.slippage_bps_each_side ?? config.slippage_bps_each_side ?? 0).toFixed(1)} bps / 边`],
-    ["历史费率", recorded.historical_fee_schedule ?? config.use_historical_fee_schedule ? "按成交日切换" : "固定当前设置"],
+    ["监管费率", "固定为配置中冻结的 SEC/FINRA 费率"],
   ];
   const box = document.getElementById("executionAssumptions");
   box.replaceChildren(...rows.map(([label, value]) => {
@@ -433,17 +431,16 @@ function renderExecutionAssumptions(result) {
   text("assumptionProtocol", `${scheduleLabel(schedule)} · ${recorded.preset && recorded.preset !== "CUSTOM" ? "生产预检预设" : "自定义口径"}`);
   text("assumptionEngine", vector ? "VECTOR" : "LEDGER");
   const missing = recorded.constraints_not_modeled || (vector ? [
-    "整手与现金约束",
+    "整数股与现金约束",
     "集合竞价滑点",
     "停牌持仓冻结与退市处置",
-    "涨跌停成交限制",
     "融券可得性、费率与召回",
     "市场冲击与订单簿容量",
     "逐笔最低佣金",
   ] : ["订单簿排队", "显式费用之外的市场冲击"]);
   const translated = missing.map(assumptionConstraintLabel);
   const basisWarning = executionDataMode === "NON_PIT_PROXY"
-    ? "当前为非 PIT 成交代理：历史 ST、停牌、上市退市与精确涨跌停状态未被验证，结果不能进入生产。"
+    ? "当前为非 PIT 成交代理：历史上市、退市、停牌与 LULD 状态未被验证，结果不能进入生产。"
     : (vector && ["forward_adjusted", "event_adjusted_pit"].includes(priceBasis)
       ? "当前使用事件调整研究价，只适合研究收益，不等同于可成交现金价格。"
       : "");
@@ -454,7 +451,7 @@ function renderExecutionAssumptions(result) {
 function priceBasisLabel(value) {
   if (value === "forward_adjusted") return "前复权日开盘价";
   if (value === "event_adjusted_pit") return "复权因子事件调整研究价";
-  if (["raw", "unadjusted"].includes(value)) return "未复权日开盘价";
+  if (["raw", "unadjusted", "split_adjusted"].includes(value)) return "TRADES 拆股调整日开盘价";
   return String(value || "未知");
 }
 
@@ -464,10 +461,10 @@ function costModelLabel(value) {
 
 function assumptionConstraintLabel(value) {
   const labels = {
-    "integer lots and cash": "整手与现金约束",
+    "integer lots and cash": "整数股与现金约束",
+    "whole shares and cash": "整数股与现金约束",
     "opening auction slippage": "集合竞价滑点",
     "suspension carry and forced delisting treatment": "停牌持仓冻结与退市处置",
-    "limit-up/limit-down fills": "涨跌停成交限制",
     "short borrow availability, borrow fees, and recalls": "融券可得性、费率与召回",
     "market impact and order-book capacity": "市场冲击与订单簿容量",
     "minimum commission per order": "逐笔最低佣金",
@@ -499,7 +496,7 @@ async function loadTradeStatement(resetOffset) {
     if (!payload.available) return;
     document.getElementById("downloadTradeStatement").href = `/api/manual-backtests/${backtestState.result.id}/trades.csv`;
     const statement = payload.statement;
-    text("tradeStatementSummary", `${statement.row_count} 笔 · 买入 ${statement.buy_count} · 卖出 ${statement.sell_count} · 费用 ${currency(statement.total_fees_cny)} · ${String(statement.sha256 || "").slice(0, 12)}`);
+    text("tradeStatementSummary", `${statement.row_count} 笔 · 买入 ${statement.buy_count} · 卖出 ${statement.sell_count} · 费用 ${currency(statement.total_fees_usd)} · ${String(statement.sha256 || "").slice(0, 12)}`);
     const body = document.getElementById("tradeStatementBody");
     body.replaceChildren(...payload.rows.map(trade => {
       const row = document.createElement("tr");
@@ -511,13 +508,13 @@ async function loadTradeStatement(resetOffset) {
         security,
         element("span", `trade-side ${trade.side.toLowerCase()}`, trade.side === "BUY" ? "买入" : "卖出"),
         String(trade.quantity),
-        money2(trade.price_cny),
-        money2(trade.notional_cny),
-        money2(trade.commission_cny),
-        money2(trade.transfer_fee_cny),
-        money2(trade.stamp_duty_cny),
-        money2(trade.total_fees_cny),
-        money2(trade.net_cash_flow_cny),
+        money2(trade.price_usd),
+        money2(trade.notional_usd),
+        money2(trade.commission_usd),
+        money2(trade.sec_fee_usd),
+        money2(trade.finra_taf_usd),
+        money2(trade.total_fees_usd),
+        money2(trade.net_cash_flow_usd),
         String(trade.sleeve),
       ].forEach(value => row.append(value instanceof Node ? cellNode(value) : element("td", "", value)));
       return row;
@@ -705,7 +702,7 @@ function reuseRequest(record) {
   const values = {
     startDate: request.start_date,
     endDate: request.end_date,
-    initialCash: request.initial_cash_cny,
+    initialCash: request.initial_cash_usd,
     grossExposure: request.gross_exposure,
     holdingPeriod: request.holding_period_days,
     backtestPreset: request.backtest_preset || "CUSTOM",
@@ -716,18 +713,17 @@ function reuseRequest(record) {
     productTemplate: request.product_template || "LONG_ONLY_CAPITAL",
     selectionFraction: request.selection_fraction ?? 0.10,
     maximumPositions: request.maximum_positions ?? 30,
-    lotSize: request.lot_size ?? 100,
+    lotSize: request.lot_size ?? 1,
     maximumVolumeParticipation: request.maximum_volume_participation ?? 0.05,
-    openingLimitThreshold: request.opening_limit_threshold ?? 0.095,
-    commissionBps: request.commission_bps_each_side ?? 1.5,
-    stampDutyBps: request.stamp_duty_bps_sell ?? 5,
-    transferFeeBps: request.transfer_fee_bps_each_side ?? 0.1,
-    minimumCommission: request.minimum_commission_cny ?? 5,
+    commissionPerShare: request.commission_per_share ?? 0.0035,
+    minimumCommission: request.minimum_commission_usd ?? 0.35,
+    maximumCommissionFraction: request.maximum_commission_fraction ?? 0.01,
+    secFeePerMillion: request.sec_fee_per_million_usd_sell ?? 20.60,
+    finraTafPerShare: request.finra_taf_per_share_sell ?? 0.000195,
     slippageBps: request.slippage_bps_each_side ?? 0,
     costStressMultiplier: request.cost_stress_multiplier ?? 2,
   };
   Object.entries(values).forEach(([id, value]) => { document.getElementById(id).value = value; });
-  document.getElementById("historicalFeeSchedule").checked = request.use_historical_fee_schedule ?? false;
   applyEngineDefaults(false);
   const template = backtestState.templates.find(item => item.template_id === values.productTemplate);
   text("productLimitation", template?.limitation || "");
@@ -773,7 +769,7 @@ function renderComparison() {
     ["信息比率", "information_ratio", number],
     ["跟踪误差", "tracking_error", percent],
     ["年化换手", "annual_turnover", number],
-    ["交易成本", "transaction_cost_cny", currency],
+    ["交易成本", "transaction_cost_usd", currency],
     ["Rank IC", "rank_ic_mean", number4],
   ];
   const body = document.getElementById("comparisonBody");
@@ -893,9 +889,9 @@ function text(id, value) { document.getElementById(id).textContent = value; }
 function number(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed.toFixed(2) : "--"; }
 function number4(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed.toFixed(4) : "--"; }
 function percent(value) { const parsed = Number(value); return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(2)}%` : "--"; }
-function currency(value) { const parsed = Number(value); return Number.isFinite(parsed) ? new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", maximumFractionDigits: 0 }).format(parsed) : "--"; }
-function money2(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--"; }
-function compactCurrency(value) { const absolute = Math.abs(value); if (absolute >= 1e8) return `${(value / 1e8).toFixed(1)}亿`; if (absolute >= 1e4) return `${(value / 1e4).toFixed(0)}万`; return value.toFixed(0); }
+function currency(value) { const parsed = Number(value); return Number.isFinite(parsed) ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(parsed) : "--"; }
+function money2(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--"; }
+function compactCurrency(value) { const absolute = Math.abs(value); if (absolute >= 1e9) return `$${(value / 1e9).toFixed(1)}B`; if (absolute >= 1e6) return `$${(value / 1e6).toFixed(1)}M`; if (absolute >= 1e3) return `$${(value / 1e3).toFixed(0)}K`; return `$${value.toFixed(0)}`; }
 
 let toastTimer;
 function toast(message, isError = false) {

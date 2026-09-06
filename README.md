@@ -2,17 +2,17 @@
 
 # LLM_QUANT_FACTORY
 
-### 可审计的多智能体 A 股因子研究与组合发现平台
+### 可审计的多智能体 US 股票因子研究与组合发现平台
 
-一个面向 A 股截面多因子研究的源码可用工作台：从数据治理、LLM 辅助因子发现、因子知识库，
+一个面向 US 股票截面多因子研究的源码可用工作台：从 IBKR 数据治理、LLM 辅助因子发现、因子知识库，
 到受约束组合搜索、选股、回测、审计和策略版本管理。
 
-[![CI](https://github.com/khakhasshi/LLM_QUANT_FACTORY/actions/workflows/ci.yml/badge.svg)](https://github.com/khakhasshi/LLM_QUANT_FACTORY/actions/workflows/ci.yml)
+[![CI](https://github.com/ArtixZ/LLM_QUANT_FACTORY/actions/workflows/ci.yml/badge.svg)](https://github.com/ArtixZ/LLM_QUANT_FACTORY/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-c2413b.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776ab.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![uv](https://img.shields.io/badge/package%20manager-uv-5c4ee5.svg)](https://docs.astral.sh/uv/)
 [![Research](https://img.shields.io/badge/status-research%20only-c47f17.svg)](#研究边界)
-[![Primary Protocol](https://img.shields.io/badge/primary-A--share%20long--only-16835b.svg)](#研究边界)
+[![Primary Protocol](https://img.shields.io/badge/primary-US%20equity%20long--only-16835b.svg)](#研究边界)
 
 [快速开始](#快速开始) · [系统架构](#系统架构) · [研究样例](#公开研究样例) ·
 [微信交流群](#微信交流群) · [贡献指南](CONTRIBUTING.md) · [路线图](ROADMAP.md) ·
@@ -27,9 +27,9 @@ LLM_QUANT_FACTORY 的目标不是让大语言模型直接“决定买什么”�
 数据时点检查、回测、统计检验、组合权重、风险门禁和策略交付由确定性组件执行。
 
 > [!IMPORTANT]
-> 当前随项目验证的本地 A 股面板是 **non-PIT 研究代理数据**。截图中的历史绩效、排名和选股
-> 结果仅用于展示研究流程，不代表生产资格、未来收益或投资建议。真实交易前仍需补齐 PIT
-> 股票状态、复权与未复权成交口径、涨跌停、停牌、退市、费用、容量和独立盲测。
+> 当前 IBKR 面板使用**当前成分股票池和 non-PIT 研究代理数据**。历史绩效、排名和选股结果
+> 仅用于展示研究流程，不代表生产资格、未来收益或投资建议。真实交易前仍需补齐 PIT
+> 上市退市、停牌/LULD、分类、基准成分、自由流通市值、来源时点、容量和独立盲测。
 
 ## 项目导览
 
@@ -74,12 +74,12 @@ LLM_QUANT_FACTORY 的目标不是让大语言模型直接“决定买什么”�
 选择一个或多个因子、设置权重和信号日期，快速生成截面候选股票。选股结果明确标注信号在
 日收盘后形成，页面本身不生成交易订单，也不会污染自动研究记忆或隐藏测试。
 
-![A 股因子选股器](docs/assets/screenshots/06-factor-screener.png)
+![US 股票因子选股器](docs/assets/screenshots/06-factor-screener.png)
 
 ### 7. 手动纯多回测
 
 手动回测支持因子与权重、时间区间、初始资金、目标仓位、持有期、调仓日历、费用预设、
-事件账本或向量引擎、收藏与交割单。评价默认以 A 股纯多资金曲线为主，多空 IC 仅作为诊断。
+事件账本或向量引擎、收藏与交割单。评价默认以 US 股票纯多 USD 资金曲线为主，多空 IC 仅作为诊断。
 
 ![手动纯多回测](docs/assets/screenshots/07-manual-backtest.png)
 
@@ -107,7 +107,7 @@ flowchart LR
 
 | 层次 | 路径 | 职责 |
 |---|---|---|
-| 数据工程 | `src/multifactor_ashare/` | 审计不可变日频快照，并构建按年分区的标准 DuckDB/Parquet 面板 |
+| 数据工程 | `src/multifactor_us/` | 审计 IBKR 日频切片，并构建按年分区的标准 DuckDB/Parquet 面板 |
 | 研究平台 | `AutoAlpha/` | 因子发现、知识管理、组合优化、回测、治理与 Web 服务 |
 
 研究平台使用统一的实验谱系：
@@ -129,12 +129,12 @@ flowchart LR
 |---|---|
 | 研究编排 | 多个相互隔离的 AutoAlpha 任务，分别拥有数据可见范围、协议、记忆与生命周期 |
 | 因子语言 | 类型化表达式树、字段白名单、信号时点和未来函数检查 |
-| 评价体系 | A 股纯多主指标、滚动样本外、DSR/PBO/FDR、参数邻域、成本与容量诊断 |
+| 评价体系 | US 股票纯多主指标、滚动样本外、DSR/PBO/FDR、参数邻域、成本与容量诊断 |
 | 知识管理 | 机制分类、AST 指纹、语义/行为聚类、生命周期、年度热力图与收藏 |
 | 组合研究 | 在同一冻结因子注册表上运行 LLM 辅助 AutoCombine 和确定性 QuantCombine |
 | 回测 | 快速向量引擎与事件/现金账本路径，可配置成交假设、交割单和制品 |
 | 运行系统 | 作业队列、检查点、重试、不可变制品、四类日志与健康检查 |
-| 数据中心 | 工作区检查、Tushare 凭证边界、断点增量更新与质量报告 |
+| 数据中心 | IBKR Gateway 连接、可恢复日线同步、工作区检查与质量报告 |
 
 详细控制说明见：
 
@@ -150,7 +150,7 @@ flowchart LR
 
 系统明确区分研究便利性与生产证据：
 
-- A 股**纯多资金表现**是默认排序与展示口径。
+- US 股票**纯多资金表现**是默认排序与展示口径。
 - Rank IC 和多空 Alpha 仅用于诊断，不能抵消成交或风险硬门禁失败。
 - 日终信号只能在收盘后获得，最早于下一交易日开盘执行。
 - 公开滚动样本外结果可用于研究；隐藏测试细节永不进入 LLM 上下文。
@@ -165,13 +165,13 @@ flowchart LR
 - macOS 或 Linux
 - Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/)
-- 自有且具备合法授权的 A 股数据
+- 已登录并具备相应行情权限的 IBKR TWS 或 Gateway
 - 可选：用于 LLM 辅助研究的 OpenAI Compatible API
 
 ### 1. 克隆与安装
 
 ```bash
-git clone https://github.com/khakhasshi/LLM_QUANT_FACTORY.git
+git clone https://github.com/ArtixZ/LLM_QUANT_FACTORY.git
 cd LLM_QUANT_FACTORY
 
 uv sync --frozen --all-groups
@@ -181,15 +181,16 @@ uv sync --frozen --all-groups
 
 ### 2. 准备数据
 
-将已获授权的源数据放入 `data/`，然后执行可复现的数据审计与面板构建：
+先通过 AutoAlpha 数据中心或 `DataSyncWorker` 下载 IBKR 日线切片，再执行可复现的数据审计与面板构建：
 
 ```bash
 cd ..
-uv run mf-data audit
-uv run mf-data build
+uv run mf-us audit
+uv run mf-us catalog
+uv run mf-us panel
 ```
 
-标准输出写入 `data/processed/daily_panel/`。原始数据和生成的市场数据均被 Git 忽略。
+默认输出位于 `~/MarketData/US/processed/daily_panel/`。原始数据和生成的市场数据均被 Git 忽略。
 
 ### 3. 配置可选凭证
 
@@ -197,7 +198,8 @@ uv run mf-data build
 
 ```bash
 cd AutoAlpha
-export AUTOALPHA_DATA_PATH="$PWD/../data"
+export AUTOALPHA_DATA_PATH="$HOME/MarketData/US"
+export IBKR_PORT="4002"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 export AUTOALPHA_MODEL="your-model"
 export AUTOALPHA_API_KEY="your-api-key"
@@ -254,7 +256,7 @@ uv run python scripts/export_public_research_snapshot.py \
 
 ```text
 .
-├── src/multifactor_ashare/       # 数据审计与标准面板 CLI
+├── src/multifactor_us/           # IBKR 数据审计与标准面板 CLI
 ├── tests/                        # 数据工程测试
 ├── AutoAlpha/
 │   ├── src/autoalpha/            # 研究与服务实现
@@ -287,7 +289,7 @@ uv run pytest -q
 # 源码发布检查
 cd ..
 uv run python scripts/check_public_release.py
-uv build --out-dir /tmp/multifactor-ashare-dist
+uv build --out-dir /tmp/multifactor-us-dist
 
 # AutoAlpha 包构建
 cd AutoAlpha
@@ -313,9 +315,9 @@ uv build --out-dir /tmp/autoalpha-dist
    研究 AST 等价、语义指纹、信号/收益行为聚类、残差发现，以及奖励独立组合贡献而非公式换皮
    的激励机制。
 
-4. **PIT 数据与真实 A 股成交**
-   补齐历史 ST、上市、退市、停牌状态、板块涨跌停、公司行动修订、开盘可交易性、整手/现金
-   约束、冲击和容量。
+4. **PIT 数据与真实 US 股票成交**
+   补齐历史上市退市、停牌/LULD、公司行动可见时点、行业与指数成分、自由流通市值和开盘可交易性，
+   并完善订单幂等、成交回报、冲击和容量证据。
 
 5. **超越因子评分的策略生命周期**
    建立明确的开平仓规则、版本化策略规格、影子交易、衰减监控、退役机制和可复现晋级证据。

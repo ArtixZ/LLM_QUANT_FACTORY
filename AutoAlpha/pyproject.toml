@@ -43,10 +43,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/khakhasshi/LLM_QUANT_FACTORY"
-Documentation = "https://github.com/khakhasshi/LLM_QUANT_FACTORY#readme"
-Issues = "https://github.com/khakhasshi/LLM_QUANT_FACTORY/issues"
-Source = "https://github.com/khakhasshi/LLM_QUANT_FACTORY/tree/main/AutoAlpha"
+Homepage = "https://github.com/ArtixZ/LLM_QUANT_FACTORY"
+Documentation = "https://github.com/ArtixZ/LLM_QUANT_FACTORY#readme"
+Issues = "https://github.com/ArtixZ/LLM_QUANT_FACTORY/issues"
+Source = "https://github.com/ArtixZ/LLM_QUANT_FACTORY/tree/main/AutoAlpha"
 
 [project.scripts]
 autoalpha = "autoalpha.cli:main"

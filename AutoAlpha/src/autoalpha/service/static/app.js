@@ -9,21 +9,21 @@ const state = {
 };
 
 const chartMetrics = {
-  long_only_active_information_ratio: { label: "单因子 A股纯多主动收益 IR", format: "number", prefer: "max" },
-  long_only_active_simple_annual_return: { label: "单因子 A股纯多主动年化", format: "percent", prefer: "max" },
-  long_only_market_beta: { label: "单因子 A股纯多市场 Beta", format: "number", prefer: "min" },
+  long_only_active_information_ratio: { label: "单因子 US 纯多主动收益 IR", format: "number", prefer: "max" },
+  long_only_active_simple_annual_return: { label: "单因子 US 纯多主动年化", format: "percent", prefer: "max" },
+  long_only_market_beta: { label: "单因子 US 纯多市场 Beta", format: "number", prefer: "min" },
   size_neutral_alpha_sharpe_ratio: { label: "市值中性 Alpha 夏普", format: "number", prefer: "max" },
-  long_only_sharpe_ratio: { label: "单因子 A股纯多夏普", format: "number", prefer: "max" },
-  long_only_simple_annual_return: { label: "单因子 A股纯多简单年化", format: "percent", prefer: "max" },
-  long_only_compound_annual_return: { label: "单因子 A股纯多复合年化", format: "percent", prefer: "max" },
-  long_only_max_drawdown: { label: "单因子 A股纯多最大回撤", format: "percent", prefer: "max" },
-  long_only_annual_turnover: { label: "单因子 A股纯多年化换手", format: "number", prefer: "min" },
-  long_only_cost_stress_net_ir: { label: "单因子 A股纯多成本压力 IR", format: "number", prefer: "max" },
-  long_only_positive_year_ratio: { label: "单因子 A股纯多正收益年份", format: "percent", prefer: "max" },
-  long_only_walk_forward_worst_sharpe: { label: "单因子 A股纯多最差折夏普", format: "number", prefer: "max" },
-  long_only_deflated_sharpe_probability: { label: "单因子 A股纯多 Deflated Sharpe", format: "percent", prefer: "max" },
-  long_only_coverage: { label: "单因子 A股纯多覆盖率", format: "percent", prefer: "max" },
-  long_only_capacity_cny: { label: "单因子 A股纯多容量估计", format: "currency", prefer: "max" },
+  long_only_sharpe_ratio: { label: "单因子 US 纯多夏普", format: "number", prefer: "max" },
+  long_only_simple_annual_return: { label: "单因子 US 纯多简单年化", format: "percent", prefer: "max" },
+  long_only_compound_annual_return: { label: "单因子 US 纯多复合年化", format: "percent", prefer: "max" },
+  long_only_max_drawdown: { label: "单因子 US 纯多最大回撤", format: "percent", prefer: "max" },
+  long_only_annual_turnover: { label: "单因子 US 纯多年化换手", format: "number", prefer: "min" },
+  long_only_cost_stress_net_ir: { label: "单因子 US 纯多成本压力 IR", format: "number", prefer: "max" },
+  long_only_positive_year_ratio: { label: "单因子 US 纯多正收益年份", format: "percent", prefer: "max" },
+  long_only_walk_forward_worst_sharpe: { label: "单因子 US 纯多最差折夏普", format: "number", prefer: "max" },
+  long_only_deflated_sharpe_probability: { label: "单因子 US 纯多 Deflated Sharpe", format: "percent", prefer: "max" },
+  long_only_coverage: { label: "单因子 US 纯多覆盖率", format: "percent", prefer: "max" },
+  long_only_capacity_usd: { label: "单因子 US 纯多容量估计", format: "currency", prefer: "max" },
   sharpe_ratio: { label: "诊断 · 单因子 Alpha 多空夏普", format: "number", prefer: "max" },
   simple_annual_return: { label: "诊断 · 单因子 Alpha 多空年化", format: "percent", prefer: "max" },
   pearson_ic_mean: { label: "IC", format: "number4", prefer: "max" },
@@ -37,7 +37,7 @@ const chartMetrics = {
   cost_stress_net_ir: { label: "成本压力净 IR", format: "number", prefer: "max" },
   annual_turnover: { label: "年化换手", format: "number", prefer: "min" },
   coverage: { label: "覆盖率", format: "percent", prefer: "max" },
-  capacity_cny: { label: "容量估计", format: "currency", prefer: "max" },
+  capacity_usd: { label: "容量估计", format: "currency", prefer: "max" },
   positive_year_ratio: { label: "正收益年份占比", format: "percent", prefer: "max" },
   annual_return_dispersion: { label: "年收益离散", format: "percent", prefer: "min" },
   walk_forward_positive_fraction: { label: "滚动正折比例", format: "percent", prefer: "max" },
@@ -45,11 +45,11 @@ const chartMetrics = {
   deflated_sharpe_probability: { label: "Deflated Sharpe 概率", format: "percent", prefer: "max" },
   probability_backtest_overfitting: { label: "PBO", format: "percent", prefer: "min" },
   parameter_stability_positive_fraction: { label: "参数邻域正向比例", format: "percent", prefer: "max" },
-  portfolio_sharpe_ratio: { label: "多因子 A股纯多组合夏普", format: "number", prefer: "max" },
-  portfolio_simple_annual_return: { label: "多因子 A股纯多组合年化", format: "percent", prefer: "max" },
-  portfolio_active_information_ratio: { label: "多因子 A股纯多主动收益 IR", format: "number", prefer: "max" },
-  portfolio_active_simple_annual_return: { label: "多因子 A股纯多主动年化", format: "percent", prefer: "max" },
-  portfolio_max_drawdown: { label: "多因子 A股纯多组合回撤", format: "percent", prefer: "max" },
+  portfolio_sharpe_ratio: { label: "多因子 US 纯多组合夏普", format: "number", prefer: "max" },
+  portfolio_simple_annual_return: { label: "多因子 US 纯多组合年化", format: "percent", prefer: "max" },
+  portfolio_active_information_ratio: { label: "多因子 US 纯多主动收益 IR", format: "number", prefer: "max" },
+  portfolio_active_simple_annual_return: { label: "多因子 US 纯多主动年化", format: "percent", prefer: "max" },
+  portfolio_max_drawdown: { label: "多因子 US 纯多组合回撤", format: "percent", prefer: "max" },
   portfolio_incremental_net_ir: { label: "组合边际净 IR", format: "number", prefer: "max" },
   portfolio_annual_turnover: { label: "组合年化换手", format: "number", prefer: "min" },
   portfolio_max_factor_correlation: { label: "最大因子相关性", format: "number4", prefer: "min" },
@@ -68,10 +68,10 @@ const flowLabels = {
   DIRECTION: "正在自检公开证据并冻结本轮优化方向",
   PROPOSAL: "Researcher 正在生成候选",
   SEMANTICS: "正在校验 DSL、时序与重复表达式",
-  EVALUATION: "正在运行 A 股纯多周频主评价与截面 Alpha 辅助诊断",
+  EVALUATION: "正在运行 US 股票纯多周频主评价与截面 Alpha 辅助诊断",
   PORTFOLIO: "正在枚举组合保留、加入、删除与替换动作",
   HOLDOUT: "冻结组合正在隔离边界内执行一次性盲测",
-  CAPITAL_SIMULATION: "正在执行带交易限制的人民币资金仿真",
+  CAPITAL_SIMULATION: "正在执行带交易限制的 USD 资金仿真",
   EVIDENCE: "正在执行研究门禁与证据入库",
   DELIVERY: "正在发布哈希制品与交付日志",
   WAITING: "本轮完成，等待下一轮",
@@ -184,7 +184,6 @@ async function saveSettings(event) {
       body: JSON.stringify({
         base_url: document.getElementById("baseUrl").value,
         api_key: document.getElementById("apiKey").value || null,
-        tushare_token: document.getElementById("tushareToken").value || null,
         model: document.getElementById("model").value,
         temperature: Number(document.getElementById("temperature").value),
         data_path: state.snapshot.settings.data_path,
@@ -197,7 +196,6 @@ async function saveSettings(event) {
       }),
     });
     document.getElementById("apiKey").value = "";
-    document.getElementById("tushareToken").value = "";
     toast("服务配置已保存");
     await refresh();
   } catch (error) {
@@ -292,7 +290,7 @@ function hydrateSettings(settings, task) {
   document.getElementById("maximumActiveFactors").value = settings.maximum_active_factors || "5";
   document.getElementById("fullLlmEnabled").checked = settings.full_llm_enabled !== "false";
   document.getElementById("dataPath").value = task.data_path || settings.data_path || "";
-  document.getElementById("marketDataRoot").value = settings.market_data_root || "~/MarketData/Ashare";
+  document.getElementById("marketDataRoot").value = settings.market_data_root || "~/MarketData/US";
   document.getElementById("dataAutoUpdate").checked = settings.data_auto_update_enabled === "true";
   document.getElementById("dataUpdateHour").value = settings.data_update_hour || "18";
   document.getElementById("tokenLabel").hidden = !settings.service_token_required;
@@ -323,7 +321,7 @@ function formatMemory(content) {
     const best = portfolio.best_option;
     const parts = [
       `${memory.name || "候选"} · ${memory.family || "未分类"}`,
-      `A股纯多夏普 ${number(single.sharpe)} · 年化 ${percent(single.annual_return)} · 换手 ${number(single.turnover)}`,
+      `US 纯多夏普 ${number(single.sharpe)} · 年化 ${percent(single.annual_return)} · 换手 ${number(single.turnover)}`,
     ];
     if (single.exploratory_failures?.length) {
       parts.push(`单因子未过：${single.exploratory_failures.join(", ")}`);
@@ -363,7 +361,7 @@ function renderProtocol() {
   const walk = protocol.walk_forward || {};
   const portfolio = protocol.portfolio || {};
   const strategy = protocol.evaluation_layers?.strategy_promotion || {};
-  text("protocolSummary", `${protocol.version || "--"} · A股纯多主筛 → ${strategy.protocol || "纯多组合门禁"} · 多空仅诊断`);
+  text("protocolSummary", `${protocol.version || "--"} · US 纯多主筛 → ${strategy.protocol || "纯多组合门禁"} · 多空仅诊断`);
   text("generationStatus", generation.status || "NOT STARTED");
   text("protocolExploration", protocol.exploration ? `${protocol.exploration.start} — ${protocol.exploration.end}` : "--");
   text("protocolWalkForward", walk.first_validation_year ? `${walk.train_years}Y → ${walk.validation_years}Y · ${walk.first_validation_year}—${walk.last_validation_year}` : "--");
@@ -485,10 +483,10 @@ function renderPortfolio() {
     const evaluationProtocol = metrics.portfolio_evaluation_protocol || metrics.evaluation_protocol;
     const protocolLabel = evaluationProtocol || "LEGACY / UNVERSIONED";
     const strategyBasis = metrics.portfolio_strategy_gate_basis;
-    const legacy = strategyBasis !== "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY";
+    const legacy = strategyBasis !== "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY";
     text("portfolioSummary", legacy
       ? `第 ${portfolio.iteration} 轮 · 旧多空组合口径 · 待新协议重评 · ${portfolio.reason}`
-      : `第 ${portfolio.iteration} 轮 · ${portfolio.action} · A股多头策略门禁 · ${portfolio.reason}`);
+      : `第 ${portfolio.iteration} 轮 · ${portfolio.action} · US 多头策略门禁 · ${portfolio.reason}`);
     text("portfolioVersion", `VERSION ${portfolio.id}`);
     text("portfolioSharpe", number(metrics.portfolio_sharpe_ratio));
     text("portfolioAnnual", percent(metrics.portfolio_simple_annual_return));
@@ -497,7 +495,7 @@ function renderPortfolio() {
     text("portfolioCorrelation", number4(metrics.portfolio_max_factor_correlation));
     text("portfolioFactorCount", String(portfolio.members.length));
     text("portfolioExecutionSummary", legacy
-      ? `${protocolLabel} · 当前数值不可解释为A股可交易组合收益`
+      ? `${protocolLabel} · 当前数值不可解释为 US 可交易组合收益`
       : `${metrics.portfolio_execution_protocol} · ${metrics.portfolio_rebalance_schedule} · ${percent(metrics.portfolio_target_gross_exposure)}仓位 · 目标${metrics.portfolio_maximum_positions}只 / 实际峰值${metrics.portfolio_maximum_observed_positions ?? "--"}只 · 非PIT研究代理`);
     text("alphaPortfolioSharpe", number(metrics.alpha_diagnostic_sharpe_ratio));
     text("alphaPortfolioAnnual", percent(metrics.alpha_diagnostic_simple_annual_return));
@@ -551,7 +549,7 @@ function renderExperimentCard(iteration) {
   const metrics = iteration.metrics;
   const proposal = iteration.proposal;
   const line = metrics
-    ? `A股纯多 ${number(metrics.long_only_sharpe_ratio)} · annual ${percent(metrics.long_only_simple_annual_return)} · alpha诊断 ${number(metrics.sharpe_ratio)} · rank_ic ${number4(metrics.rank_ic_mean)} · 组合 ${metrics.portfolio_action || "--"}`
+    ? `US 纯多 ${number(metrics.long_only_sharpe_ratio)} · annual ${percent(metrics.long_only_simple_annual_return)} · alpha诊断 ${number(metrics.sharpe_ratio)} · rank_ic ${number4(metrics.rank_ic_mean)} · 组合 ${metrics.portfolio_action || "--"}`
     : iteration.error || proposal?.hypothesis || "候选正在处理";
   const tags = element("div", "tags");
   [
@@ -703,7 +701,7 @@ function taskIdFromPath() {
   const parts = location.pathname.split("/").filter(Boolean);
   return parts[0] === "research" && parts[1]
     ? decodeURIComponent(parts[1])
-    : "legacy-ashare";
+    : "primary-us-equity";
 }
 
 function taskApi(suffix) {

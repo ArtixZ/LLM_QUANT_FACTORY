@@ -70,7 +70,7 @@
             <label>开始日期<input id="startDate" type="date" required></label>
             <label>结束日期<input id="endDate" type="date" required></label>
           </div>
-          <label>初始资金（元）<input id="initialCash" type="number" min="10000" max="10000000000" step="10000" value="1000000" required></label>
+          <label>初始资金（USD）<input id="initialCash" type="number" min="10000" max="10000000000" step="10000" value="1000000" required></label>
           <div class="field-pair">
             <label>目标总仓位<input id="grossExposure" type="number" min="0.05" max="1" step="0.05" value="0.5" required></label>
             <label>参考持有（日）<input id="holdingPeriod" type="number" min="1" max="60" step="1" value="5" required></label>
@@ -92,15 +92,14 @@
               <label>单侧选股比例<input id="selectionFraction" type="number" min="0.01" max="0.5" step="0.01" value="0.10"></label>
               <label>单侧最大持仓<input id="maximumPositions" type="number" min="1" max="300" step="1" value="30"></label>
               <label>成交量参与率<input id="maximumVolumeParticipation" type="number" min="0.001" max="0.5" step="0.001" value="0.05"></label>
-              <label>整手股数<input id="lotSize" type="number" min="100" max="10000" step="100" value="100"></label>
-              <label>开盘涨跌停阈值<input id="openingLimitThreshold" type="number" min="0.01" max="0.3" step="0.001" value="0.095"></label>
+              <label>最小交易股数<input id="lotSize" type="number" min="1" max="10000" step="1" value="1"></label>
+              <label>佣金占成交额上限<input id="maximumCommissionFraction" type="number" min="0.0001" max="1" step="0.001" value="0.01"></label>
               <label>费用压力倍数<input id="costStressMultiplier" type="number" min="1" max="10" step="0.5" value="2"></label>
-              <label>双边单边佣金（bps）<input id="commissionBps" type="number" min="0" max="100" step="0.1" value="1.5"></label>
-              <label>卖出印花税（bps）<input id="stampDutyBps" type="number" min="0" max="100" step="0.1" value="5"></label>
-              <label>双边过户费（bps）<input id="transferFeeBps" type="number" min="0" max="100" step="0.1" value="0.1"></label>
-              <label>最低佣金（元）<input id="minimumCommission" type="number" min="0" max="1000" step="0.1" value="5"></label>
+              <label>每股佣金（USD）<input id="commissionPerShare" type="number" min="0" max="100" step="0.0001" value="0.0035"></label>
+              <label>SEC 卖出费（USD/百万）<input id="secFeePerMillion" type="number" min="0" max="1000" step="0.01" value="20.60"></label>
+              <label>FINRA TAF（USD/股）<input id="finraTafPerShare" type="number" min="0" max="1" step="0.000001" value="0.000195"></label>
+              <label>最低佣金（USD）<input id="minimumCommission" type="number" min="0" max="1000" step="0.01" value="0.35"></label>
               <label>开盘滑点（bps/边）<input id="slippageBps" type="number" min="0" max="500" step="0.5" value="0"></label>
-              <label class="check-row advanced-check"><input id="historicalFeeSchedule" type="checkbox">按成交日使用历史费率</label>
             </div>
           </details>
         </div>
@@ -169,7 +168,7 @@
 
       <section class="panel equity-panel">
         <div class="panel-header chart-header">
-          <div><h2>损益曲线</h2><p id="equitySubtitle">人民币净值 · 已计交易成本</p></div>
+          <div><h2>损益曲线</h2><p id="equitySubtitle">USD 净值 · 已计交易成本</p></div>
           <div class="summary-cells">
             <div><span>期末权益</span><strong id="finalEquity">--</strong></div>
             <div><span>交易成本</span><strong id="transactionCost">--</strong></div>
@@ -207,7 +206,7 @@
         </div>
         <div class="trade-table-wrap">
           <table class="trade-table">
-            <thead><tr><th>成交日</th><th>信号日</th><th>证券</th><th>方向</th><th>数量</th><th>价格</th><th>成交额</th><th>佣金</th><th>过户费</th><th>印花税</th><th>总费用</th><th>净现金流</th><th>袖套</th></tr></thead>
+            <thead><tr><th>成交日</th><th>信号日</th><th>证券</th><th>方向</th><th>数量</th><th>价格</th><th>成交额</th><th>佣金</th><th>SEC 费</th><th>FINRA TAF</th><th>总费用</th><th>净现金流</th><th>袖套</th></tr></thead>
             <tbody id="tradeStatementBody"></tbody>
           </table>
         </div>

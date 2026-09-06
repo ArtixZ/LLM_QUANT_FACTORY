@@ -43,6 +43,7 @@ TRADEBUS_PUBLISH = Path(os.environ.get("QUANTFACTORY_TRADEBUS_PUBLISH", ""))
 NOTIFY_SOURCE = "quantfactory"
 RUNTIME_DIR = Path.home() / "MarketData" / "US" / "runtime"
 LOG_DIR = REPO_ROOT / "logs"
+SUBMISSION_DIR = RUNTIME_DIR / "submissions"
 
 logger = logging.getLogger("daily_run")
 
@@ -149,6 +150,44 @@ def write_artifact(report: DailyReport) -> Path:
     return path
 
 
+def reserve_submission(submission_key: str) -> Path:
+    """Create a durable one-attempt marker before any broker order is sent."""
+    SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
+    path = SUBMISSION_DIR / f"{submission_key}.json"
+    payload = json.dumps(
+        {
+            "submission_key": submission_key,
+            "status": "RESERVED",
+            "created_on": date.today().isoformat(),
+        }
+    ).encode()
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise RuntimeError(
+            f"Submission {submission_key} was already attempted; inspect {path} before retrying"
+        ) from error
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(payload + b"\n")
+    return path
+
+
+def update_submission(path: Path, *, status: str, detail: str = "") -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "submission_key": path.stem,
+                "status": status,
+                "detail": detail,
+                "updated_on": date.today().isoformat(),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="daily_run", description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="print only; do not notify")
@@ -159,7 +198,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--positions", type=int, default=5)
     parser.add_argument("--gross-exposure", type=float, default=0.95)
     parser.add_argument("--port", type=int, default=None, help="override IBKR port")
+    parser.add_argument(
+        "--managed-account",
+        default=os.getenv("QUANTFACTORY_MANAGED_ACCOUNT", ""),
+        help="paper account dedicated to this strategy; required for submission",
+    )
     args = parser.parse_args(argv)
+    if args.submit != args.confirm:
+        parser.error("--submit and --confirm must be supplied together")
+    if args.submit and not args.managed_account.strip():
+        parser.error(
+            "--managed-account or QUANTFACTORY_MANAGED_ACCOUNT is required for submission"
+        )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = DailyConfig(
@@ -178,16 +228,28 @@ def main(argv: list[str] | None = None) -> int:
         require_paper_account=base.require_paper_account,
     )
 
+    submission_key = f"quantfactory-{date.today():%Y%m%d}"
+    submission_marker: Path | None = None
     try:
         health = refresh_market_data(config, skip=args.skip_sync)
+        if args.submit:
+            submission_marker = reserve_submission(submission_key)
         report = run_daily(
             config,
             settings=settings,
             health=health,
             submit=args.submit,
             confirm_submit=args.confirm,
+            managed_account=args.managed_account.strip() or None,
+            submission_key=submission_key,
         )
     except Exception as error:  # noqa: BLE001 - a failed run must still be reported
+        if submission_marker is not None:
+            update_submission(
+                submission_marker,
+                status="FAILED_REVIEW_REQUIRED",
+                detail=f"{type(error).__name__}: {error}",
+            )
         logger.exception("daily run failed")
         if not args.dry_run:
             notify(
@@ -196,6 +258,11 @@ def main(argv: list[str] | None = None) -> int:
                 "error",
             )
         return 1
+    if submission_marker is not None:
+        update_submission(
+            submission_marker,
+            status="SUBMITTED" if report.submitted else "NO_ORDERS_SUBMITTED",
+        )
 
     body = report.telegram_body()
     artifact = write_artifact(report)

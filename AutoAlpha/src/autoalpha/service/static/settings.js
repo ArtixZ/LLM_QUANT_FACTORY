@@ -1,4 +1,4 @@
-const state = { snapshot: null, original: null, draft: null, secrets: { api_key: "", tushare_token: "" }, revision: null };
+const state = { snapshot: null, original: null, draft: null, secrets: { api_key: "" }, revision: null };
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 const labels = {
@@ -40,7 +40,7 @@ async function load(announce = false) {
     state.snapshot = snapshot;
     state.original = structuredClone(snapshot.values);
     state.draft = structuredClone(snapshot.values);
-    state.secrets = { api_key: "", tushare_token: "" };
+    state.secrets = { api_key: "" };
     render();
     if (announce) toast("配置状态已刷新");
   } catch (error) { toast(error.message, true); }
@@ -60,7 +60,7 @@ function renderStatus() {
     ["AutoCombine", services.autocombine.status === "ok" ? "ONLINE" : "UNREACHABLE", `${services.autocombine.active_tasks} 个活动任务 · ${services.autocombine.task_count} 个任务`, services.autocombine.status === "ok" ? "good" : "warn"],
     ["研究数据", operational.valid ? `${operational.data_end}` : "INVALID", operational.valid ? `${operational.data_start} 起 · ${shortHash(operational.data_fingerprint)}` : operational.error, operational.valid ? "good" : "bad"],
     ["AI 凭证", credentials.api_key_configured ? "CONFIGURED" : "MISSING", credentials.api_key_configured ? sourceLabel(credentials.api_key_source) : "自动研究无法调用 Provider", credentials.api_key_configured ? "good" : "bad"],
-    ["Tushare", credentials.tushare_token_configured ? "CONFIGURED" : "MISSING", credentials.tushare_token_configured ? sourceLabel(credentials.tushare_token_source) : "数据增量更新不可用", credentials.tushare_token_configured ? "good" : "warn"],
+    ["IBKR Gateway", credentials.ibkr_gateway_ready ? "CONNECTED" : "UNREACHABLE", credentials.ibkr_gateway_ready ? "市场数据同步可用" : "启动并登录 TWS / Gateway 后才能同步", credentials.ibkr_gateway_ready ? "good" : "warn"],
   ];
   $("statusBand").innerHTML = items.map(([label, value, detail, tone]) => `<div class="settings-status-item ${tone}"><span>${esc(label)}</span><strong title="${esc(value)}">${esc(value)}</strong><small title="${esc(detail)}">${esc(detail)}</small></div>`).join("");
 }
@@ -99,7 +99,7 @@ function fieldHtml(field) {
   if (field.kind === "boolean") {
     control = `<label class="toggle-control"><input id="setting-${esc(field.key)}" type="checkbox" ${state.draft[field.key] ? "checked" : ""}><span class="toggle-track"></span><span class="toggle-label">${state.draft[field.key] ? "已启用" : "已停用"}</span></label>`;
   } else if (field.kind === "secret") {
-    const ready = field.key === "api_key" ? state.snapshot.credentials.api_key_configured : state.snapshot.credentials.tushare_token_configured;
+    const ready = state.snapshot.credentials.api_key_configured;
     control = `<div class="secret-control"><input id="setting-${esc(field.key)}" type="password" value="" placeholder="${ready ? "留空则保留现有凭证" : "输入凭证"}" autocomplete="new-password"><span class="credential-badge ${ready ? "ready" : ""}"><i data-lucide="${ready ? "key-round" : "key"}"></i>${ready ? "Keychain 已配置" : "尚未配置"}</span></div>`;
   } else if (field.kind === "select") {
     control = `<select id="setting-${esc(field.key)}">${field.options.map(option => `<option value="${esc(option.value)}" ${state.draft[field.key] === option.value ? "selected" : ""}>${esc(option.label)}</option>`).join("")}</select>`;
@@ -174,19 +174,19 @@ async function save() {
   if (errors.length) { toast(errors[0], true); return; }
   $("saveSettings").disabled = true;
   try {
-    const snapshot = await api("/api/control-settings", { method: "PUT", body: JSON.stringify({ values: state.draft, api_key: state.secrets.api_key || null, tushare_token: state.secrets.tushare_token || null, change_note: $("changeNote").value.trim() || "更新全局设置" }) });
+    const snapshot = await api("/api/control-settings", { method: "PUT", body: JSON.stringify({ values: state.draft, api_key: state.secrets.api_key || null, change_note: $("changeNote").value.trim() || "更新全局设置" }) });
     adopt(snapshot); toast("配置已验证、保存并写入审计日志");
   } catch (error) { toast(error.message, true); renderDirty(); }
 }
 
 function adopt(snapshot) {
-  state.snapshot = snapshot; state.original = structuredClone(snapshot.values); state.draft = structuredClone(snapshot.values); state.secrets = { api_key: "", tushare_token: "" }; $("changeNote").value = ""; render();
+  state.snapshot = snapshot; state.original = structuredClone(snapshot.values); state.draft = structuredClone(snapshot.values); state.secrets = { api_key: "" }; $("changeNote").value = ""; render();
 }
-function discard() { state.draft = structuredClone(state.original); state.secrets = { api_key: "", tushare_token: "" }; $("changeNote").value = ""; render(); toast("待保存变更已放弃"); }
+function discard() { state.draft = structuredClone(state.original); state.secrets = { api_key: "" }; $("changeNote").value = ""; render(); toast("待保存变更已放弃"); }
 function changedKeys() { return Object.keys(state.draft || {}).filter(key => !same(state.draft[key], state.original[key])); }
-function isDirty() { return changedKeys().length > 0 || Boolean(state.secrets.api_key || state.secrets.tushare_token); }
-function renderDirty() { const count = changedKeys().length + Number(Boolean(state.secrets.api_key)) + Number(Boolean(state.secrets.tushare_token)); $("dirtyState").textContent = count ? `${count} 项待保存变更` : "没有待保存变更"; $("dirtyState").parentElement.classList.toggle("dirty", Boolean(count)); $("saveSettings").disabled = !count; $("discardSettings").disabled = !count; }
-function localValidation() { const v = state.draft; const errors = []; if (!v.base_url?.match(/^https?:\/\//)) errors.push("API Base URL 必须是完整的 HTTP(S) 地址"); if (!v.model?.trim()) errors.push("模型名称不能为空"); if (v.autocombine_default_min_factors > v.autocombine_default_max_factors) errors.push("AutoCombine 最少因子不能大于最多因子"); if (v.autocombine_default_minimum_weight > v.autocombine_default_maximum_weight) errors.push("AutoCombine 最小权重不能大于最大权重"); if (!v.data_product_ids.includes("core_market")) errors.push("核心行情数据不能停用"); return errors; }
+function isDirty() { return changedKeys().length > 0 || Boolean(state.secrets.api_key); }
+function renderDirty() { const count = changedKeys().length + Number(Boolean(state.secrets.api_key)); $("dirtyState").textContent = count ? `${count} 项待保存变更` : "没有待保存变更"; $("dirtyState").parentElement.classList.toggle("dirty", Boolean(count)); $("saveSettings").disabled = !count; $("discardSettings").disabled = !count; }
+function localValidation() { const v = state.draft; const errors = []; if (!v.base_url?.match(/^https?:\/\//)) errors.push("API Base URL 必须是完整的 HTTP(S) 地址"); if (!v.model?.trim()) errors.push("模型名称不能为空"); if (v.autocombine_default_min_factors > v.autocombine_default_max_factors) errors.push("AutoCombine 最少因子不能大于最多因子"); if (v.autocombine_default_minimum_weight > v.autocombine_default_maximum_weight) errors.push("AutoCombine 最小权重不能大于最大权重"); const requiredProducts = ["core_market", "execution_market", "tradability"]; if (!requiredProducts.every(id => v.data_product_ids.includes(id))) errors.push("IBKR 研究、执行与可交易状态产品不能停用"); return errors; }
 function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 function formatValue(value) { if (value == null) return "--"; if (typeof value === "string" && value.length > 120) return `${value.slice(0, 117)}...`; return Array.isArray(value) ? value.join(", ") : String(value); }
 function formatGovernance(key, value) { if (key === "gross_exposure") return `${(Number(value) * 100).toFixed(0)}%`; if (key === "maximum_positions") return `${value} 只`; if (key === "holding_period_days") return `${value} 个交易日`; if (key === "holdout_budget") return `${value} 次 / 世代`; return value; }

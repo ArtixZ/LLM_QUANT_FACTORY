@@ -26,7 +26,7 @@ from autoalpha.service.realistic_batch_engine import (
     RealisticAshareBatchEngine,
 )
 
-BEHAVIOR_PROTOCOL = "A_SHARE_FACTOR_BEHAVIOR_CLUSTER_V1"
+BEHAVIOR_PROTOCOL = "US_EQUITY_FACTOR_BEHAVIOR_CLUSTER_V1"
 DEFAULT_START = date(2015, 1, 1)
 DEFAULT_END = date(2024, 12, 31)
 

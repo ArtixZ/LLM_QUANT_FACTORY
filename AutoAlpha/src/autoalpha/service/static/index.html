@@ -13,7 +13,7 @@
     <div class="identity">
       <h1 id="researchWorkspaceTitle">AutoAlpha Continuous Research Service</h1>
       <p id="serviceSummary">正在读取服务状态</p>
-      <a class="workspace-task-link" id="taskWorkspaceIdentity" href="/research-tasks/legacy-ashare">A 股 · legacy-ashare</a>
+      <a class="workspace-task-link" id="taskWorkspaceIdentity" href="/research-tasks/primary-us-equity">US equities · primary-us-equity</a>
     </div>
     <div class="header-actions">
       <nav class="app-nav" aria-label="研究工作台">
@@ -51,11 +51,10 @@
           <label>最大活跃因子数<input id="maximumActiveFactors" type="number" min="1" max="12" step="1" required></label>
           <label class="check-row"><input id="fullLlmEnabled" type="checkbox">启用六角色 LLM 研究团队</label>
           <label>当前任务数据目录<input id="dataPath" readonly required></label>
-          <label>Tushare Token<input id="tushareToken" type="password" autocomplete="off" placeholder="仅在替换时填写"></label>
           <label>数据下载器目录<input id="marketDataRoot" required></label>
           <div class="field-pair">
             <label class="check-row"><input id="dataAutoUpdate" type="checkbox">每日自动更新</label>
-            <label>更新时点（北京时间）<input id="dataUpdateHour" type="number" min="0" max="23" step="1" required></label>
+            <label>更新时点（本机时区）<input id="dataUpdateHour" type="number" min="0" max="23" step="1" required></label>
           </div>
           <label id="tokenLabel" hidden>服务访问令牌<input id="serviceToken" type="password" autocomplete="off"></label>
           <label class="check-row"><input type="checkbox" checked disabled>启用连续上下文记忆</label>
@@ -136,21 +135,21 @@
           <div class="chart-controls">
             <label>图表指标
               <select id="chartMetric">
-                <option value="long_only_sharpe_ratio" selected>单因子 A股纯多夏普</option>
-                <option value="long_only_active_information_ratio">单因子 A股纯多主动收益 IR</option>
-                <option value="long_only_active_simple_annual_return">单因子 A股纯多主动年化</option>
-                <option value="long_only_market_beta">单因子 A股纯多市场 Beta</option>
+                <option value="long_only_sharpe_ratio" selected>单因子 US 纯多夏普</option>
+                <option value="long_only_active_information_ratio">单因子 US 纯多主动收益 IR</option>
+                <option value="long_only_active_simple_annual_return">单因子 US 纯多主动年化</option>
+                <option value="long_only_market_beta">单因子 US 纯多市场 Beta</option>
                 <option value="size_neutral_alpha_sharpe_ratio">市值中性 Alpha 夏普</option>
-                <option value="long_only_simple_annual_return">单因子 A股纯多简单年化</option>
-                <option value="long_only_compound_annual_return">单因子 A股纯多复合年化</option>
-                <option value="long_only_max_drawdown">单因子 A股纯多最大回撤</option>
-                <option value="long_only_annual_turnover">单因子 A股纯多年化换手</option>
-                <option value="long_only_cost_stress_net_ir">单因子 A股纯多成本压力 IR</option>
-                <option value="long_only_positive_year_ratio">单因子 A股纯多正收益年份</option>
-                <option value="long_only_walk_forward_worst_sharpe">单因子 A股纯多最差折夏普</option>
-                <option value="long_only_deflated_sharpe_probability">单因子 A股纯多 Deflated Sharpe</option>
-                <option value="long_only_coverage">单因子 A股纯多覆盖率</option>
-                <option value="long_only_capacity_cny">单因子 A股纯多容量估计</option>
+                <option value="long_only_simple_annual_return">单因子 US 纯多简单年化</option>
+                <option value="long_only_compound_annual_return">单因子 US 纯多复合年化</option>
+                <option value="long_only_max_drawdown">单因子 US 纯多最大回撤</option>
+                <option value="long_only_annual_turnover">单因子 US 纯多年化换手</option>
+                <option value="long_only_cost_stress_net_ir">单因子 US 纯多成本压力 IR</option>
+                <option value="long_only_positive_year_ratio">单因子 US 纯多正收益年份</option>
+                <option value="long_only_walk_forward_worst_sharpe">单因子 US 纯多最差折夏普</option>
+                <option value="long_only_deflated_sharpe_probability">单因子 US 纯多 Deflated Sharpe</option>
+                <option value="long_only_coverage">单因子 US 纯多覆盖率</option>
+                <option value="long_only_capacity_usd">单因子 US 纯多容量估计</option>
                 <option value="sharpe_ratio">诊断 · 单因子 Alpha 多空夏普</option>
                 <option value="simple_annual_return">诊断 · 单因子 Alpha 多空年化</option>
                 <option value="pearson_ic_mean">IC</option>
@@ -164,7 +163,7 @@
                 <option value="cost_stress_net_ir">诊断 · 多空成本压力净 IR</option>
                 <option value="annual_turnover">诊断 · 多空年化换手</option>
                 <option value="coverage">诊断 · 多空覆盖率</option>
-                <option value="capacity_cny">诊断 · 多空容量估计</option>
+                <option value="capacity_usd">诊断 · 多空容量估计</option>
                 <option value="positive_year_ratio">诊断 · 多空正收益年份占比</option>
                 <option value="annual_return_dispersion">诊断 · 多空年收益离散</option>
                 <option value="walk_forward_positive_fraction">诊断 · 多空滚动正折比例</option>
@@ -172,11 +171,11 @@
                 <option value="deflated_sharpe_probability">诊断 · 多空 Deflated Sharpe 概率</option>
                 <option value="probability_backtest_overfitting">PBO</option>
                 <option value="parameter_stability_positive_fraction">参数邻域正向比例</option>
-                <option value="portfolio_sharpe_ratio">多因子 A股纯多组合夏普</option>
-                <option value="portfolio_simple_annual_return">多因子 A股纯多组合年化</option>
-                <option value="portfolio_active_information_ratio">多因子 A股纯多主动收益 IR</option>
-                <option value="portfolio_active_simple_annual_return">多因子 A股纯多主动年化</option>
-                <option value="portfolio_max_drawdown">多因子 A股纯多组合回撤</option>
+                <option value="portfolio_sharpe_ratio">多因子 US 纯多组合夏普</option>
+                <option value="portfolio_simple_annual_return">多因子 US 纯多组合年化</option>
+                <option value="portfolio_active_information_ratio">多因子 US 纯多主动收益 IR</option>
+                <option value="portfolio_active_simple_annual_return">多因子 US 纯多主动年化</option>
+                <option value="portfolio_max_drawdown">多因子 US 纯多组合回撤</option>
                 <option value="portfolio_incremental_net_ir">组合边际净 IR</option>
                 <option value="portfolio_annual_turnover">组合年化换手</option>
                 <option value="portfolio_max_factor_correlation">最大因子相关性</option>
@@ -213,7 +212,7 @@
           <article class="flow-step" data-phase="DIRECTION"><span>03</span><strong>方向自检</strong><p>公开证据诊断与三次预算</p></article>
           <article class="flow-step" data-phase="PROPOSAL"><span>04</span><strong>生成候选</strong><p>模型输出 canonical DSL</p></article>
           <article class="flow-step" data-phase="SEMANTICS"><span>05</span><strong>语义校验</strong><p>时序、单位与表达式去重</p></article>
-          <article class="flow-step" data-phase="EVALUATION"><span>06</span><strong>纯多主评价</strong><p>A股多头门禁与Alpha辅助诊断</p></article>
+          <article class="flow-step" data-phase="EVALUATION"><span>06</span><strong>纯多主评价</strong><p>US 多头门禁与 Alpha 辅助诊断</p></article>
           <article class="flow-step" data-phase="PORTFOLIO"><span>07</span><strong>组合增删</strong><p>保留、加入、删除或替换</p></article>
           <article class="flow-step" data-phase="HOLDOUT"><span>08</span><strong>隔离盲测</strong><p>一次性访问与分级反馈</p></article>
           <article class="flow-step" data-phase="CAPITAL_SIMULATION"><span>09</span><strong>资金仿真</strong><p>成交、费用、残仓与敞口</p></article>
@@ -229,10 +228,10 @@
           <span class="state-pill small" id="portfolioVersion">VERSION --</span>
         </div>
         <div class="portfolio-kpis">
-          <div><span>A股多头夏普</span><strong id="portfolioSharpe">--</strong></div>
-          <div><span>A股多头年化</span><strong id="portfolioAnnual">--</strong></div>
-          <div><span>A股多头回撤</span><strong id="portfolioDrawdown">--</strong></div>
-          <div><span>A股多头换手</span><strong id="portfolioTurnover">--</strong></div>
+          <div><span>US 多头夏普</span><strong id="portfolioSharpe">--</strong></div>
+          <div><span>US 多头年化</span><strong id="portfolioAnnual">--</strong></div>
+          <div><span>US 多头回撤</span><strong id="portfolioDrawdown">--</strong></div>
+          <div><span>US 多头换手</span><strong id="portfolioTurnover">--</strong></div>
           <div><span>最大相关性</span><strong id="portfolioCorrelation">--</strong></div>
           <div><span>活跃因子</span><strong id="portfolioFactorCount">0</strong></div>
         </div>

@@ -39,14 +39,13 @@
 
     <div class="data-center-grid">
       <aside class="panel data-settings-panel">
-        <div class="panel-header"><div><h2>数据连接</h2><p>凭证仅保存到本机系统钥匙串</p></div><button class="icon-button" id="refreshDataCenter" title="重新检查数据状态"><i data-lucide="refresh-cw"></i></button></div>
+        <div class="panel-header"><div><h2>数据连接</h2><p>IBKR 登录由本机 TWS / Gateway 管理</p></div><button class="icon-button" id="refreshDataCenter" title="重新检查数据状态"><i data-lucide="refresh-cw"></i></button></div>
         <form id="dataSettingsForm" class="data-settings-form">
           <label>研究数据目录<input id="dataPath" type="text" required autocomplete="off"></label>
           <label>市场下载器目录<input id="marketDataRoot" type="text" required autocomplete="off"></label>
-          <label>Tushare Token<input id="tushareToken" type="password" autocomplete="new-password" placeholder="仅在新增或更换时填写"></label>
-          <p class="credential-state" id="tokenState"><i data-lucide="key-round"></i><span>检查凭证状态</span></p>
+          <p class="credential-state" id="tokenState"><i data-lucide="plug-zap"></i><span>检查 IBKR Gateway</span></p>
           <label class="schedule-toggle"><input id="autoUpdateEnabled" type="checkbox"><span>每个交易日自动增量更新</span></label>
-          <label>计划执行时点（北京时间）<select id="dataUpdateHour"></select></label>
+          <label>计划执行时点（本机时区）<select id="dataUpdateHour"></select></label>
           <button class="button primary" id="saveDataSettings" type="submit"><i data-lucide="save"></i>保存数据配置</button>
         </form>
         <div class="data-sync-actions">
@@ -55,7 +54,7 @@
             <label>同步截至日<input id="featureEndDate" type="date"></label>
           </div>
           <button class="button" id="startDataSync" type="button"><i data-lucide="download"></i>立即增量更新</button>
-          <p id="syncActionNote">增量下载不复权截面与复权因子；历史覆盖完整后原子重建研究面板。</p>
+          <p id="syncActionNote">下载 ADJUSTED_LAST 与 TRADES 日线；审计通过后原子重建研究面板。</p>
           <div class="sync-progress-panel" id="syncProgressPanel" hidden>
             <div class="sync-progress-heading"><strong id="syncProgressTitle">可恢复同步进度</strong><span id="syncProgressPercent">--</span></div>
             <div class="sync-progress-track"><i id="syncProgressBar"></i></div>
@@ -67,12 +66,12 @@
 
       <section class="data-center-main">
         <section class="panel data-products-panel">
-          <div class="panel-header"><div><h2>Tushare 数据产品</h2><p id="dataProductSummary">按研究用途管理接口、权限、时点风险与面板接入</p></div><span class="state-pill small" id="selectedProductCount">0 ENABLED</span></div>
+          <div class="panel-header"><div><h2>IBKR 数据产品</h2><p id="dataProductSummary">按研究用途管理接口、权限、时点风险与面板接入</p></div><span class="state-pill small" id="selectedProductCount">0 ENABLED</span></div>
           <div class="data-product-toolbar">
             <label>类别<select id="dataProductCategory"><option value="ALL">全部类别</option></select></label>
             <label>状态<select id="dataProductState"><option value="ALL">全部状态</option><option value="READY">已落盘</option><option value="NOT_DOWNLOADED">待下载</option><option value="CATALOG">待接入</option><option value="PARTIAL">部分失败</option></select></label>
             <label class="data-product-search">检索<input id="dataProductSearch" type="search" placeholder="接口、用途或因子族"></label>
-            <button class="button" id="selectRecommendedProducts" type="button"><i data-lucide="badge-check"></i>生产推荐</button>
+            <button class="button" id="selectRecommendedProducts" type="button"><i data-lucide="badge-check"></i>推荐组合</button>
           </div>
           <div class="data-product-table-wrap">
             <table class="data-product-table">

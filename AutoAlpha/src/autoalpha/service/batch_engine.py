@@ -42,7 +42,7 @@ class MassiveBatchConfig:
     selection_fraction: float = 0.10
     maximum_positions_per_side: int = 30
     commission_bps_each_side: float = 0.5
-    sec_fee_bps_sell: float = 0.278
+    sec_fee_bps_sell: float = 0.206
     slippage_bps_each_side: float = 2.0
     cost_stress_multiplier: float = 2.0
     window_months: int = 36
@@ -88,7 +88,7 @@ class MassiveBatchConfig:
             selection_fraction=float(value.get("selection_fraction", 0.10)),
             maximum_positions_per_side=int(value.get("maximum_positions_per_side", 30)),
             commission_bps_each_side=float(value.get("commission_bps_each_side", 0.5)),
-            sec_fee_bps_sell=float(value.get("sec_fee_bps_sell", 0.278)),
+            sec_fee_bps_sell=float(value.get("sec_fee_bps_sell", 0.206)),
             slippage_bps_each_side=float(value.get("slippage_bps_each_side", 2.0)),
             cost_stress_multiplier=float(value.get("cost_stress_multiplier", 2.0)),
             window_months=int(value.get("window_months", 36)),

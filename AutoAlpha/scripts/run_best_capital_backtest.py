@@ -68,12 +68,7 @@ def main() -> None:
             max_positions=30,
             max_volume_participation=0.05,
         ),
-        costs=USEquityExecutionCosts(
-            commission_bps_each_side=1.5,
-            stamp_duty_bps_sell=5.0,
-            transfer_fee_bps_each_side=0.1,
-            minimum_commission_usd=5.0,
-        ),
+        costs=USEquityExecutionCosts(),
     )
     paths = write_capital_backtest_artifacts(report, args.output)
     selection_metric, selection_value = _selection_metric(best)

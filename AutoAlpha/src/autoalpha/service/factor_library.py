@@ -765,7 +765,7 @@ def build_factor_library(
             "recent_long_only_evaluated_count": sum(
                 item["recent_long_only_score_available"] for item in factors
             ),
-            "ranking_method": "A_SHARE_LONG_ONLY_PRIMARY",
+            "ranking_method": "US_EQUITY_LONG_ONLY_PRIMARY",
             "alpha_diagnostic_ranking_method": (
                 "RETURN_25_ROBUSTNESS_30_RISK_15_EXECUTION_20_INFORMATION_10"
             ),

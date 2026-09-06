@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from autoalpha.service import data_sync
@@ -74,3 +76,41 @@ def test_clean_completed_sync_stays_info(tmp_path) -> None:
     event = worker.store.events()[-1]
     assert event["level"] == "INFO"
     assert "stale" not in event["message"]
+
+
+def test_product_ids_are_not_treated_as_ticker_symbols(tmp_path, monkeypatch) -> None:
+    worker = _worker(tmp_path)
+    worker.store.save_settings(
+        {
+            "market_data_root": str(tmp_path / "market"),
+            "data_path": str(tmp_path / "panel"),
+            "universe": "TEST",
+        }
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(data_sync, "resolve_universe", lambda _: ("TEST", ("AAPL", "MSFT")))
+
+    def fake_sync(symbols, **kwargs):  # noqa: ANN001, ANN003
+        captured["symbols"] = tuple(symbols)
+        return SimpleNamespace(written=2, to_dict=lambda: {"written": 2})
+
+    monkeypatch.setattr(data_sync, "sync_universe", fake_sync)
+    monkeypatch.setattr(
+        worker,
+        "_rebuild_panel",
+        lambda *_: {
+            "returncode": 0,
+            "metadata": {"rows": 2},
+            "error": None,
+            "stale_symbols": {},
+        },
+    )
+
+    worker._sync_blocking(
+        ["core_market", "execution_market", "tradability"],
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 2),
+    )
+
+    assert captured["symbols"] == ("AAPL", "MSFT")

@@ -132,7 +132,9 @@ def test_panel_metadata_declares_us_units(tmp_path: Path) -> None:
     assert metadata["amount_unit"] == AMOUNT_UNIT
     assert metadata["price_adjustment"] == PRICE_ADJUSTMENT
     assert metadata["execution_price_adjustment"] == EXECUTION_PRICE_ADJUSTMENT
-    assert metadata["capital_ledger_ready"] is True
+    assert metadata["institutional_pit_ready"] is False
+    assert metadata["capital_ledger_ready"] is False
+    assert metadata["capital_ledger_proxy_ready"] is True
     assert any("point-in-time" in caveat for caveat in metadata["caveats"])
 
 

@@ -44,8 +44,8 @@ PRODUCT_TEMPLATES: tuple[ProductTemplate, ...] = (
     ),
     ProductTemplate(
         template_id="LONG_ONLY_CAPITAL",
-        name="A股仅多头资金回放",
-        objective="以真实现金、整手和成交约束检验可部署的绝对收益组合。",
+        name="US 股票纯多资金回放",
+        objective="以真实现金、整数股和成交约束检验可部署的绝对收益组合。",
         portfolio_mode="long_only",
         benchmark_mode="cash",
         execution_mode="a_share_capital_ledger",

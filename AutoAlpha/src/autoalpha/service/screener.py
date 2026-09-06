@@ -111,7 +111,11 @@ class CrossSectionalScreener:
                 {
                     "rank": rank,
                     "symbol": str(symbol),
-                    "name": str(row["name"]),
+                    "name": (
+                        str(row["name"])
+                        if "name" in row and pd.notna(row["name"])
+                        else str(symbol)
+                    ),
                     "composite_score": _finite_float(row["composite_score"]),
                     "score_percentile": _finite_float(row["score_percentile"]),
                     "research_close": _finite_float(row["close"]),

@@ -38,7 +38,7 @@ def apply_batch_multiple_testing(
                 "multiple_testing_fdr_passed": bool(rejected[index]),
                 "probability_backtest_overfitting": pbo,
                 "multiple_testing_primary_basis": (
-                    "A_SHARE_LONG_ONLY" if long_only else "LEGACY_ENGINE_OUTPUT"
+                    "US_EQUITY_LONG_ONLY" if long_only else "LEGACY_ENGINE_OUTPUT"
                 ),
             }
         )

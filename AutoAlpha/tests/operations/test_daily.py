@@ -6,10 +6,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from autoalpha.ibkr.client import AccountSummary, OpenOrder, Position
 from autoalpha.operations.daily import (
     DailyConfig,
     DailyReport,
     DataHealth,
+    _submission_blockers,
     build_target_book,
     load_panel,
     momentum_scores,
@@ -203,6 +205,21 @@ def test_load_panel_excludes_stale_symbols(tmp_path: Path, panel: pd.DataFrame) 
     assert set(trimmed["symbol"].unique()) == {"AAA", "BBB"}
 
 
+def test_load_panel_limits_rows_to_the_configured_universe(
+    tmp_path: Path, panel: pd.DataFrame
+) -> None:
+    partition = tmp_path / "processed" / "daily_panel" / "trade_year=2026"
+    partition.mkdir(parents=True)
+    panel.to_parquet(partition / "part.parquet", index=False)
+
+    trimmed = load_panel(
+        DailyConfig(market_data_root=tmp_path),
+        include={"AAA", "BBB"},
+    )
+
+    assert set(trimmed["symbol"].unique()) == {"AAA", "BBB"}
+
+
 def test_load_panel_requires_partitions(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="No panel partitions"):
         load_panel(DailyConfig(market_data_root=tmp_path))
@@ -220,3 +237,42 @@ def test_default_config_targets_the_shared_market_data_root() -> None:
     assert config.panel_path.name == "daily_panel"
     assert config.quality_report_path.name == "data_quality.json"
     assert config.history_start == date(2016, 1, 1)
+
+
+def test_submission_preflight_accepts_only_a_clean_dedicated_paper_account() -> None:
+    blockers = _submission_blockers(
+        health=DataHealth("2026-09-03", 100, 3, True),
+        account=AccountSummary("DU1", True, 100_000, 100_000, 100_000),
+        managed_account="DU1",
+        submission_key="quantfactory-20260903",
+        run_date=date(2026, 9, 3),
+        previews=[{"warning": ""}],
+        unmanaged_positions=[],
+        open_orders=[],
+    )
+
+    assert blockers == []
+
+
+def test_submission_preflight_fails_closed_on_operational_risk() -> None:
+    position = Position("DU1", "SPY", 1, 10, 100, 100, 1_000, 0)
+    open_order = OpenOrder("DU1", "AAPL", "BUY", 1, "MKT", "Submitted", 1, 2, "ref")
+
+    blockers = _submission_blockers(
+        health=DataHealth(
+            "2026-09-02",
+            100,
+            3,
+            audit_passed=False,
+            stale_symbols={"AAPL": "2026-09-01"},
+        ),
+        account=AccountSummary("U1", False, 100_000, 100_000, 100_000),
+        managed_account="DU1",
+        submission_key=None,
+        run_date=date(2026, 9, 3),
+        previews=[{"error": "rejected"}, {"warning": "margin warning"}],
+        unmanaged_positions=[position],
+        open_orders=[open_order],
+    )
+
+    assert len(blockers) == 9

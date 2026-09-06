@@ -58,7 +58,7 @@ def test_realistic_batch_config_round_trips_execution_protocol(tmp_path: Path) -
 
     restored = RealisticAshareBatchConfig.from_dict(config.to_dict())
 
-    assert restored.protocol == "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
+    assert restored.protocol == "US_EQUITY_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
     assert restored.rebalance_schedule == "WEEKLY_FIRST_SESSION"
     assert restored.gross_exposure == 0.90
 

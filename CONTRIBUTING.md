@@ -18,7 +18,7 @@ By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ```bash
 git clone https://github.com/khakhasshi/LLM_QUANT_FACTORY.git
-cd MultiFactorAshare
+cd LLM_QUANT_FACTORY
 
 uv sync --frozen --all-groups
 uv run pytest -q
@@ -57,7 +57,7 @@ Do not tune a change against hidden-test metrics. A result that fails a hard gat
 
 ### User interface
 
-- Keep A-share long-only metrics primary; long-short and IC metrics are diagnostics.
+- Keep US-equity long-only metrics primary; long-short and IC metrics are diagnostics.
 - Show signal time, execution time, rebalance schedule, cost model and data limitations near results.
 - Preserve the shared top navigation and keyboard-accessible form labels.
 - Include a screenshot for visible changes, but remove credentials and private data.
@@ -77,7 +77,7 @@ uv run pytest -q
 
 cd ..
 uv run python scripts/check_public_release.py
-uv build --out-dir /tmp/multifactor-ashare-dist
+uv build --out-dir /tmp/multifactor-us-dist
 
 cd AutoAlpha
 uv build --out-dir /tmp/autoalpha-dist

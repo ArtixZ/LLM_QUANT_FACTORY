@@ -4,7 +4,7 @@ import os
 
 import uvicorn
 
-os.environ.setdefault("AUTOALPHA_BATCH_MODE", "ASHARE_REALISTIC_LONG_ONLY")
+os.environ.setdefault("AUTOALPHA_BATCH_MODE", "US_EQUITY_REALISTIC_LONG_ONLY")
 os.environ.setdefault("AUTOALPHA_BATCH_PORT", "8790")
 
 from autoalpha.service.batch_app import app  # noqa: E402, F401

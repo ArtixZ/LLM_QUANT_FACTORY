@@ -18,7 +18,7 @@ def _task(
     store: ServiceStore,
     task_id: str,
     *,
-    market: str = "CN_A",
+    market: str = "US",
     start: str = "2010-01-04",
     end: str = "2026-07-16",
 ) -> None:
@@ -151,7 +151,7 @@ def test_manager_reports_protocol_and_market_readiness(tmp_path: Path, monkeypat
     store = ServiceStore(tmp_path / "service.sqlite3")
     _task(store, "task-ready")
     _task(store, "task-short", start="2026-01-01")
-    _task(store, "task-hk", market="HK")
+    _task(store, "task-cn", market="CN_A")
     workspace = SimpleNamespace(fingerprint="panel-fingerprint", panel_path=str(tmp_path))
     monkeypatch.setattr(
         "autoalpha.service.research_manager.inspect_data_workspace", lambda _: workspace
@@ -177,13 +177,13 @@ def test_manager_reports_protocol_and_market_readiness(tmp_path: Path, monkeypat
 
     ready = manager.readiness("task-ready")
     short = manager.readiness("task-short")
-    hong_kong = manager.readiness("task-hk")
+    china = manager.readiness("task-cn")
 
     assert ready["runnable"] is True
     assert ready["maximum_concurrent_iterations"] == 3
     assert ready["snapshot_changed"] is True
     assert any("至少需要" in blocker for blocker in short["blockers"])
-    assert any("仅支持 A 股" in blocker for blocker in hong_kong["blockers"])
+    assert any("US equities only" in blocker for blocker in china["blockers"])
 
 
 def test_candidate_level_failure_classifier_covers_metric_and_coverage_errors() -> None:
@@ -197,4 +197,3 @@ def test_candidate_level_failure_classifier_covers_metric_and_coverage_errors() 
         ValueError("zero observations after alignment")
     ) == "INSUFFICIENT_OBSERVATIONS"
     assert _candidate_level_failure_reason(ConnectionError("db connection lost")) is None
-

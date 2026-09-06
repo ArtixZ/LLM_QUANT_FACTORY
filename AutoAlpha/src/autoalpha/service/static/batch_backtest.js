@@ -71,9 +71,9 @@ function renderJob() {
   text("progressLabel", phaseLabel(job.phase));
   text("activeFactorHint", job.status === "RUNNING" ? `${config.workers} 个共享面板线程正在运行` : statusLabel(job.status));
   document.getElementById("progressBar").style.width = `${Math.max(0, Math.min(100, job.progress * 100))}%`;
-  const realistic = config.protocol === "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1";
+  const realistic = config.protocol === "US_EQUITY_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1";
   const assumptions = realistic ? [
-    ["回测区间", `${config.start_date} — ${config.end_date}`], ["执行时点", "收盘信号 · 下个计划开盘"], ["组合", `A股仅多头 · ${formatPercent(config.gross_exposure)}`], ["调仓", "每周首个交易日"], ["选股", `目标最多 ${config.maximum_positions_per_side} 只`], ["费用", "历史费率 · 最低佣金 · 5bps滑点"], ["数据边界", "非PIT成交资格代理 · 不可生产晋级"],
+    ["回测区间", `${config.start_date} — ${config.end_date}`], ["执行时点", "收盘信号 · 下个计划开盘"], ["组合", `US 股票纯多 · ${formatPercent(config.gross_exposure)}`], ["调仓", "每周首个交易日"], ["选股", `目标最多 ${config.maximum_positions_per_side} 只`], ["费用", "配置费率 · 最低佣金 · 5bps滑点"], ["数据边界", "非PIT成交资格代理 · 不可生产晋级"],
   ] : [
     ["回测区间", `${config.start_date} — ${config.end_date}`], ["执行时点", "收盘信号 · 次日开盘"], ["组合", `多空 · ${formatPercent(config.gross_exposure)}`], ["持有期", `${config.holding_period_days} 日滚动`], ["选股", `双边前 ${formatPercent(config.selection_fraction)}`], ["压力测试", `持有 1/20日 · 参数 x0.5/x2`],
   ];
@@ -123,7 +123,7 @@ function renderFactorDetail(detail) {
   text("detailRank", ranked?.rank ? `RANK #${ranked.rank}` : detail.status);
   text("detailName", detail.name); text("detailIdentity", `${detail.factor_id} · ${detail.family} · ITER ${detail.source_iteration || "--"} · ${detail.source_status || "UNKNOWN"}`);
   const values = [["纯多全期夏普", formatMetric(long_only_metric(metrics, "sharpe_ratio"))], ["纯多简单年化", formatPercent(long_only_metric(metrics, "simple_annual_return"))], ["纯多最大回撤", formatPercent(long_only_metric(metrics, "max_drawdown"))], ["纯多年化换手", formatMetric(long_only_metric(metrics, "annual_turnover"))], ["纯多最差窗口", formatMetric(long_only_metric(metrics, "large_window_worst_sharpe"))], ["窗口胜率", formatPercent(metrics.large_window_positive_fraction)], ["Rank IC", formatMetric(metrics.rank_ic_mean, 4)], ["MC正收益", formatPercent(mc.probability_positive_annual_return)]];
-  if (metrics.engine_protocol === "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1") values.push(["累计交易成本", formatCurrency(metrics.total_transaction_cost_cny)], ["平均仓位", formatPercent(metrics.average_gross_exposure)], ["平均持股", formatMetric(metrics.average_positions, 1)], ["调仓次数", formatInt(metrics.rebalance_count)]);
+  if (metrics.engine_protocol === "US_EQUITY_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1") values.push(["累计交易成本", formatCurrency(metrics.total_transaction_cost_usd)], ["平均仓位", formatPercent(metrics.average_gross_exposure)], ["平均持股", formatMetric(metrics.average_positions, 1)], ["调仓次数", formatInt(metrics.rebalance_count)]);
   document.getElementById("detailMetrics").replaceChildren(...values.map(([label, value]) => stat(label, value)));
   text("curveCaption", `${metrics.backtest_start || "--"} — ${metrics.backtest_end || "--"}`);
   text("mcCaption", `${formatInt(mc.samples || 0)} 次 · ${mc.block_size_sessions || "--"} 日移动块`);

@@ -26,7 +26,8 @@ loopback:
 - terminate TLS at a trusted reverse proxy;
 - restrict network access and filesystem mounts;
 - keep market data read-only where possible;
-- store LLM and Tushare credentials in the OS keychain or a secret manager;
+- store LLM credentials in the OS keychain or a secret manager and keep IBKR authentication
+  inside the local TWS / Gateway session;
 - use PostgreSQL and managed backups for multi-user deployments;
 - review job concurrency and sandbox policies.
 

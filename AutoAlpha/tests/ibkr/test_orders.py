@@ -100,12 +100,16 @@ def test_notional_uses_reference_price() -> None:
 
 def test_market_on_open_maps_to_opg_time_in_force() -> None:
     order = build_ib_order(
-        PlannedOrder(symbol="AAPL", action="BUY", quantity=5), account="DU1", transmit=False
+        PlannedOrder(symbol="AAPL", action="BUY", quantity=5),
+        account="DU1",
+        transmit=False,
+        order_reference="quantfactory-20260903-01",
     )
     assert order.orderType == "MKT"
     assert order.tif == "OPG"
     assert order.transmit is False
     assert order.account == "DU1"
+    assert order.orderRef == "quantfactory-20260903-01"
 
 
 def test_build_ib_order_defaults_to_not_transmitting() -> None:
@@ -153,6 +157,43 @@ def test_submit_plan_transmits_when_both_gates_are_open(
 ) -> None:
     gateway = RecordingGateway(readonly=False)
     plan = plan_orders({"AAPL": 10}, {})
-    trades = submit_plan(gateway, plan, contracts, confirm=True)
+    trades = submit_plan(
+        gateway,
+        plan,
+        contracts,
+        confirm=True,
+        order_reference_prefix="quantfactory-20260903",
+    )
     assert trades == ["trade:AAPL"]
     assert all(order.transmit is True for order in gateway.transmitted)
+    assert gateway.transmitted[0].orderRef == "quantfactory-20260903-01"
+
+
+def test_submit_plan_requires_stable_order_reference(
+    contracts: dict[str, USEquity],
+) -> None:
+    gateway = RecordingGateway(readonly=False)
+    plan = plan_orders({"AAPL": 10}, {})
+
+    with pytest.raises(OrderTransmissionBlocked, match="order-reference"):
+        submit_plan(gateway, plan, contracts, confirm=True)
+
+    assert gateway.transmitted == []
+
+
+def test_submit_plan_validates_all_contracts_before_transmitting(
+    contracts: dict[str, USEquity],
+) -> None:
+    gateway = RecordingGateway(readonly=False)
+    plan = plan_orders({"AAPL": 10, "MSFT": 20}, {})
+
+    with pytest.raises(OrderTransmissionBlocked, match="MSFT"):
+        submit_plan(
+            gateway,
+            plan,
+            {"AAPL": contracts["AAPL"]},
+            confirm=True,
+            order_reference_prefix="quantfactory-20260903",
+        )
+
+    assert gateway.transmitted == []

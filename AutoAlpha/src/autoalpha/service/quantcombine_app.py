@@ -143,7 +143,7 @@ class QuantBudget(BaseModel):
 
 class QuantTaskRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
-    market: Literal["CN_A"] = "CN_A"
+    market: Literal["US"] = "US"
     data_path: str
     protocol: QuantProtocol
     scope: QuantScope = Field(default_factory=QuantScope)

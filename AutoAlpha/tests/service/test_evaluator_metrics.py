@@ -216,7 +216,9 @@ def test_portfolio_evaluation_separates_alpha_diagnostic_from_us_strategy() -> N
 
     metrics = evaluator.evaluate_portfolio([factor]).metrics
 
-    assert metrics["portfolio_strategy_gate_basis"] == ("A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY")
+    assert metrics["portfolio_strategy_gate_basis"] == (
+        "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
+    )
     assert metrics["portfolio_mode"] == "long_only"
     assert metrics["portfolio_rebalance_schedule"] == "WEEKLY_FIRST_SESSION"
     assert metrics["portfolio_maximum_positions"] == 1

@@ -31,10 +31,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/khakhasshi/LLM_QUANT_FACTORY"
-Documentation = "https://github.com/khakhasshi/LLM_QUANT_FACTORY#readme"
-Issues = "https://github.com/khakhasshi/LLM_QUANT_FACTORY/issues"
-Source = "https://github.com/khakhasshi/LLM_QUANT_FACTORY"
+Homepage = "https://github.com/ArtixZ/LLM_QUANT_FACTORY"
+Documentation = "https://github.com/ArtixZ/LLM_QUANT_FACTORY#readme"
+Issues = "https://github.com/ArtixZ/LLM_QUANT_FACTORY/issues"
+Source = "https://github.com/ArtixZ/LLM_QUANT_FACTORY"
 
 [project.scripts]
 mf-us = "multifactor_us.data:main"

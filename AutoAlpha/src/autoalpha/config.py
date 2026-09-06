@@ -51,8 +51,8 @@ class CostConfig:
     commission_per_share: float = 0.0035
     minimum_commission_usd: float = 0.35
     maximum_commission_fraction: float = 0.01
-    sec_fee_per_million_usd_sell: float = 27.80
-    finra_taf_per_share_sell: float = 0.000166
+    sec_fee_per_million_usd_sell: float = 20.60
+    finra_taf_per_share_sell: float = 0.000195
     max_adv_participation: float = 0.05
 
     def __post_init__(self) -> None:
@@ -66,7 +66,7 @@ class CostConfig:
 
     @property
     def sec_fee_bps_sell(self) -> float:
-        """SEC Section 31 fee as basis points; $27.80 per $1M is 0.278 bps."""
+        """SEC Section 31 fee as basis points; $20.60 per $1M is 0.206 bps."""
         return self.sec_fee_per_million_usd_sell / 100.0
 
     @property
@@ -201,8 +201,8 @@ class StrategyEvaluationConfig:
     commission_per_share: float = 0.0035
     minimum_commission_usd: float = 0.35
     maximum_commission_fraction: float = 0.01
-    sec_fee_per_million_usd_sell: float = 27.80
-    finra_taf_per_share_sell: float = 0.000166
+    sec_fee_per_million_usd_sell: float = 20.60
+    finra_taf_per_share_sell: float = 0.000195
     slippage_bps_each_side: float = 5.0
     cost_stress_multiplier: float = 3.0
     maximum_volume_participation: float = 0.01
@@ -236,7 +236,7 @@ class StrategyEvaluationConfig:
 
     @property
     def sec_fee_bps_sell(self) -> float:
-        """SEC Section 31 fee as basis points; $27.80 per $1M is 0.278 bps."""
+        """SEC Section 31 fee as basis points; $20.60 per $1M is 0.206 bps."""
         return self.sec_fee_per_million_usd_sell / 100.0
 
     @property

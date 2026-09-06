@@ -28,13 +28,20 @@ from autoalpha.service.store import ServiceStore
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = Path.cwd()
 BATCH_MODE = os.getenv("AUTOALPHA_BATCH_MODE", "RESEARCH_LONG_SHORT").strip().upper()
-REALISTIC_ASHARE = BATCH_MODE == "ASHARE_REALISTIC_LONG_ONLY"
-DEFAULT_PORT = "8790" if REALISTIC_ASHARE else "8789"
+REALISTIC_US_EQUITY = BATCH_MODE in {
+    "US_EQUITY_REALISTIC_LONG_ONLY",
+    "ASHARE_REALISTIC_LONG_ONLY",
+}
+DEFAULT_PORT = "8790" if REALISTIC_US_EQUITY else "8789"
 BATCH_RUNTIME = Path(
     os.getenv(
         "AUTOALPHA_BATCH_RUNTIME",
         PROJECT_ROOT
-        / ("runtime-realistic-ashare-batch" if REALISTIC_ASHARE else "runtime-massive-batch"),
+        / (
+            "runtime-realistic-us-equity-batch"
+            if REALISTIC_US_EQUITY
+            else "runtime-massive-batch"
+        ),
     )
 ).expanduser()
 SOURCE_DATABASE = Path(
@@ -45,22 +52,28 @@ DEFAULT_DATA_PATH = Path(
 ).expanduser()
 CONFIG_PATH = Path(os.getenv("AUTOALPHA_CONFIG", PROJECT_ROOT / "config/research.toml"))
 
-DATABASE_NAME = "realistic_ashare_batch.sqlite3" if REALISTIC_ASHARE else "massive_batch.sqlite3"
+DATABASE_NAME = (
+    "realistic_us_equity_batch.sqlite3"
+    if REALISTIC_US_EQUITY
+    else "massive_batch.sqlite3"
+)
 store = BatchBacktestStore(BATCH_RUNTIME / DATABASE_NAME)
 runner = MassiveBatchRunner(
     store,
     BATCH_RUNTIME / "artifacts",
-    config_type=RealisticAshareBatchConfig if REALISTIC_ASHARE else MassiveBatchConfig,
-    engine_type=RealisticAshareBatchEngine if REALISTIC_ASHARE else MassiveVectorBatchEngine,
-    worker_prefix="ashare-realistic-factor" if REALISTIC_ASHARE else "massive-vector-factor",
+    config_type=RealisticAshareBatchConfig if REALISTIC_US_EQUITY else MassiveBatchConfig,
+    engine_type=RealisticAshareBatchEngine if REALISTIC_US_EQUITY else MassiveVectorBatchEngine,
+    worker_prefix=(
+        "us-equity-realistic-factor" if REALISTIC_US_EQUITY else "massive-vector-factor"
+    ),
 )
 
 
 class BatchJobRequest(BaseModel):
     name: str = Field(
         default=(
-            "2020-2026 A股仅多头真实交易代理大回测"
-            if REALISTIC_ASHARE
+            "2020-2026 US 股票纯多交易代理大回测"
+            if REALISTIC_US_EQUITY
             else "2020-2026 全因子大规模稳健性回测"
         ),
         min_length=2,
@@ -71,7 +84,9 @@ class BatchJobRequest(BaseModel):
     end_date: date | None = None
     workers: int = Field(default=4, ge=1, le=8)
     holding_period_days: int = Field(default=5, ge=1, le=60)
-    gross_exposure: float = Field(default=0.90 if REALISTIC_ASHARE else 1.0, gt=0, le=2)
+    gross_exposure: float = Field(
+        default=0.90 if REALISTIC_US_EQUITY else 1.0, gt=0, le=2
+    )
     selection_fraction: float = Field(default=0.10, gt=0, le=0.50)
     maximum_positions_per_side: int = Field(default=30, ge=5, le=500)
     window_months: int = Field(default=36, ge=12, le=84)
@@ -96,8 +111,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=(
-        "AutoAlpha A-share Realistic Massive Backtest"
-        if REALISTIC_ASHARE
+        "AutoAlpha US-equity Realistic Massive Backtest"
+        if REALISTIC_US_EQUITY
         else "AutoAlpha Massive Batch Backtest"
     ),
     lifespan=lifespan,
@@ -137,21 +152,25 @@ async def bootstrap() -> dict[str, Any]:
             "mode": BATCH_MODE,
             "port": int(DEFAULT_PORT),
             "page_title": (
-                "A股真实交易代理批量回测" if REALISTIC_ASHARE else "全因子批量回测"
+                "US 股票交易代理批量回测"
+                if REALISTIC_US_EQUITY
+                else "全因子批量回测"
             ),
             "leaderboard_title": (
-                "A股仅多头稳健性排行榜" if REALISTIC_ASHARE else "因子稳健性排行榜"
+                "US 股票纯多稳健性排行榜"
+                if REALISTIC_US_EQUITY
+                else "因子稳健性排行榜"
             ),
             "protocol": (
-                "A_SHARE_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
-                if REALISTIC_ASHARE
+                "US_EQUITY_LONG_ONLY_WEEKLY_VECTOR_PROXY_V1"
+                if REALISTIC_US_EQUITY
                 else "AUTOALPHA_MASSIVE_VECTOR_V1"
             ),
         },
         "defaults": {
             "name": (
-                "2020-2026 A股仅多头真实交易代理全因子大回测"
-                if REALISTIC_ASHARE
+                "2020-2026 US 股票纯多交易代理全因子大回测"
+                if REALISTIC_US_EQUITY
                 else "2020-2026 全因子大规模稳健性回测"
             ),
             "data_path": str(DEFAULT_DATA_PATH),
@@ -172,7 +191,9 @@ async def create_job(payload: BatchJobRequest) -> dict[str, Any]:
         data_path = Path(payload.data_path).expanduser().resolve()
         workspace = inspect_data_workspace(data_path)
         end_date = payload.end_date or date.fromisoformat(workspace.last_trade_date)
-        config_type = RealisticAshareBatchConfig if REALISTIC_ASHARE else MassiveBatchConfig
+        config_type = (
+            RealisticAshareBatchConfig if REALISTIC_US_EQUITY else MassiveBatchConfig
+        )
         config = config_type(
             data_path=data_path,
             config_path=CONFIG_PATH.resolve(),
@@ -196,7 +217,7 @@ async def create_job(payload: BatchJobRequest) -> dict[str, Any]:
                     "rebalance_schedule": "WEEKLY_FIRST_SESSION",
                     "execution_data_mode": "NON_PIT_PROXY",
                 }
-                if REALISTIC_ASHARE
+                if REALISTIC_US_EQUITY
                 else {}
             ),
         )

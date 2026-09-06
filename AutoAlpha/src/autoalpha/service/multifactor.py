@@ -684,7 +684,7 @@ def _absolute_portfolio_gate_failures(metrics: dict[str, Any], config: ResearchC
     strategy_basis = metrics.get("portfolio_strategy_gate_basis")
     expected_return_convention = (
         US_PROXY_RETURN_CONVENTION
-        if strategy_basis == "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
+        if strategy_basis == "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
         else EOD_NEXT_OPEN_RETURN_CONVENTION
     )
     checks = {
@@ -695,7 +695,7 @@ def _absolute_portfolio_gate_failures(metrics: dict[str, Any], config: ResearchC
             metrics.get("portfolio_return_convention") == expected_return_convention
         ),
         "strategy_execution_proxy": (
-            strategy_basis == "A_SHARE_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
+            strategy_basis == "US_EQUITY_LONG_ONLY_WEEKLY_NON_PIT_PROXY"
             if strategy_basis is not None
             else True
         ),
@@ -807,6 +807,10 @@ def _portfolio_action_gate_failures(
         "factor_correlation": (
             metrics["portfolio_max_factor_correlation"] <= policy.maximum_library_correlation
         ),
+        "incremental_net_return_significance": float(
+            metrics.get("portfolio_incremental_net_return_hac_p_value", 1.0)
+        )
+        <= policy.maximum_net_return_p_value,
     }
     failures.extend(name for name, passed in checks.items() if not passed)
     return failures

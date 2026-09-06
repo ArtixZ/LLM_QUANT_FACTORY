@@ -23,7 +23,7 @@ class USVectorConfig:
     per-share commission schedule modelled exactly in
     :class:`~autoalpha.backtest.costs.USEquityExecutionCosts` is approximated
     here as basis points. The SEC Section 31 fee is naturally proportional to
-    notional and converts exactly ($27.80 per $1M is 0.278 bps); the FINRA TAF
+    notional and converts exactly ($20.60 per $1M is 0.206 bps); the FINRA TAF
     is per-share and small enough to fold into the commission approximation.
     Use the event ledger, not this engine, for exact fee accounting.
     """
@@ -34,7 +34,7 @@ class USVectorConfig:
     maximum_positions: int = 30
     rebalance_schedule: RebalanceSchedule = "WEEKLY_FIRST_SESSION"
     commission_bps_each_side: float = 0.5
-    sec_fee_bps_sell: float = 0.278
+    sec_fee_bps_sell: float = 0.206
     slippage_bps_each_side: float = 5.0
     cost_stress_multiplier: float = 2.0
     trading_days_per_year: int = 252
